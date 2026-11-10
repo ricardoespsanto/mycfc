@@ -57,7 +57,7 @@ func InspectTrainingRecipientParent(ctx context.Context, q TrainingScheduleQuery
 	if err := verifyTrainingScheduleAdmissionSchema(ctx, q, actualDigest); err != nil {
 		return result, err
 	}
-	if err := verifyTrainingRecipientCatalog(ctx, q, phase != RecipientFinal && phase != RecipientReviewed80, phase == RecipientReviewed79 || phase == RecipientReviewed80 || phase == RecipientFinal); err != nil {
+	if err := verifyTrainingRecipientCatalog(ctx, q, phase != RecipientFinal && phase != RecipientReviewed80, phase == RecipientReviewed79 || phase == RecipientReviewed80 || phase == RecipientFinal, phase == RecipientFinal); err != nil {
 		return result, err
 	}
 	result.Phase = phase
@@ -105,6 +105,7 @@ func trainingRecipientInventory(digest string) ([]string, RecipientSchemaPhase) 
 	if phase != RecipientFinal {
 		excluded[TrainingPartialAuthoringMigration] = true
 		excluded[TrainingWorkoutGraphIntegrityMigration] = true
+		excluded[TrainingDatedPlacementsMigration] = true
 	}
 	var inventory []string
 	for _, version := range EmbeddedMigrationInventory() {
@@ -166,8 +167,12 @@ func verifyTrainingRecipientCatalog(ctx context.Context, q TrainingScheduleQuery
 	if len(hasSchedule) > 0 {
 		schedule = hasSchedule[0]
 	}
+	placements := len(hasSchedule) == 0
+	if len(hasSchedule) > 1 {
+		placements = hasSchedule[1]
+	}
 	for _, table := range []string{"training_plan_publications", "training_prescriptions"} {
-		expected, err := json.Marshal(trainingRecipientRelationSpec(table, sourceUnique, schedule))
+		expected, err := json.Marshal(trainingRecipientRelationSpec(table, sourceUnique, schedule, placements))
 		if err != nil {
 			return err
 		}
@@ -182,6 +187,9 @@ func verifyTrainingRecipientCatalog(ctx context.Context, q TrainingScheduleQuery
 	}
 	if valid, err := trainingScheduleFunctionMatches(ctx, q, "public.prevent_training_publication_mutation()", header); err != nil || !valid {
 		return errors.New("training recipient immutable function mismatch")
+	}
+	if placements {
+		return verifyTrainingPlacementDefinition(ctx, q)
 	}
 	return nil
 }
@@ -202,7 +210,7 @@ const recipientRelationContractSQL = `SELECT /* training recipient relation cont
  ) OPERATOR(pg_catalog.=) $2::pg_catalog.jsonb
  FROM pg_catalog.pg_class relation JOIN pg_catalog.pg_namespace namespace ON namespace.oid OPERATOR(pg_catalog.=) relation.relnamespace JOIN pg_catalog.pg_roles owner ON owner.oid OPERATOR(pg_catalog.=) relation.relowner WHERE relation.oid OPERATOR(pg_catalog.=) pg_catalog.to_regclass($1::pg_catalog.text)`
 
-func trainingRecipientRelationSpec(table string, sourceUnique, schedule bool) map[string]any {
+func trainingRecipientRelationSpec(table string, sourceUnique, schedule bool, hasPlacements ...bool) map[string]any {
 	columns := map[string]any{}
 	column := func(name, typ string, modifier int, notnull, hasDefault bool) {
 		columns[name] = []any{"pg_catalog", typ, modifier, notnull, hasDefault, "", "", 0}
@@ -245,6 +253,12 @@ func trainingRecipientRelationSpec(table string, sourceUnique, schedule bool) ma
 	} else {
 		for _, name := range []string{"publication_id", "session_id", "membership_id", "athlete_user_id"} {
 			column(name, "uuid", -1, true, false)
+		}
+		if len(hasPlacements) > 0 && hasPlacements[0] {
+			column("placement_id", "uuid", -1, false, false)
+			constraints[table+"_placement_id_fkey"] = constraint("FOREIGN KEY (placement_id) REFERENCES training_group_placements(id) ON DELETE RESTRICT")
+			triggers[table+"_placement_guard"] = trigger("guard_training_prescription_placement()", 7, "")
+			triggers[table+"_detach_placement_withdrawals"] = trigger("detach_training_placement_withdrawal_live_reference()", 11, "")
 		}
 		column("snapshot", "jsonb", -1, true, false)
 		column("snapshot_sha256", "varchar", 68, true, false)

@@ -14,11 +14,11 @@ import (
 func completeLocalAuthoringPreparation(ctx context.Context, migration, bootstrap *pgx.Conn, target recipientCommandTarget, record *localRecipientManifestFile, state db.TrainingScheduleState) error {
 	m := &record.Value
 	authoring := state.SchemaContract == db.TrainingScheduleContractP && trainingcompat.WriterGeneration >= 2
-	if state.RequiredReader != 3 || state.FloorCommitID == nil || state.FloorManifestSHA256 == nil || m.PublisherOID == nil || m.OriginalLogin == nil {
+	if state.RequiredReader != trainingcompat.ReaderGeneration || state.FloorCommitID == nil || state.FloorManifestSHA256 == nil || m.PublisherOID == nil || m.OriginalLogin == nil {
 		return errors.New("local preparation floor/role binding rejected")
 	}
 	sameFloor := func(current db.TrainingScheduleState) bool {
-		return current.DatabaseIncarnation == state.DatabaseIncarnation && current.RequiredReader == 3 && current.FloorCommitID != nil && *current.FloorCommitID == *state.FloorCommitID && current.FloorManifestSHA256 != nil && *current.FloorManifestSHA256 == *state.FloorManifestSHA256 && current.SchemaContract == state.SchemaContract
+		return current.DatabaseIncarnation == state.DatabaseIncarnation && current.RequiredReader == trainingcompat.ReaderGeneration && current.FloorCommitID != nil && *current.FloorCommitID == *state.FloorCommitID && current.FloorManifestSHA256 != nil && *current.FloorManifestSHA256 == *state.FloorManifestSHA256 && current.SchemaContract == state.SchemaContract
 	}
 	prepared := func(current db.TrainingScheduleState) bool {
 		return authoring && sameFloor(current) && current.PartialV2Enabled && m.AuthoringExpectedEpoch != nil && current.StateEpoch == *m.AuthoringExpectedEpoch+1 && (m.AuthoringPreparedEpoch == nil || *m.AuthoringPreparedEpoch == current.StateEpoch)

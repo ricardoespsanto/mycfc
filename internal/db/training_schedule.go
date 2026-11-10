@@ -188,6 +188,9 @@ func verifyTrainingScheduleSchema(ctx context.Context, q TrainingScheduleQueryRe
 		"training_schedule_control.set_enabled", "training_schedule_control.guard_session", "training_schedule_control.guard_artifact", "training_schedule_control.guard_publication",
 	} {
 		header, err := trainingScheduleFunctionHeader(name)
+		if contract == TrainingScheduleContractP && name == "public.prevent_dated_participation_rewrite" {
+			header, err = trainingScheduleExtractFunction(baselineSchema, name)
+		}
 		if err != nil {
 			return err
 		}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cfcoimbra/mycfc/internal/db"
+	"github.com/cfcoimbra/mycfc/internal/trainingcompat"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -66,7 +67,7 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	}
 	defer low.Close(context.Background())
 	state, err := db.TrainingScheduleStatus(t.Context(), low)
-	if err != nil || state.RequiredReader != 3 || state.FloorCommitID == nil || !state.PartialV2Enabled || state.SchemaContract != db.TrainingScheduleContractP {
+	if err != nil || state.RequiredReader != trainingcompat.ReaderGeneration || state.FloorCommitID == nil || !state.PartialV2Enabled || state.SchemaContract != db.TrainingScheduleContractP {
 		t.Fatal("floor not acknowledged", err)
 	}
 	original := state
@@ -132,7 +133,7 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	if err = low.QueryRow(t.Context(), `SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname='local_recipient_web'`).Scan(&login); err != nil || login {
 		t.Fatal("unexpected publisher LOGIN restored", err)
 	}
-	if _, err = low.Exec(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,4)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New(), strings.Repeat("b", 64)); err != nil {
+	if _, err = low.Exec(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,$5)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New(), strings.Repeat("b", 64), trainingcompat.ReaderGeneration+1); err != nil {
 		t.Fatal(err)
 	}
 	if err = runServerCommand(t.Context(), []string{"prepare-local-recipient-floor"}); err == nil {

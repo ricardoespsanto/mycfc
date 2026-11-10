@@ -116,17 +116,17 @@ WITH actor AS (
  AND NOT u.is_dependent AND u.date_of_birth <= ((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
 )
 SELECT m.id AS membership_id,u.id AS user_id,u.name,
- EXISTS(SELECT 1 FROM training_group_members gm WHERE gm.group_id=g.id AND gm.membership_id=m.id) AS already_member
+ EXISTS(SELECT 1 FROM training_group_placements gm WHERE gm.group_id=g.id AND gm.subject_user_id=m.user_id AND gm.superseded_by_change_id IS NULL AND gm.cancelled_by_change_id IS NULL AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN gm.starts_on AND COALESCE(gm.ends_on,'infinity'::date)) AS already_member
 FROM training_groups g JOIN user_memberships m ON true JOIN users u ON u.id=m.user_id CROSS JOIN actor
 WHERE g.id=$1::uuid AND (actor.admin OR EXISTS(SELECT 1 FROM staff_grants grant_row WHERE grant_row.user_id=actor.id AND grant_row.capability='COACH' AND grant_row.revoked_at IS NULL AND
  ((g.programme_id IS NOT NULL AND grant_row.programme_id=g.programme_id) OR (g.team_id IS NOT NULL AND grant_row.team_id=g.team_id)))) AND u.is_active AND u.erased_at IS NULL AND (NOT u.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=u.id AND guardian_authority_current(relationship.guardian_user_id,u.id)))
  AND m.starts_on <= (now() AT TIME ZONE 'Europe/Lisbon')::date AND (m.ends_on IS NULL OR m.ends_on >= (now() AT TIME ZONE 'Europe/Lisbon')::date)
  AND ((g.programme_id IS NOT NULL AND m.programme_id=g.programme_id) OR (g.team_id IS NOT NULL AND m.team_id=g.team_id))
- AND (($2::boolean AND EXISTS(SELECT 1 FROM training_group_members gm WHERE gm.group_id=g.id AND gm.membership_id=m.id))
- OR (NOT $2::boolean AND NOT EXISTS(SELECT 1 FROM training_group_members other_member JOIN user_memberships other_membership ON other_membership.id=other_member.membership_id
- WHERE other_membership.user_id=u.id AND other_member.group_id<>g.id AND other_membership.programme_id=m.programme_id
- AND other_membership.starts_on <= (now() AT TIME ZONE 'Europe/Lisbon')::date
- AND (other_membership.ends_on IS NULL OR other_membership.ends_on >= (now() AT TIME ZONE 'Europe/Lisbon')::date)) AND length(btrim($3::text))>0 AND u.name ILIKE '%' || replace(replace(replace($3::text,E'\\',E'\\\\'),'%','\%'),'_','\_') || '%' ESCAPE E'\\'))
+ AND (($2::boolean AND EXISTS(SELECT 1 FROM training_group_placements gm WHERE gm.group_id=g.id AND gm.subject_user_id=m.user_id AND gm.superseded_by_change_id IS NULL AND gm.cancelled_by_change_id IS NULL AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN gm.starts_on AND COALESCE(gm.ends_on,'infinity'::date)))
+ OR (NOT $2::boolean AND NOT EXISTS(SELECT 1 FROM training_group_placements other_member
+ WHERE other_member.subject_user_id=u.id AND other_member.group_id<>g.id AND other_member.programme_id=m.programme_id
+ AND other_member.superseded_by_change_id IS NULL AND other_member.cancelled_by_change_id IS NULL
+ AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN other_member.starts_on AND COALESCE(other_member.ends_on,'infinity'::date)) AND length(btrim($3::text))>0 AND u.name ILIKE '%' || replace(replace(replace($3::text,E'\\',E'\\\\'),'%','\%'),'_','\_') || '%' ESCAPE E'\\'))
 ORDER BY u.name,u.id,m.id LIMIT 20 OFFSET $4::integer
 `
 
@@ -185,7 +185,7 @@ WITH actor AS (
 SELECT g.id,g.name,g.programme_id,g.team_id,g.updated_at,
  COALESCE(latest_week.id::text,'')::text AS latest_week_id,
  COALESCE(p.name_pt,t.name || ' — ' || tp.name_pt)::text AS scope_name,
- (SELECT count(*) FROM training_group_members gm JOIN user_memberships m ON m.id=gm.membership_id JOIN users u ON u.id=m.user_id WHERE gm.group_id=g.id AND u.is_active AND u.erased_at IS NULL AND (NOT u.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=u.id AND guardian_authority_current(relationship.guardian_user_id,u.id)))
+ (SELECT count(DISTINCT gm.subject_user_id) FROM training_group_placements gm JOIN user_memberships m ON m.user_id=gm.subject_user_id JOIN users u ON u.id=m.user_id WHERE gm.group_id=g.id AND gm.superseded_by_change_id IS NULL AND gm.cancelled_by_change_id IS NULL AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN gm.starts_on AND COALESCE(gm.ends_on,'infinity'::date) AND u.is_active AND u.erased_at IS NULL AND (NOT u.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=u.id AND guardian_authority_current(relationship.guardian_user_id,u.id)))
  AND m.starts_on <= (now() AT TIME ZONE 'Europe/Lisbon')::date AND (m.ends_on IS NULL OR m.ends_on >= (now() AT TIME ZONE 'Europe/Lisbon')::date)
  AND ((g.programme_id IS NOT NULL AND m.programme_id=g.programme_id) OR (g.team_id IS NOT NULL AND m.team_id=g.team_id)))::bigint AS member_count
 FROM training_groups g LEFT JOIN programmes p ON p.id=g.programme_id LEFT JOIN teams t ON t.id=g.team_id LEFT JOIN programmes tp ON tp.id=t.programme_id LEFT JOIN LATERAL (SELECT plan.id FROM training_plans plan WHERE plan.training_group_id=g.id ORDER BY plan.week_start DESC,plan.id DESC LIMIT 1) latest_week ON true CROSS JOIN actor
@@ -300,10 +300,10 @@ SELECT m.id FROM training_groups g JOIN user_memberships m ON m.id=$1::uuid JOIN
 WHERE g.id=$2::uuid AND (actor.admin OR EXISTS(SELECT 1 FROM staff_grants grant_row WHERE grant_row.user_id=actor.id AND grant_row.capability='COACH' AND grant_row.revoked_at IS NULL AND
  ((g.programme_id IS NOT NULL AND grant_row.programme_id=g.programme_id) OR (g.team_id IS NOT NULL AND grant_row.team_id=g.team_id)))) AND u.is_active AND u.erased_at IS NULL AND (NOT u.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=u.id AND guardian_authority_current(relationship.guardian_user_id,u.id)))
  AND m.starts_on <= (now() AT TIME ZONE 'Europe/Lisbon')::date AND (m.ends_on IS NULL OR m.ends_on >= (now() AT TIME ZONE 'Europe/Lisbon')::date)
- AND ((g.programme_id IS NOT NULL AND m.programme_id=g.programme_id) OR (g.team_id IS NOT NULL AND m.team_id=g.team_id)) AND (NOT EXISTS(SELECT 1 FROM training_group_members other_member JOIN user_memberships other_membership ON other_membership.id=other_member.membership_id
- WHERE other_membership.user_id=u.id AND other_member.group_id<>g.id AND other_membership.programme_id=m.programme_id
- AND other_membership.starts_on <= (now() AT TIME ZONE 'Europe/Lisbon')::date
- AND (other_membership.ends_on IS NULL OR other_membership.ends_on >= (now() AT TIME ZONE 'Europe/Lisbon')::date)) OR EXISTS(SELECT 1 FROM training_group_members gm WHERE gm.group_id=g.id AND gm.membership_id=m.id))
+ AND ((g.programme_id IS NOT NULL AND m.programme_id=g.programme_id) OR (g.team_id IS NOT NULL AND m.team_id=g.team_id)) AND (NOT EXISTS(SELECT 1 FROM training_group_placements other_member
+ WHERE other_member.subject_user_id=u.id AND other_member.group_id<>g.id AND other_member.programme_id=m.programme_id
+ AND other_member.superseded_by_change_id IS NULL AND other_member.cancelled_by_change_id IS NULL
+ AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN other_member.starts_on AND COALESCE(other_member.ends_on,'infinity'::date)) OR EXISTS(SELECT 1 FROM training_group_placements gm WHERE gm.group_id=g.id AND gm.subject_user_id=m.user_id AND gm.superseded_by_change_id IS NULL AND gm.cancelled_by_change_id IS NULL AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN gm.starts_on AND COALESCE(gm.ends_on,'infinity'::date)))
 FOR SHARE OF m
 `
 

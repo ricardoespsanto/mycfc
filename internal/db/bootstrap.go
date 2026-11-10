@@ -26,7 +26,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion              = "reset-baseline-v1"
-	baselineIncludesThrough      = "202611100004_training_workout_graph_integrity"
+	baselineIncludesThrough      = "202611100005_training_dated_placements"
 	mediaCleanupRole             = "mycfc_media_cleanup"
 	dataRetentionRole            = "mycfc_data_retention"
 	privacyRetentionRole         = "mycfc_privacy_retention"
@@ -419,6 +419,7 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		{"revoke public protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke web execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM " + app},
+		{"grant web dated placement fixed API", "DO $$ BEGIN IF to_regclass('public.training_placement_heads') IS NULL THEN RETURN; END IF; GRANT EXECUTE ON FUNCTION training_placement_group_programme(uuid), training_placement_actor_scope(uuid,uuid), training_placement_resolve(uuid,uuid,uuid,date), training_placement_touch_heads(uuid,uuid[]), lock_training_publication_placement_heads(uuid,uuid), lock_training_placement_existing_heads_for_join(uuid,uuid,uuid[]), apply_training_placement_change(uuid,uuid,uuid,uuid,uuid,text,uuid,uuid,date,date,bigint,text), cancel_training_placement_change(uuid,uuid,uuid,bigint,text), training_prescription_current_delivery(uuid) TO " + app + "; GRANT SELECT ON TABLE training_placement_heads,training_group_placements,training_placement_changes,training_prescription_withdrawals TO " + app + "; REVOKE INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER ON TABLE training_placement_heads,training_group_placements,training_placement_changes,training_prescription_withdrawals FROM " + app + "; END $$"},
 		{"grant web pre-cutoff retention capture", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_retention_sources(uuid,uuid) TO " + app},
 		{"revoke web retention table access", "REVOKE ALL PRIVILEGES ON TABLE " + retentionTables + " FROM " + app},
 		{"revoke web completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM " + app},

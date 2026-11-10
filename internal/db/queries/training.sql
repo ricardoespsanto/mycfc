@@ -55,7 +55,7 @@ LEFT JOIN LATERAL (
     SELECT prescription.id
     FROM training_prescriptions prescription
     JOIN training_plan_publications publication ON publication.id = prescription.publication_id
-    WHERE prescription.session_id = s.id AND prescription.athlete_user_id = sqlc.arg(user_id)
+    WHERE prescription.session_id = s.id AND prescription.athlete_user_id = sqlc.arg(user_id) AND public.training_prescription_current_delivery(prescription.id)
       AND publication.id = (
         SELECT current_publication.id FROM training_plan_publications current_publication
         WHERE current_publication.plan_id = p.id
@@ -64,6 +64,7 @@ LEFT JOIN LATERAL (
 ) current_prescription ON true
 WHERE s.id = sqlc.arg(session_id)
   AND s.status = 'ACTIVE'
+  AND (p.training_group_id IS NULL OR current_prescription.id IS NOT NULL)
   AND s.schedule_precision IN ('INTERVAL','START_ONLY') AND s.starts_at IS NOT NULL
   AND EXISTS (
       SELECT 1 FROM user_memberships m
@@ -82,6 +83,7 @@ WHERE s.id = sqlc.arg(session_id)
             AND replacement_session.status = 'ACTIVE'
             AND replacement_session.schedule_precision IN ('INTERVAL','START_ONLY') AND replacement_session.starts_at IS NOT NULL
             AND replacement_session.id <> s.id
+            AND (replacement_plan.training_group_id IS NULL OR EXISTS(SELECT 1 FROM training_prescriptions replacement_prescription WHERE replacement_prescription.session_id=replacement_session.id AND replacement_prescription.athlete_user_id=sqlc.arg(user_id) AND public.training_prescription_current_delivery(replacement_prescription.id)))
             AND (replacement_plan.programme_id IS NULL OR replacement_plan.programme_id = m.programme_id)
             AND (replacement_plan.team_id IS NULL OR replacement_plan.team_id = m.team_id)
       )
@@ -109,14 +111,15 @@ SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_
        EXISTS (
          SELECT 1 FROM training_prescriptions prescription
          JOIN training_plan_publications publication ON publication.id = prescription.publication_id
-         WHERE prescription.session_id = s.id AND prescription.athlete_user_id = sqlc.arg(user_id)
+         WHERE prescription.session_id = s.id AND prescription.athlete_user_id = sqlc.arg(user_id) AND public.training_prescription_current_delivery(prescription.id)
            AND publication.revision = (SELECT max(current_publication.revision) FROM training_plan_publications current_publication WHERE current_publication.plan_id = p.id)
        ) AS prescription_available
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
 LEFT JOIN training_session_outcomes o ON o.session_id = s.id AND o.user_id = sqlc.arg(user_id)
-WHERE EXISTS (
+WHERE (p.training_group_id IS NULL OR o.status='COMPLETED' OR EXISTS(SELECT 1 FROM training_prescriptions available WHERE available.session_id=s.id AND available.athlete_user_id=sqlc.arg(user_id) AND public.training_prescription_current_delivery(available.id)))
+AND EXISTS (
     SELECT 1 FROM user_memberships membership
     WHERE membership.user_id = sqlc.arg(user_id) AND membership.starts_on <= CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
       AND (p.programme_id IS NULL OR p.programme_id = membership.programme_id)
@@ -132,7 +135,7 @@ SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at,s.schedule_p
          SELECT 1 FROM training_prescriptions prescription
          JOIN training_plan_publications publication ON publication.id = prescription.publication_id
          JOIN users prescribed_athlete ON prescribed_athlete.id = prescription.athlete_user_id
-         WHERE prescription.session_id = s.id
+         WHERE prescription.session_id = s.id AND public.training_prescription_current_delivery(prescription.id)
            AND (prescribed_athlete.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),prescribed_athlete.id))
            AND publication.revision = (SELECT max(current_publication.revision) FROM training_plan_publications current_publication WHERE current_publication.plan_id = p.id)
        ) AS prescription_available
@@ -140,6 +143,7 @@ FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
 WHERE (s.ends_at >= sqlc.arg(from_time) OR (s.ends_at IS NULL AND public.training_session_local_date(s.scheduled_on,s.starts_at)>=(sqlc.arg(from_time)::timestamptz AT TIME ZONE 'Europe/Lisbon')::date))
+  AND (p.training_group_id IS NULL OR EXISTS(SELECT 1 FROM training_prescriptions available JOIN users athlete ON athlete.id=available.athlete_user_id WHERE available.session_id=s.id AND (athlete.id=sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),athlete.id)) AND public.training_prescription_current_delivery(available.id)))
   AND EXISTS (
       SELECT 1 FROM user_memberships membership
       JOIN users subject ON subject.id = membership.user_id

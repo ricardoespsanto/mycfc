@@ -55,14 +55,14 @@ func prepareLocalRecipientFloor(ctx context.Context) error {
 		return errors.New("local fixture role/floor binding changed")
 	}
 	s := *inspected.ScheduleState
-	if m.Intent == nil && s.RequiredReader >= 3 {
+	if m.Intent == nil && s.RequiredReader >= trainingcompat.ReaderGeneration {
 		if m.Phase != "restored" && m.Phase != "bootstrapped" {
 			return errors.New("local floor state requires recorded intent inspection")
 		}
 		return completeLocalAuthoringPreparation(op, migration, bootstrap, target, record, s)
 	}
 	if m.Intent == nil {
-		m.Intent = &localRecipientFloorIntent{Incarnation: s.DatabaseIncarnation.String(), ExpectedEpoch: s.StateEpoch, Commit: uuid.NewString(), MinimumReader: 3}
+		m.Intent = &localRecipientFloorIntent{Incarnation: s.DatabaseIncarnation.String(), ExpectedEpoch: s.StateEpoch, Commit: uuid.NewString(), MinimumReader: trainingcompat.ReaderGeneration}
 		immutable := struct {
 			Binding localRecipientManifest    `json:"binding"`
 			Intent  localRecipientFloorIntent `json:"intent"`
@@ -88,7 +88,7 @@ func prepareLocalRecipientFloor(ctx context.Context) error {
 	if err != nil || commit == uuid.Nil {
 		return errors.New("local floor intent commit invalid")
 	}
-	if intent.MinimumReader != 3 || len(intent.ManifestSHA256) != 64 || s.DatabaseIncarnation != id {
+	if intent.MinimumReader != trainingcompat.ReaderGeneration || len(intent.ManifestSHA256) != 64 || s.DatabaseIncarnation != id {
 		return errors.New("local floor intent binding changed")
 	}
 	floorMatches := func(state db.TrainingScheduleState) bool {
@@ -96,7 +96,7 @@ func prepareLocalRecipientFloor(ctx context.Context) error {
 		if m.AuthoringExpectedEpoch != nil && *m.AuthoringExpectedEpoch == intent.ExpectedEpoch+1 && state.PartialV2Enabled && state.StateEpoch == *m.AuthoringExpectedEpoch+1 {
 			epochMatches = true
 		}
-		return state.DatabaseIncarnation == id && epochMatches && state.RequiredReader == 3 && state.FloorCommitID != nil && *state.FloorCommitID == commit && state.FloorManifestSHA256 != nil && *state.FloorManifestSHA256 == intent.ManifestSHA256
+		return state.DatabaseIncarnation == id && epochMatches && state.RequiredReader == trainingcompat.ReaderGeneration && state.FloorCommitID != nil && *state.FloorCommitID == commit && state.FloorManifestSHA256 != nil && *state.FloorManifestSHA256 == intent.ManifestSHA256
 	}
 	if m.Phase == "restored" && floorMatches(s) && inspected.Publisher.CanLogin == *m.OriginalLogin {
 		return completeLocalAuthoringPreparation(op, migration, bootstrap, target, record, s)
@@ -132,7 +132,7 @@ func prepareLocalRecipientFloor(ctx context.Context) error {
 			s = *current.ScheduleState
 			return nil
 		}
-		s, err = commitRecipientFloor(owned, migration, current, recipientFloorInput{Incarnation: id, Commit: commit, Epoch: intent.ExpectedEpoch, Manifest: intent.ManifestSHA256, Reader: 3})
+		s, err = commitRecipientFloor(owned, migration, current, recipientFloorInput{Incarnation: id, Commit: commit, Epoch: intent.ExpectedEpoch, Manifest: intent.ManifestSHA256, Reader: trainingcompat.ReaderGeneration})
 		return err
 	})
 	if err != nil {

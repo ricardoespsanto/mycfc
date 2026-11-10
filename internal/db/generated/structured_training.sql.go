@@ -693,8 +693,8 @@ func (q *Queries) CreateTrainingPlanPublication(ctx context.Context, arg CreateT
 
 const createTrainingPrescription = `-- name: CreateTrainingPrescription :one
 INSERT INTO training_prescriptions (
- publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256
-) SELECT $1, session.id, membership.id, athlete.id,
+ publication_id, session_id, membership_id, athlete_user_id, placement_id, snapshot, snapshot_sha256
+) SELECT $1, session.id, membership.id, athlete.id, resolved.placement_id,
          $2, $3
 FROM training_plan_publications publication
 JOIN training_plans plan ON plan.id = publication.plan_id
@@ -702,13 +702,12 @@ JOIN training_groups group_row ON group_row.id = plan.training_group_id
 JOIN training_sessions session ON session.id = $4 AND session.plan_id = plan.id
 JOIN user_memberships membership ON membership.id = $5 AND membership.user_id = $6
 JOIN users athlete ON athlete.id = membership.user_id AND athlete.is_active AND athlete.erased_at IS NULL AND (NOT athlete.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=athlete.id AND guardian_authority_current(relationship.guardian_user_id,athlete.id)))
-JOIN training_group_members group_member ON group_member.group_id = group_row.id AND group_member.membership_id = membership.id
+JOIN LATERAL public.training_placement_resolve(athlete.id,group_row.id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.membership_id=membership.id AND resolved.placement_id=$7::uuid
 WHERE publication.id = $1
   AND (group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id)
   AND (group_row.team_id IS NULL OR group_row.team_id = membership.team_id)
   AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
   AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
-  AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
   AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 RETURNING id, publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256, created_at
 `
@@ -720,9 +719,21 @@ type CreateTrainingPrescriptionParams struct {
 	SessionID      uuid.UUID  `json:"session_id"`
 	MembershipID   uuid.UUID  `json:"membership_id"`
 	AthleteUserID  *uuid.UUID `json:"athlete_user_id"`
+	PlacementID    uuid.UUID  `json:"placement_id"`
 }
 
-func (q *Queries) CreateTrainingPrescription(ctx context.Context, arg CreateTrainingPrescriptionParams) (TrainingPrescription, error) {
+type CreateTrainingPrescriptionRow struct {
+	ID             uuid.UUID          `json:"id"`
+	PublicationID  uuid.UUID          `json:"publication_id"`
+	SessionID      uuid.UUID          `json:"session_id"`
+	MembershipID   uuid.UUID          `json:"membership_id"`
+	AthleteUserID  uuid.UUID          `json:"athlete_user_id"`
+	Snapshot       []byte             `json:"snapshot"`
+	SnapshotSha256 string             `json:"snapshot_sha256"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreateTrainingPrescription(ctx context.Context, arg CreateTrainingPrescriptionParams) (CreateTrainingPrescriptionRow, error) {
 	row := q.db.QueryRow(ctx, createTrainingPrescription,
 		arg.PublicationID,
 		arg.Snapshot,
@@ -730,8 +741,9 @@ func (q *Queries) CreateTrainingPrescription(ctx context.Context, arg CreateTrai
 		arg.SessionID,
 		arg.MembershipID,
 		arg.AthleteUserID,
+		arg.PlacementID,
 	)
-	var i TrainingPrescription
+	var i CreateTrainingPrescriptionRow
 	err := row.Scan(
 		&i.ID,
 		&i.PublicationID,
@@ -1542,8 +1554,8 @@ JOIN LATERAL (
 ) latest ON true
 WHERE prescription.id = $1
   AND (
-    athlete.id = $2
-    OR guardian_authority_current($2,athlete.id)
+    ((athlete.id = $2 OR guardian_authority_current($2,athlete.id))
+      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED')))
     OR $3::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -1791,7 +1803,7 @@ func (q *Queries) ListEligibleTrainingGroupMemberships(ctx context.Context, arg 
 }
 
 const listLatestTrainingPrescriptionHashesForPlan = `-- name: ListLatestTrainingPrescriptionHashesForPlan :many
-SELECT prescription.membership_id, prescription.session_id, prescription.snapshot_sha256
+SELECT prescription.membership_id, prescription.session_id, prescription.snapshot_sha256, prescription.placement_id
 FROM training_prescriptions prescription
 JOIN training_plan_publications publication ON publication.id = prescription.publication_id
 WHERE publication.plan_id = $1
@@ -1804,9 +1816,10 @@ ORDER BY prescription.membership_id, prescription.session_id
 `
 
 type ListLatestTrainingPrescriptionHashesForPlanRow struct {
-	MembershipID   uuid.UUID `json:"membership_id"`
-	SessionID      uuid.UUID `json:"session_id"`
-	SnapshotSha256 string    `json:"snapshot_sha256"`
+	MembershipID   uuid.UUID  `json:"membership_id"`
+	SessionID      uuid.UUID  `json:"session_id"`
+	SnapshotSha256 string     `json:"snapshot_sha256"`
+	PlacementID    *uuid.UUID `json:"placement_id"`
 }
 
 func (q *Queries) ListLatestTrainingPrescriptionHashesForPlan(ctx context.Context, planID uuid.UUID) ([]ListLatestTrainingPrescriptionHashesForPlanRow, error) {
@@ -1818,7 +1831,12 @@ func (q *Queries) ListLatestTrainingPrescriptionHashesForPlan(ctx context.Contex
 	items := []ListLatestTrainingPrescriptionHashesForPlanRow{}
 	for rows.Next() {
 		var i ListLatestTrainingPrescriptionHashesForPlanRow
-		if err := rows.Scan(&i.MembershipID, &i.SessionID, &i.SnapshotSha256); err != nil {
+		if err := rows.Scan(
+			&i.MembershipID,
+			&i.SessionID,
+			&i.SnapshotSha256,
+			&i.PlacementID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2979,25 +2997,26 @@ func (q *Queries) ListStructuredTrainingOverviewForSubject(ctx context.Context, 
 }
 
 const listStructuredTrainingPublicationMembers = `-- name: ListStructuredTrainingPublicationMembers :many
-SELECT DISTINCT membership.id AS membership_id, membership.user_id AS athlete_user_id,
+SELECT DISTINCT placement.id AS placement_id,membership.id AS membership_id, membership.user_id AS athlete_user_id,
        subject.name AS athlete_name, membership.starts_on, membership.ends_on, session.id AS session_id
 FROM training_plans plan
 JOIN training_groups group_row ON group_row.id = plan.training_group_id
-JOIN training_group_members group_member ON group_member.group_id = group_row.id
-JOIN user_memberships membership ON membership.id = group_member.membership_id
+JOIN training_group_placements placement ON placement.group_id=group_row.id AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+JOIN training_sessions session ON session.plan_id=plan.id
+JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,group_row.id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+JOIN user_memberships membership ON membership.id=resolved.membership_id
 JOIN users subject ON subject.id = membership.user_id AND subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND guardian_authority_current(relationship.guardian_user_id,subject.id)))
-JOIN training_sessions session ON session.plan_id = plan.id
 WHERE plan.id = $1
   AND (group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id)
   AND (group_row.team_id IS NULL OR group_row.team_id = membership.team_id)
   AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
   AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
-  AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
   AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 ORDER BY subject.name, membership.id, session.id
 `
 
 type ListStructuredTrainingPublicationMembersRow struct {
+	PlacementID   uuid.UUID   `json:"placement_id"`
 	MembershipID  uuid.UUID   `json:"membership_id"`
 	AthleteUserID *uuid.UUID  `json:"athlete_user_id"`
 	AthleteName   string      `json:"athlete_name"`
@@ -3016,6 +3035,7 @@ func (q *Queries) ListStructuredTrainingPublicationMembers(ctx context.Context, 
 	for rows.Next() {
 		var i ListStructuredTrainingPublicationMembersRow
 		if err := rows.Scan(
+			&i.PlacementID,
 			&i.MembershipID,
 			&i.AthleteUserID,
 			&i.AthleteName,
@@ -3101,8 +3121,8 @@ WHERE prescription.session_id = $1
     ORDER BY current_publication.revision DESC LIMIT 1
   )
   AND (
-    athlete.id = $2
-    OR guardian_authority_current($2,athlete.id)
+    ((athlete.id = $2 OR guardian_authority_current($2,athlete.id))
+      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED')))
     OR $3::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -3181,8 +3201,8 @@ JOIN LATERAL (
  LIMIT 1
 ) latest ON true
 WHERE (
-    athlete.id = $1
-    OR guardian_authority_current($1,athlete.id)
+    ((athlete.id = $1 OR guardian_authority_current($1,athlete.id))
+      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED')))
     OR $2::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row

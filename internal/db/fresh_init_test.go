@@ -184,7 +184,7 @@ func TestFreshReceiptAcceptsOnlyPinnedGenesisAcrossForwardMigration(t *testing.T
 	t.Cleanup(func() { releasecontract.Version, releasecontract.Candidate = oldVersion, oldCandidate })
 	var original []string
 	for _, version := range EmbeddedMigrationInventory() {
-		if version != "202610010003_privacy_attachment_trigger_runtime" && version != TrainingScheduleCompatibilityMigration && version != TrainingRecipientRevisionMigration && version != TrainingPartialAuthoringMigration && version != TrainingWorkoutGraphIntegrityMigration {
+		if version != "202610010003_privacy_attachment_trigger_runtime" && version != TrainingScheduleCompatibilityMigration && version != TrainingRecipientRevisionMigration && version != TrainingPartialAuthoringMigration && version != TrainingWorkoutGraphIntegrityMigration && version != TrainingDatedPlacementsMigration {
 			original = append(original, version)
 		}
 	}

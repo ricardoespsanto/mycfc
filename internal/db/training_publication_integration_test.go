@@ -72,7 +72,7 @@ func TestPublicationScopedSourceAndEligibility(t *testing.T) {
 		t.Fatal("typed source changes existing canonical overview input")
 	}
 	eligible, err := q.PublicationEligibleRecipients(t.Context(), dbgen.PublicationEligibleRecipientsParams{ActorID: h.actor, PlanID: h.plan})
-	if err != nil || len(eligible) != 1 || eligible[0].AthleteUserID == nil || *eligible[0].AthleteUserID != h.subject {
+	if err != nil || len(eligible) != 1 || eligible[0].AthleteUserID != h.subject {
 		t.Fatalf("eligible set mismatch %+v %v", eligible, err)
 	}
 	candidates, err := q.PublicationStructuralCandidates(t.Context(), dbgen.PublicationStructuralCandidatesParams{ActorID: h.actor, PlanID: h.plan})

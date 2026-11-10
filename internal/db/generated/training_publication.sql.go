@@ -15,13 +15,13 @@ import (
 const insertPrescription = `-- name: InsertPrescription :one
 WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
- FROM public.users actor_user WHERE actor_user.id=$7::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
+ FROM public.users actor_user WHERE actor_user.id=$8::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
 ), scoped AS MATERIALIZED (
  SELECT plan.id,plan.title,plan.description,plan.programme_id,plan.team_id,plan.training_group_id,plan.season_id,plan.week_start,plan.planned_load_percentage,plan.updated_at,
  group_row.id AS group_id,group_row.name AS group_name,group_row.programme_id AS group_programme_id,group_row.team_id AS group_team_id
  FROM public.training_plans plan JOIN public.training_groups group_row ON group_row.id=plan.training_group_id JOIN public.seasons season ON season.id=plan.season_id CROSS JOIN actor
- WHERE EXISTS(SELECT 1 FROM public.training_plan_publications publication WHERE publication.id=$1::uuid AND publication.plan_id=plan.id AND publication.published_by_id=$7::uuid) AND (actor.admin OR EXISTS(SELECT 1 FROM public.staff_grants grant_row WHERE grant_row.user_id=actor.id AND grant_row.capability='COACH' AND grant_row.revoked_at IS NULL
+ WHERE EXISTS(SELECT 1 FROM public.training_plan_publications publication WHERE publication.id=$1::uuid AND publication.plan_id=plan.id AND publication.published_by_id=$8::uuid) AND (actor.admin OR EXISTS(SELECT 1 FROM public.staff_grants grant_row WHERE grant_row.user_id=actor.id AND grant_row.capability='COACH' AND grant_row.revoked_at IS NULL
  AND ((group_row.programme_id IS NOT NULL AND grant_row.programme_id=group_row.programme_id) OR (group_row.team_id IS NOT NULL AND grant_row.team_id=group_row.team_id))))
 ), header AS (
  SELECT plan.id AS plan_id,plan.group_id,plan.season_id,plan.week_start,plan.updated_at AS source_updated_at,
@@ -29,28 +29,31 @@ WITH RECURSIVE actor AS (
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 ),
 candidates AS MATERIALIZED (
- SELECT DISTINCT session.id AS session_id,membership.id AS membership_id,membership.user_id AS subject_id,membership.starts_on,membership.ends_on,
+ SELECT DISTINCT session.id AS session_id,placement.id AS placement_id,membership.id AS membership_id,structural_subject.id AS subject_id,membership.starts_on,membership.ends_on,
  public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
- FROM scoped plan JOIN public.training_group_members group_member ON group_member.group_id=plan.group_id JOIN public.user_memberships membership ON membership.id=group_member.membership_id JOIN public.training_sessions session ON session.plan_id=plan.id
- WHERE (plan.group_programme_id IS NULL OR membership.programme_id=plan.group_programme_id) AND (plan.group_team_id IS NULL OR membership.team_id=plan.group_team_id)
- AND (plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND (plan.team_id IS NULL OR membership.team_id=plan.team_id)
- AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- ORDER BY session.id,membership.id LIMIT 4097
+ FROM scoped plan JOIN public.training_group_placements placement ON placement.group_id=plan.group_id
+ JOIN public.users structural_subject ON structural_subject.id=placement.subject_user_id
+ JOIN public.training_sessions session ON session.plan_id=plan.id
+ LEFT JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,plan.group_id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+ LEFT JOIN public.user_memberships membership ON membership.id=resolved.membership_id
+ AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+ WHERE placement.subject_user_id IS NOT NULL AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+ AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN placement.starts_on AND COALESCE(placement.ends_on,'infinity'::date)
+ ORDER BY session.id,placement.id,membership.id LIMIT 4097
 ), candidate_stats AS MATERIALIZED (SELECT count(*)::bigint AS raw_tuple_count FROM candidates), latest_hashes AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
  FROM header JOIN public.training_prescriptions prescription ON prescription.publication_id=header.latest_publication_id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), latest_stats AS MATERIALIZED(SELECT count(*)::bigint AS latest_tuple_count FROM latest_hashes), input_gate AS MATERIALIZED (
  SELECT header.plan_id FROM header CROSS JOIN candidate_stats CROSS JOIN latest_stats WHERE candidate_stats.raw_tuple_count<=4096 AND latest_stats.latest_tuple_count<=4096
 ),
 eligible_recipients AS (
- SELECT candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
+ SELECT candidate.placement_id,candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
  FROM candidates candidate JOIN input_gate ON true JOIN public.users subject ON subject.id=candidate.subject_id
- WHERE subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ WHERE candidate.membership_id IS NOT NULL AND subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
 )
-INSERT INTO public.training_prescriptions(publication_id,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256)
- SELECT $1::uuid,recipient.session_id,recipient.membership_id,recipient.athlete_user_id,$2::jsonb,$3::text FROM eligible_recipients recipient
- WHERE recipient.session_id=$4::uuid AND recipient.membership_id=$5::uuid AND recipient.athlete_user_id=$6::uuid
+INSERT INTO public.training_prescriptions(publication_id,session_id,membership_id,athlete_user_id,placement_id,snapshot,snapshot_sha256)
+ SELECT $1::uuid,recipient.session_id,recipient.membership_id,recipient.athlete_user_id,recipient.placement_id,$2::jsonb,$3::text FROM eligible_recipients recipient
+ WHERE recipient.session_id=$4::uuid AND recipient.membership_id=$5::uuid AND recipient.athlete_user_id=$6::uuid AND recipient.placement_id=$7::uuid
  RETURNING id,publication_id,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256,created_at
 `
 
@@ -61,10 +64,22 @@ type InsertPrescriptionParams struct {
 	SessionID      uuid.UUID `json:"session_id"`
 	MembershipID   uuid.UUID `json:"membership_id"`
 	AthleteUserID  uuid.UUID `json:"athlete_user_id"`
+	PlacementID    uuid.UUID `json:"placement_id"`
 	ActorID        uuid.UUID `json:"actor_id"`
 }
 
-func (q *Queries) InsertPrescription(ctx context.Context, arg InsertPrescriptionParams) (TrainingPrescription, error) {
+type InsertPrescriptionRow struct {
+	ID             uuid.UUID          `json:"id"`
+	PublicationID  uuid.UUID          `json:"publication_id"`
+	SessionID      uuid.UUID          `json:"session_id"`
+	MembershipID   uuid.UUID          `json:"membership_id"`
+	AthleteUserID  uuid.UUID          `json:"athlete_user_id"`
+	Snapshot       []byte             `json:"snapshot"`
+	SnapshotSha256 string             `json:"snapshot_sha256"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertPrescription(ctx context.Context, arg InsertPrescriptionParams) (InsertPrescriptionRow, error) {
 	row := q.db.QueryRow(ctx, insertPrescription,
 		arg.PublicationID,
 		arg.Snapshot,
@@ -72,9 +87,10 @@ func (q *Queries) InsertPrescription(ctx context.Context, arg InsertPrescription
 		arg.SessionID,
 		arg.MembershipID,
 		arg.AthleteUserID,
+		arg.PlacementID,
 		arg.ActorID,
 	)
-	var i TrainingPrescription
+	var i InsertPrescriptionRow
 	err := row.Scan(
 		&i.ID,
 		&i.PublicationID,
@@ -163,16 +179,19 @@ WITH RECURSIVE actor AS (
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 ),
 candidates AS MATERIALIZED (
- SELECT DISTINCT session.id AS session_id,membership.id AS membership_id,membership.user_id AS subject_id,membership.starts_on,membership.ends_on,
+ SELECT DISTINCT session.id AS session_id,placement.id AS placement_id,membership.id AS membership_id,structural_subject.id AS subject_id,membership.starts_on,membership.ends_on,
  public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
- FROM scoped plan JOIN public.training_group_members group_member ON group_member.group_id=plan.group_id JOIN public.user_memberships membership ON membership.id=group_member.membership_id JOIN public.training_sessions session ON session.plan_id=plan.id
- WHERE (plan.group_programme_id IS NULL OR membership.programme_id=plan.group_programme_id) AND (plan.group_team_id IS NULL OR membership.team_id=plan.group_team_id)
- AND (plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND (plan.team_id IS NULL OR membership.team_id=plan.team_id)
- AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- ORDER BY session.id,membership.id LIMIT 4097
+ FROM scoped plan JOIN public.training_group_placements placement ON placement.group_id=plan.group_id
+ JOIN public.users structural_subject ON structural_subject.id=placement.subject_user_id
+ JOIN public.training_sessions session ON session.plan_id=plan.id
+ LEFT JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,plan.group_id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+ LEFT JOIN public.user_memberships membership ON membership.id=resolved.membership_id
+ AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+ WHERE placement.subject_user_id IS NOT NULL AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+ AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN placement.starts_on AND COALESCE(placement.ends_on,'infinity'::date)
+ ORDER BY session.id,placement.id,membership.id LIMIT 4097
 ), candidate_stats AS MATERIALIZED (SELECT count(*)::bigint AS raw_tuple_count FROM candidates), latest_hashes AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
  FROM header JOIN public.training_prescriptions prescription ON prescription.publication_id=header.latest_publication_id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), latest_stats AS MATERIALIZED(SELECT count(*)::bigint AS latest_tuple_count FROM latest_hashes), input_gate AS MATERIALIZED (
  SELECT header.plan_id FROM header CROSS JOIN candidate_stats CROSS JOIN latest_stats WHERE candidate_stats.raw_tuple_count<=4096 AND latest_stats.latest_tuple_count<=4096
@@ -222,16 +241,19 @@ WITH RECURSIVE actor AS (
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 ),
 candidates AS MATERIALIZED (
- SELECT DISTINCT session.id AS session_id,membership.id AS membership_id,membership.user_id AS subject_id,membership.starts_on,membership.ends_on,
+ SELECT DISTINCT session.id AS session_id,placement.id AS placement_id,membership.id AS membership_id,structural_subject.id AS subject_id,membership.starts_on,membership.ends_on,
  public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
- FROM scoped plan JOIN public.training_group_members group_member ON group_member.group_id=plan.group_id JOIN public.user_memberships membership ON membership.id=group_member.membership_id JOIN public.training_sessions session ON session.plan_id=plan.id
- WHERE (plan.group_programme_id IS NULL OR membership.programme_id=plan.group_programme_id) AND (plan.group_team_id IS NULL OR membership.team_id=plan.group_team_id)
- AND (plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND (plan.team_id IS NULL OR membership.team_id=plan.team_id)
- AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- ORDER BY session.id,membership.id LIMIT 4097
+ FROM scoped plan JOIN public.training_group_placements placement ON placement.group_id=plan.group_id
+ JOIN public.users structural_subject ON structural_subject.id=placement.subject_user_id
+ JOIN public.training_sessions session ON session.plan_id=plan.id
+ LEFT JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,plan.group_id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+ LEFT JOIN public.user_memberships membership ON membership.id=resolved.membership_id
+ AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+ WHERE placement.subject_user_id IS NOT NULL AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+ AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN placement.starts_on AND COALESCE(placement.ends_on,'infinity'::date)
+ ORDER BY session.id,placement.id,membership.id LIMIT 4097
 ), candidate_stats AS MATERIALIZED (SELECT count(*)::bigint AS raw_tuple_count FROM candidates), latest_hashes AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
  FROM header JOIN public.training_prescriptions prescription ON prescription.publication_id=header.latest_publication_id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), latest_stats AS MATERIALIZED(SELECT count(*)::bigint AS latest_tuple_count FROM latest_hashes), input_gate AS MATERIALIZED (
  SELECT header.plan_id FROM header CROSS JOIN candidate_stats CROSS JOIN latest_stats WHERE candidate_stats.raw_tuple_count<=4096 AND latest_stats.latest_tuple_count<=4096
@@ -336,16 +358,19 @@ WITH RECURSIVE actor AS (
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 ),
 candidates AS MATERIALIZED (
- SELECT DISTINCT session.id AS session_id,membership.id AS membership_id,membership.user_id AS subject_id,membership.starts_on,membership.ends_on,
+ SELECT DISTINCT session.id AS session_id,placement.id AS placement_id,membership.id AS membership_id,structural_subject.id AS subject_id,membership.starts_on,membership.ends_on,
  public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
- FROM scoped plan JOIN public.training_group_members group_member ON group_member.group_id=plan.group_id JOIN public.user_memberships membership ON membership.id=group_member.membership_id JOIN public.training_sessions session ON session.plan_id=plan.id
- WHERE (plan.group_programme_id IS NULL OR membership.programme_id=plan.group_programme_id) AND (plan.group_team_id IS NULL OR membership.team_id=plan.group_team_id)
- AND (plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND (plan.team_id IS NULL OR membership.team_id=plan.team_id)
- AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- ORDER BY session.id,membership.id LIMIT 4097
+ FROM scoped plan JOIN public.training_group_placements placement ON placement.group_id=plan.group_id
+ JOIN public.users structural_subject ON structural_subject.id=placement.subject_user_id
+ JOIN public.training_sessions session ON session.plan_id=plan.id
+ LEFT JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,plan.group_id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+ LEFT JOIN public.user_memberships membership ON membership.id=resolved.membership_id
+ AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+ WHERE placement.subject_user_id IS NOT NULL AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+ AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN placement.starts_on AND COALESCE(placement.ends_on,'infinity'::date)
+ ORDER BY session.id,placement.id,membership.id LIMIT 4097
 ), candidate_stats AS MATERIALIZED (SELECT count(*)::bigint AS raw_tuple_count FROM candidates), latest_hashes AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
  FROM header JOIN public.training_prescriptions prescription ON prescription.publication_id=header.latest_publication_id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), latest_stats AS MATERIALIZED(SELECT count(*)::bigint AS latest_tuple_count FROM latest_hashes), input_gate AS MATERIALIZED (
  SELECT header.plan_id FROM header CROSS JOIN candidate_stats CROSS JOIN latest_stats WHERE candidate_stats.raw_tuple_count<=4096 AND latest_stats.latest_tuple_count<=4096
@@ -412,24 +437,27 @@ WITH RECURSIVE actor AS (
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 ),
 candidates AS MATERIALIZED (
- SELECT DISTINCT session.id AS session_id,membership.id AS membership_id,membership.user_id AS subject_id,membership.starts_on,membership.ends_on,
+ SELECT DISTINCT session.id AS session_id,placement.id AS placement_id,membership.id AS membership_id,structural_subject.id AS subject_id,membership.starts_on,membership.ends_on,
  public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
- FROM scoped plan JOIN public.training_group_members group_member ON group_member.group_id=plan.group_id JOIN public.user_memberships membership ON membership.id=group_member.membership_id JOIN public.training_sessions session ON session.plan_id=plan.id
- WHERE (plan.group_programme_id IS NULL OR membership.programme_id=plan.group_programme_id) AND (plan.group_team_id IS NULL OR membership.team_id=plan.group_team_id)
- AND (plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND (plan.team_id IS NULL OR membership.team_id=plan.team_id)
- AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- ORDER BY session.id,membership.id LIMIT 4097
+ FROM scoped plan JOIN public.training_group_placements placement ON placement.group_id=plan.group_id
+ JOIN public.users structural_subject ON structural_subject.id=placement.subject_user_id
+ JOIN public.training_sessions session ON session.plan_id=plan.id
+ LEFT JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,plan.group_id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+ LEFT JOIN public.user_memberships membership ON membership.id=resolved.membership_id
+ AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+ WHERE placement.subject_user_id IS NOT NULL AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+ AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN placement.starts_on AND COALESCE(placement.ends_on,'infinity'::date)
+ ORDER BY session.id,placement.id,membership.id LIMIT 4097
 ), candidate_stats AS MATERIALIZED (SELECT count(*)::bigint AS raw_tuple_count FROM candidates), latest_hashes AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
  FROM header JOIN public.training_prescriptions prescription ON prescription.publication_id=header.latest_publication_id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), latest_stats AS MATERIALIZED(SELECT count(*)::bigint AS latest_tuple_count FROM latest_hashes), input_gate AS MATERIALIZED (
  SELECT header.plan_id FROM header CROSS JOIN candidate_stats CROSS JOIN latest_stats WHERE candidate_stats.raw_tuple_count<=4096 AND latest_stats.latest_tuple_count<=4096
 ),
 eligible_recipients AS (
- SELECT candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
+ SELECT candidate.placement_id,candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
  FROM candidates candidate JOIN input_gate ON true JOIN public.users subject ON subject.id=candidate.subject_id
- WHERE subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ WHERE candidate.membership_id IS NOT NULL AND subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
 ),
 unordered_overview AS (
 SELECT 0::bigint AS _ord,group_row.id AS group_id, group_row.name AS group_name,
@@ -563,9 +591,9 @@ header_record AS MATERIALIZED(SELECT (pg_catalog.jsonb_build_object('plan_id',he
 records AS NOT MATERIALIZED (
 SELECT 0::integer AS category,row_number() OVER(ORDER BY _ord) AS ordinal,(pg_catalog.jsonb_build_object('group_id',record.group_id,'group_name',record.group_name,'programme_name',record.programme_name,'team_name',record.team_name,'member_count',record.member_count,'plan_id',record.plan_id,'plan_title',record.plan_title,'plan_description',record.plan_description,'season_name',record.season_name,'week_start',record.week_start,'planned_load_percentage',record.planned_load_percentage,'session_id',record.session_id,'session_title',record.session_title,'session_description',record.session_description,'starts_at',record.starts_at,'ends_at',record.ends_at,'entry_kind',record.entry_kind,'schedule_precision',record.schedule_precision,'scheduled_on',record.scheduled_on,'day_band',record.day_band,'session_on',record.session_on,'session_status',record.session_status,'segment_id',record.segment_id,'segment_position',record.segment_position,'segment_modality',record.segment_modality,'segment_title',record.segment_title,'segment_location',record.segment_location,'planned_duration_minutes',record.planned_duration_minutes,'planned_start_offset_minutes',record.planned_start_offset_minutes,'transition_duration_minutes',record.transition_duration_minutes,'equipment_notes',record.equipment_notes,'block_id',record.block_id,'block_position',record.block_position,'block_purpose',record.block_purpose,'block_title',record.block_title,'block_instructions',record.block_instructions,'gym_structure',record.gym_structure,'gym_objective',record.gym_objective,'gym_rounds',record.gym_rounds,'round_recovery_seconds',record.round_recovery_seconds) OPERATOR(pg_catalog.||) pg_catalog.jsonb_build_object('water_method',record.water_method,'water_intensity_profile_id',record.water_intensity_profile_id,'water_profile_name',record.water_profile_name,'water_profile_revision',record.water_profile_revision,'water_profile_craft',record.water_profile_craft,'water_target_distance_metres',record.water_target_distance_metres,'water_target_distance_certainty',record.water_target_distance_certainty,'water_step_id',record.water_step_id,'water_parent_step_id',record.water_parent_step_id,'water_step_position',record.water_step_position,'water_step_kind',record.water_step_kind,'water_step_name',record.water_step_name,'water_step_repeats',record.water_step_repeats,'water_step_duration_seconds',record.water_step_duration_seconds,'water_step_duration_certainty',record.water_step_duration_certainty,'water_step_distance_metres',record.water_step_distance_metres,'water_step_distance_certainty',record.water_step_distance_certainty,'water_step_recovery_seconds',record.water_step_recovery_seconds,'water_step_intensity_code',record.water_step_intensity_code,'water_step_cadence_spm',record.water_step_cadence_spm,'water_zone_label',record.water_zone_label,'water_zone_cadence_min',record.water_zone_cadence_min,'water_zone_cadence_max',record.water_zone_cadence_max,'water_zone_meaning',record.water_zone_meaning,'water_step_drill_focus',record.water_step_drill_focus,'water_step_drill_format',record.water_step_drill_format,'water_step_role_notes',record.water_step_role_notes,'water_step_instructions',record.water_step_instructions,'exercise_id',record.exercise_id,'exercise_position',record.exercise_position,'exercise_name',record.exercise_name,'exercise_sets',record.exercise_sets,'exercise_repetitions',record.exercise_repetitions,'exercise_duration_seconds',record.exercise_duration_seconds,'exercise_distance_metres',record.exercise_distance_metres,'exercise_recovery_seconds',record.exercise_recovery_seconds,'resistance_kind',record.resistance_kind,'resistance_value',record.resistance_value,'resistance_text',record.resistance_text,'execution_intent',record.execution_intent) OPERATOR(pg_catalog.||) pg_catalog.jsonb_build_object('tempo',record.tempo,'exercise_notes',record.exercise_notes))::text AS encoded FROM overview record JOIN input_gate ON true
 UNION ALL
-SELECT 1::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'subject_id',record.subject_id,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_on',record.session_on))::text AS encoded FROM candidates record JOIN input_gate ON true
+SELECT 1::integer AS category,row_number() OVER(ORDER BY session_id,placement_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'placement_id',record.placement_id,'membership_id',record.membership_id,'subject_id',record.subject_id,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_on',record.session_on))::text AS encoded FROM candidates record JOIN input_gate ON true
 UNION ALL
-SELECT 2::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'athlete_name',record.athlete_name,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_id',record.session_id))::text AS encoded FROM eligible_recipients record JOIN input_gate ON true
+SELECT 2::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('placement_id',record.placement_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'athlete_name',record.athlete_name,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_id',record.session_id))::text AS encoded FROM eligible_recipients record JOIN input_gate ON true
 UNION ALL
 SELECT 3::integer AS category,row_number() OVER(ORDER BY created_at,variation_id) AS ordinal,(pg_catalog.jsonb_build_object('variation_id',record.variation_id,'plan_id',record.plan_id,'subject_kind',record.subject_kind,'subject_id',record.subject_id,'target_membership_id',record.target_membership_id,'target_group_id',record.target_group_id,'operation',record.operation,'patch',record.patch,'change_summary',record.change_summary,'version',record.version,'created_at',record.created_at))::text AS encoded FROM variation_definitions record JOIN input_gate ON true
 UNION ALL
@@ -575,7 +603,7 @@ SELECT 5::integer AS category,row_number() OVER(ORDER BY _ord) AS ordinal,(pg_ca
 UNION ALL
 SELECT 6::integer AS category,row_number() OVER(ORDER BY event_id) AS ordinal,(pg_catalog.jsonb_build_object('event_id',record.event_id,'starts_at',record.starts_at))::text AS encoded FROM referenced_events record JOIN input_gate ON true
 UNION ALL
-SELECT 7::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'snapshot_sha256',record.snapshot_sha256))::text AS encoded FROM latest_hashes record JOIN input_gate ON true
+SELECT 7::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'placement_id',record.placement_id,'snapshot_sha256',record.snapshot_sha256))::text AS encoded FROM latest_hashes record JOIN input_gate ON true
 ),
 record_totals AS (SELECT category,count(*) AS records,COALESCE(sum(octet_length(convert_to(encoded,'UTF8'))::numeric),0) AS bytes FROM records GROUP BY category), budget AS MATERIALIZED (
  SELECT LEAST(33554433::numeric,238::numeric+octet_length(convert_to(header_record.encoded,'UTF8'))+COALESCE((SELECT sum(bytes+GREATEST(records-1,0)) FROM record_totals),0))::bigint AS source_bytes,
@@ -584,7 +612,7 @@ record_totals AS (SELECT category,count(*) AS records,COALESCE(sum(octet_length(
  FROM header_record CROSS JOIN candidate_stats CROSS JOIN latest_stats
 ), admitted AS MATERIALIZED(SELECT source_bytes, raw_tuple_count, latest_tuple_count, overflow FROM budget WHERE NOT overflow)
 
-SELECT recipient.membership_id,recipient.athlete_user_id,recipient.athlete_name,recipient.starts_on,recipient.ends_on,recipient.session_id FROM eligible_recipients recipient JOIN admitted ON true ORDER BY recipient.athlete_name,recipient.membership_id,recipient.session_id
+SELECT recipient.placement_id,recipient.membership_id,recipient.athlete_user_id,recipient.athlete_name,recipient.starts_on,recipient.ends_on,recipient.session_id FROM eligible_recipients recipient JOIN admitted ON true ORDER BY recipient.athlete_name,recipient.membership_id,recipient.session_id
 `
 
 type PublicationEligibleRecipientsParams struct {
@@ -593,8 +621,9 @@ type PublicationEligibleRecipientsParams struct {
 }
 
 type PublicationEligibleRecipientsRow struct {
-	MembershipID  uuid.UUID   `json:"membership_id"`
-	AthleteUserID *uuid.UUID  `json:"athlete_user_id"`
+	PlacementID   uuid.UUID   `json:"placement_id"`
+	MembershipID  *uuid.UUID  `json:"membership_id"`
+	AthleteUserID uuid.UUID   `json:"athlete_user_id"`
 	AthleteName   string      `json:"athlete_name"`
 	StartsOn      pgtype.Date `json:"starts_on"`
 	EndsOn        pgtype.Date `json:"ends_on"`
@@ -611,6 +640,7 @@ func (q *Queries) PublicationEligibleRecipients(ctx context.Context, arg Publica
 	for rows.Next() {
 		var i PublicationEligibleRecipientsRow
 		if err := rows.Scan(
+			&i.PlacementID,
 			&i.MembershipID,
 			&i.AthleteUserID,
 			&i.AthleteName,
@@ -645,26 +675,29 @@ WITH RECURSIVE actor AS (
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 ),
 candidates AS MATERIALIZED (
- SELECT DISTINCT session.id AS session_id,membership.id AS membership_id,membership.user_id AS subject_id,membership.starts_on,membership.ends_on,
+ SELECT DISTINCT session.id AS session_id,placement.id AS placement_id,membership.id AS membership_id,structural_subject.id AS subject_id,membership.starts_on,membership.ends_on,
  public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
- FROM scoped plan JOIN public.training_group_members group_member ON group_member.group_id=plan.group_id JOIN public.user_memberships membership ON membership.id=group_member.membership_id JOIN public.training_sessions session ON session.plan_id=plan.id
- WHERE (plan.group_programme_id IS NULL OR membership.programme_id=plan.group_programme_id) AND (plan.group_team_id IS NULL OR membership.team_id=plan.group_team_id)
- AND (plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND (plan.team_id IS NULL OR membership.team_id=plan.team_id)
- AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- ORDER BY session.id,membership.id LIMIT 4097
+ FROM scoped plan JOIN public.training_group_placements placement ON placement.group_id=plan.group_id
+ JOIN public.users structural_subject ON structural_subject.id=placement.subject_user_id
+ JOIN public.training_sessions session ON session.plan_id=plan.id
+ LEFT JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,plan.group_id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+ LEFT JOIN public.user_memberships membership ON membership.id=resolved.membership_id
+ AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+ WHERE placement.subject_user_id IS NOT NULL AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+ AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN placement.starts_on AND COALESCE(placement.ends_on,'infinity'::date)
+ ORDER BY session.id,placement.id,membership.id LIMIT 4097
 ), candidate_stats AS MATERIALIZED (SELECT count(*)::bigint AS raw_tuple_count FROM candidates), latest_hashes AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
  FROM header JOIN public.training_prescriptions prescription ON prescription.publication_id=header.latest_publication_id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), latest_stats AS MATERIALIZED(SELECT count(*)::bigint AS latest_tuple_count FROM latest_hashes), input_gate AS MATERIALIZED (
  SELECT header.plan_id FROM header CROSS JOIN candidate_stats CROSS JOIN latest_stats WHERE candidate_stats.raw_tuple_count<=4096 AND latest_stats.latest_tuple_count<=4096
 ),
 eligible_recipients AS (
- SELECT candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
+ SELECT candidate.placement_id,candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
  FROM candidates candidate JOIN input_gate ON true JOIN public.users subject ON subject.id=candidate.subject_id
- WHERE subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ WHERE candidate.membership_id IS NOT NULL AND subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
 ), captured AS (SELECT publication.id FROM public.training_plan_publications publication JOIN scoped ON scoped.id=publication.plan_id WHERE publication.id=$3::uuid), publication_tuples AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256 FROM captured JOIN public.training_prescriptions prescription ON prescription.publication_id=captured.id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256 FROM captured JOIN public.training_prescriptions prescription ON prescription.publication_id=captured.id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), final_counts AS MATERIALIZED(SELECT candidate_stats.raw_tuple_count,(SELECT count(*) FROM publication_tuples)::bigint AS publication_tuple_count FROM candidate_stats), final_gate AS MATERIALIZED(SELECT raw_tuple_count, publication_tuple_count FROM final_counts WHERE raw_tuple_count<=4096 AND publication_tuple_count<=4096)
 
 SELECT header.plan_id,header.group_id,header.source_updated_at,latest.id AS latest_publication_id,latest.revision AS latest_revision,latest.supersedes_id AS latest_supersedes_id,
@@ -672,8 +705,8 @@ SELECT header.plan_id,header.group_id,header.source_updated_at,latest.id AS late
  final_counts.raw_tuple_count,final_counts.publication_tuple_count,COALESCE((final_counts.raw_tuple_count>4096 OR final_counts.publication_tuple_count>4096),false)::boolean AS overflow,
  materialized.recipient_tuples,materialized.publication_tuples
  FROM header CROSS JOIN captured CROSS JOIN final_counts JOIN public.training_plan_publications latest ON latest.id=header.latest_publication_id LEFT JOIN LATERAL (
- SELECT convert_to(COALESCE((SELECT jsonb_agg((pg_catalog.jsonb_build_object('session_id',recipient.session_id,'membership_id',recipient.membership_id,'athlete_user_id',recipient.athlete_user_id)) ORDER BY recipient.session_id,recipient.membership_id) FROM eligible_recipients recipient WHERE final_gate.raw_tuple_count>=0),'[]'::jsonb)::text,'UTF8') AS recipient_tuples,
- convert_to(COALESCE((SELECT jsonb_agg((pg_catalog.jsonb_build_object('session_id',prescription.session_id,'membership_id',prescription.membership_id,'athlete_user_id',prescription.athlete_user_id,'snapshot_sha256',prescription.snapshot_sha256)) ORDER BY prescription.session_id,prescription.membership_id) FROM publication_tuples prescription WHERE final_gate.publication_tuple_count>=0),'[]'::jsonb)::text,'UTF8') AS publication_tuples
+ SELECT convert_to(COALESCE((SELECT jsonb_agg((pg_catalog.jsonb_build_object('session_id',recipient.session_id,'placement_id',recipient.placement_id,'membership_id',recipient.membership_id,'athlete_user_id',recipient.athlete_user_id)) ORDER BY recipient.session_id,recipient.membership_id) FROM eligible_recipients recipient WHERE final_gate.raw_tuple_count>=0),'[]'::jsonb)::text,'UTF8') AS recipient_tuples,
+ convert_to(COALESCE((SELECT jsonb_agg((pg_catalog.jsonb_build_object('session_id',prescription.session_id,'placement_id',prescription.placement_id,'membership_id',prescription.membership_id,'athlete_user_id',prescription.athlete_user_id,'snapshot_sha256',prescription.snapshot_sha256)) ORDER BY prescription.session_id,prescription.membership_id) FROM publication_tuples prescription WHERE final_gate.publication_tuple_count>=0),'[]'::jsonb)::text,'UTF8') AS publication_tuples
  FROM final_gate OFFSET 0) materialized ON true
 `
 
@@ -738,7 +771,7 @@ WITH RECURSIVE actor AS (
  latest.id AS latest_publication_id,COALESCE(latest.revision,0)::integer AS latest_revision,latest.supersedes_id AS latest_supersedes_id,latest.source_updated_at AS latest_source_updated_at
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 )
-SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256 FROM scoped JOIN public.training_plan_publications publication ON publication.plan_id=scoped.id AND publication.id=$1::uuid JOIN public.training_prescriptions prescription ON prescription.publication_id=publication.id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
+SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256 FROM scoped JOIN public.training_plan_publications publication ON publication.plan_id=scoped.id AND publication.id=$1::uuid JOIN public.training_prescriptions prescription ON prescription.publication_id=publication.id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 `
 
 type PublicationLatestHashesParams struct {
@@ -749,6 +782,7 @@ type PublicationLatestHashesParams struct {
 
 type PublicationLatestHashesRow struct {
 	SessionID      uuid.UUID  `json:"session_id"`
+	PlacementID    *uuid.UUID `json:"placement_id"`
 	MembershipID   uuid.UUID  `json:"membership_id"`
 	AthleteUserID  *uuid.UUID `json:"athlete_user_id"`
 	SnapshotSha256 string     `json:"snapshot_sha256"`
@@ -765,6 +799,7 @@ func (q *Queries) PublicationLatestHashes(ctx context.Context, arg PublicationLa
 		var i PublicationLatestHashesRow
 		if err := rows.Scan(
 			&i.SessionID,
+			&i.PlacementID,
 			&i.MembershipID,
 			&i.AthleteUserID,
 			&i.SnapshotSha256,
@@ -852,24 +887,27 @@ WITH RECURSIVE actor AS (
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 ),
 candidates AS MATERIALIZED (
- SELECT DISTINCT session.id AS session_id,membership.id AS membership_id,membership.user_id AS subject_id,membership.starts_on,membership.ends_on,
+ SELECT DISTINCT session.id AS session_id,placement.id AS placement_id,membership.id AS membership_id,structural_subject.id AS subject_id,membership.starts_on,membership.ends_on,
  public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
- FROM scoped plan JOIN public.training_group_members group_member ON group_member.group_id=plan.group_id JOIN public.user_memberships membership ON membership.id=group_member.membership_id JOIN public.training_sessions session ON session.plan_id=plan.id
- WHERE (plan.group_programme_id IS NULL OR membership.programme_id=plan.group_programme_id) AND (plan.group_team_id IS NULL OR membership.team_id=plan.group_team_id)
- AND (plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND (plan.team_id IS NULL OR membership.team_id=plan.team_id)
- AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- ORDER BY session.id,membership.id LIMIT 4097
+ FROM scoped plan JOIN public.training_group_placements placement ON placement.group_id=plan.group_id
+ JOIN public.users structural_subject ON structural_subject.id=placement.subject_user_id
+ JOIN public.training_sessions session ON session.plan_id=plan.id
+ LEFT JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,plan.group_id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+ LEFT JOIN public.user_memberships membership ON membership.id=resolved.membership_id
+ AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+ WHERE placement.subject_user_id IS NOT NULL AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+ AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN placement.starts_on AND COALESCE(placement.ends_on,'infinity'::date)
+ ORDER BY session.id,placement.id,membership.id LIMIT 4097
 ), candidate_stats AS MATERIALIZED (SELECT count(*)::bigint AS raw_tuple_count FROM candidates), latest_hashes AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
  FROM header JOIN public.training_prescriptions prescription ON prescription.publication_id=header.latest_publication_id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), latest_stats AS MATERIALIZED(SELECT count(*)::bigint AS latest_tuple_count FROM latest_hashes), input_gate AS MATERIALIZED (
  SELECT header.plan_id FROM header CROSS JOIN candidate_stats CROSS JOIN latest_stats WHERE candidate_stats.raw_tuple_count<=4096 AND latest_stats.latest_tuple_count<=4096
 ),
 eligible_recipients AS (
- SELECT candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
+ SELECT candidate.placement_id,candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
  FROM candidates candidate JOIN input_gate ON true JOIN public.users subject ON subject.id=candidate.subject_id
- WHERE subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ WHERE candidate.membership_id IS NOT NULL AND subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
 ),
 unordered_overview AS (
 SELECT 0::bigint AS _ord,group_row.id AS group_id, group_row.name AS group_name,
@@ -1003,9 +1041,9 @@ header_record AS MATERIALIZED(SELECT (pg_catalog.jsonb_build_object('plan_id',he
 records AS NOT MATERIALIZED (
 SELECT 0::integer AS category,row_number() OVER(ORDER BY _ord) AS ordinal,(pg_catalog.jsonb_build_object('group_id',record.group_id,'group_name',record.group_name,'programme_name',record.programme_name,'team_name',record.team_name,'member_count',record.member_count,'plan_id',record.plan_id,'plan_title',record.plan_title,'plan_description',record.plan_description,'season_name',record.season_name,'week_start',record.week_start,'planned_load_percentage',record.planned_load_percentage,'session_id',record.session_id,'session_title',record.session_title,'session_description',record.session_description,'starts_at',record.starts_at,'ends_at',record.ends_at,'entry_kind',record.entry_kind,'schedule_precision',record.schedule_precision,'scheduled_on',record.scheduled_on,'day_band',record.day_band,'session_on',record.session_on,'session_status',record.session_status,'segment_id',record.segment_id,'segment_position',record.segment_position,'segment_modality',record.segment_modality,'segment_title',record.segment_title,'segment_location',record.segment_location,'planned_duration_minutes',record.planned_duration_minutes,'planned_start_offset_minutes',record.planned_start_offset_minutes,'transition_duration_minutes',record.transition_duration_minutes,'equipment_notes',record.equipment_notes,'block_id',record.block_id,'block_position',record.block_position,'block_purpose',record.block_purpose,'block_title',record.block_title,'block_instructions',record.block_instructions,'gym_structure',record.gym_structure,'gym_objective',record.gym_objective,'gym_rounds',record.gym_rounds,'round_recovery_seconds',record.round_recovery_seconds) OPERATOR(pg_catalog.||) pg_catalog.jsonb_build_object('water_method',record.water_method,'water_intensity_profile_id',record.water_intensity_profile_id,'water_profile_name',record.water_profile_name,'water_profile_revision',record.water_profile_revision,'water_profile_craft',record.water_profile_craft,'water_target_distance_metres',record.water_target_distance_metres,'water_target_distance_certainty',record.water_target_distance_certainty,'water_step_id',record.water_step_id,'water_parent_step_id',record.water_parent_step_id,'water_step_position',record.water_step_position,'water_step_kind',record.water_step_kind,'water_step_name',record.water_step_name,'water_step_repeats',record.water_step_repeats,'water_step_duration_seconds',record.water_step_duration_seconds,'water_step_duration_certainty',record.water_step_duration_certainty,'water_step_distance_metres',record.water_step_distance_metres,'water_step_distance_certainty',record.water_step_distance_certainty,'water_step_recovery_seconds',record.water_step_recovery_seconds,'water_step_intensity_code',record.water_step_intensity_code,'water_step_cadence_spm',record.water_step_cadence_spm,'water_zone_label',record.water_zone_label,'water_zone_cadence_min',record.water_zone_cadence_min,'water_zone_cadence_max',record.water_zone_cadence_max,'water_zone_meaning',record.water_zone_meaning,'water_step_drill_focus',record.water_step_drill_focus,'water_step_drill_format',record.water_step_drill_format,'water_step_role_notes',record.water_step_role_notes,'water_step_instructions',record.water_step_instructions,'exercise_id',record.exercise_id,'exercise_position',record.exercise_position,'exercise_name',record.exercise_name,'exercise_sets',record.exercise_sets,'exercise_repetitions',record.exercise_repetitions,'exercise_duration_seconds',record.exercise_duration_seconds,'exercise_distance_metres',record.exercise_distance_metres,'exercise_recovery_seconds',record.exercise_recovery_seconds,'resistance_kind',record.resistance_kind,'resistance_value',record.resistance_value,'resistance_text',record.resistance_text,'execution_intent',record.execution_intent) OPERATOR(pg_catalog.||) pg_catalog.jsonb_build_object('tempo',record.tempo,'exercise_notes',record.exercise_notes))::text AS encoded FROM overview record JOIN input_gate ON true
 UNION ALL
-SELECT 1::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'subject_id',record.subject_id,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_on',record.session_on))::text AS encoded FROM candidates record JOIN input_gate ON true
+SELECT 1::integer AS category,row_number() OVER(ORDER BY session_id,placement_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'placement_id',record.placement_id,'membership_id',record.membership_id,'subject_id',record.subject_id,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_on',record.session_on))::text AS encoded FROM candidates record JOIN input_gate ON true
 UNION ALL
-SELECT 2::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'athlete_name',record.athlete_name,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_id',record.session_id))::text AS encoded FROM eligible_recipients record JOIN input_gate ON true
+SELECT 2::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('placement_id',record.placement_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'athlete_name',record.athlete_name,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_id',record.session_id))::text AS encoded FROM eligible_recipients record JOIN input_gate ON true
 UNION ALL
 SELECT 3::integer AS category,row_number() OVER(ORDER BY created_at,variation_id) AS ordinal,(pg_catalog.jsonb_build_object('variation_id',record.variation_id,'plan_id',record.plan_id,'subject_kind',record.subject_kind,'subject_id',record.subject_id,'target_membership_id',record.target_membership_id,'target_group_id',record.target_group_id,'operation',record.operation,'patch',record.patch,'change_summary',record.change_summary,'version',record.version,'created_at',record.created_at))::text AS encoded FROM variation_definitions record JOIN input_gate ON true
 UNION ALL
@@ -1015,7 +1053,7 @@ SELECT 5::integer AS category,row_number() OVER(ORDER BY _ord) AS ordinal,(pg_ca
 UNION ALL
 SELECT 6::integer AS category,row_number() OVER(ORDER BY event_id) AS ordinal,(pg_catalog.jsonb_build_object('event_id',record.event_id,'starts_at',record.starts_at))::text AS encoded FROM referenced_events record JOIN input_gate ON true
 UNION ALL
-SELECT 7::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'snapshot_sha256',record.snapshot_sha256))::text AS encoded FROM latest_hashes record JOIN input_gate ON true
+SELECT 7::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'placement_id',record.placement_id,'snapshot_sha256',record.snapshot_sha256))::text AS encoded FROM latest_hashes record JOIN input_gate ON true
 ),
 record_totals AS (SELECT category,count(*) AS records,COALESCE(sum(octet_length(convert_to(encoded,'UTF8'))::numeric),0) AS bytes FROM records GROUP BY category), budget AS MATERIALIZED (
  SELECT LEAST(33554433::numeric,238::numeric+octet_length(convert_to(header_record.encoded,'UTF8'))+COALESCE((SELECT sum(bytes+GREATEST(records-1,0)) FROM record_totals),0))::bigint AS source_bytes,
@@ -1073,24 +1111,27 @@ WITH RECURSIVE actor AS (
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 ),
 candidates AS MATERIALIZED (
- SELECT DISTINCT session.id AS session_id,membership.id AS membership_id,membership.user_id AS subject_id,membership.starts_on,membership.ends_on,
+ SELECT DISTINCT session.id AS session_id,placement.id AS placement_id,membership.id AS membership_id,structural_subject.id AS subject_id,membership.starts_on,membership.ends_on,
  public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
- FROM scoped plan JOIN public.training_group_members group_member ON group_member.group_id=plan.group_id JOIN public.user_memberships membership ON membership.id=group_member.membership_id JOIN public.training_sessions session ON session.plan_id=plan.id
- WHERE (plan.group_programme_id IS NULL OR membership.programme_id=plan.group_programme_id) AND (plan.group_team_id IS NULL OR membership.team_id=plan.group_team_id)
- AND (plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND (plan.team_id IS NULL OR membership.team_id=plan.team_id)
- AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- ORDER BY session.id,membership.id LIMIT 4097
+ FROM scoped plan JOIN public.training_group_placements placement ON placement.group_id=plan.group_id
+ JOIN public.users structural_subject ON structural_subject.id=placement.subject_user_id
+ JOIN public.training_sessions session ON session.plan_id=plan.id
+ LEFT JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,plan.group_id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+ LEFT JOIN public.user_memberships membership ON membership.id=resolved.membership_id
+ AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+ WHERE placement.subject_user_id IS NOT NULL AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+ AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN placement.starts_on AND COALESCE(placement.ends_on,'infinity'::date)
+ ORDER BY session.id,placement.id,membership.id LIMIT 4097
 ), candidate_stats AS MATERIALIZED (SELECT count(*)::bigint AS raw_tuple_count FROM candidates), latest_hashes AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
  FROM header JOIN public.training_prescriptions prescription ON prescription.publication_id=header.latest_publication_id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), latest_stats AS MATERIALIZED(SELECT count(*)::bigint AS latest_tuple_count FROM latest_hashes), input_gate AS MATERIALIZED (
  SELECT header.plan_id FROM header CROSS JOIN candidate_stats CROSS JOIN latest_stats WHERE candidate_stats.raw_tuple_count<=4096 AND latest_stats.latest_tuple_count<=4096
 ),
 eligible_recipients AS (
- SELECT candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
+ SELECT candidate.placement_id,candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
  FROM candidates candidate JOIN input_gate ON true JOIN public.users subject ON subject.id=candidate.subject_id
- WHERE subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ WHERE candidate.membership_id IS NOT NULL AND subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
 ),
 unordered_overview AS (
 SELECT 0::bigint AS _ord,group_row.id AS group_id, group_row.name AS group_name,
@@ -1224,9 +1265,9 @@ header_record AS MATERIALIZED(SELECT (pg_catalog.jsonb_build_object('plan_id',he
 records AS NOT MATERIALIZED (
 SELECT 0::integer AS category,row_number() OVER(ORDER BY _ord) AS ordinal,(pg_catalog.jsonb_build_object('group_id',record.group_id,'group_name',record.group_name,'programme_name',record.programme_name,'team_name',record.team_name,'member_count',record.member_count,'plan_id',record.plan_id,'plan_title',record.plan_title,'plan_description',record.plan_description,'season_name',record.season_name,'week_start',record.week_start,'planned_load_percentage',record.planned_load_percentage,'session_id',record.session_id,'session_title',record.session_title,'session_description',record.session_description,'starts_at',record.starts_at,'ends_at',record.ends_at,'entry_kind',record.entry_kind,'schedule_precision',record.schedule_precision,'scheduled_on',record.scheduled_on,'day_band',record.day_band,'session_on',record.session_on,'session_status',record.session_status,'segment_id',record.segment_id,'segment_position',record.segment_position,'segment_modality',record.segment_modality,'segment_title',record.segment_title,'segment_location',record.segment_location,'planned_duration_minutes',record.planned_duration_minutes,'planned_start_offset_minutes',record.planned_start_offset_minutes,'transition_duration_minutes',record.transition_duration_minutes,'equipment_notes',record.equipment_notes,'block_id',record.block_id,'block_position',record.block_position,'block_purpose',record.block_purpose,'block_title',record.block_title,'block_instructions',record.block_instructions,'gym_structure',record.gym_structure,'gym_objective',record.gym_objective,'gym_rounds',record.gym_rounds,'round_recovery_seconds',record.round_recovery_seconds) OPERATOR(pg_catalog.||) pg_catalog.jsonb_build_object('water_method',record.water_method,'water_intensity_profile_id',record.water_intensity_profile_id,'water_profile_name',record.water_profile_name,'water_profile_revision',record.water_profile_revision,'water_profile_craft',record.water_profile_craft,'water_target_distance_metres',record.water_target_distance_metres,'water_target_distance_certainty',record.water_target_distance_certainty,'water_step_id',record.water_step_id,'water_parent_step_id',record.water_parent_step_id,'water_step_position',record.water_step_position,'water_step_kind',record.water_step_kind,'water_step_name',record.water_step_name,'water_step_repeats',record.water_step_repeats,'water_step_duration_seconds',record.water_step_duration_seconds,'water_step_duration_certainty',record.water_step_duration_certainty,'water_step_distance_metres',record.water_step_distance_metres,'water_step_distance_certainty',record.water_step_distance_certainty,'water_step_recovery_seconds',record.water_step_recovery_seconds,'water_step_intensity_code',record.water_step_intensity_code,'water_step_cadence_spm',record.water_step_cadence_spm,'water_zone_label',record.water_zone_label,'water_zone_cadence_min',record.water_zone_cadence_min,'water_zone_cadence_max',record.water_zone_cadence_max,'water_zone_meaning',record.water_zone_meaning,'water_step_drill_focus',record.water_step_drill_focus,'water_step_drill_format',record.water_step_drill_format,'water_step_role_notes',record.water_step_role_notes,'water_step_instructions',record.water_step_instructions,'exercise_id',record.exercise_id,'exercise_position',record.exercise_position,'exercise_name',record.exercise_name,'exercise_sets',record.exercise_sets,'exercise_repetitions',record.exercise_repetitions,'exercise_duration_seconds',record.exercise_duration_seconds,'exercise_distance_metres',record.exercise_distance_metres,'exercise_recovery_seconds',record.exercise_recovery_seconds,'resistance_kind',record.resistance_kind,'resistance_value',record.resistance_value,'resistance_text',record.resistance_text,'execution_intent',record.execution_intent) OPERATOR(pg_catalog.||) pg_catalog.jsonb_build_object('tempo',record.tempo,'exercise_notes',record.exercise_notes))::text AS encoded FROM overview record JOIN input_gate ON true
 UNION ALL
-SELECT 1::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'subject_id',record.subject_id,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_on',record.session_on))::text AS encoded FROM candidates record JOIN input_gate ON true
+SELECT 1::integer AS category,row_number() OVER(ORDER BY session_id,placement_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'placement_id',record.placement_id,'membership_id',record.membership_id,'subject_id',record.subject_id,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_on',record.session_on))::text AS encoded FROM candidates record JOIN input_gate ON true
 UNION ALL
-SELECT 2::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'athlete_name',record.athlete_name,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_id',record.session_id))::text AS encoded FROM eligible_recipients record JOIN input_gate ON true
+SELECT 2::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('placement_id',record.placement_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'athlete_name',record.athlete_name,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_id',record.session_id))::text AS encoded FROM eligible_recipients record JOIN input_gate ON true
 UNION ALL
 SELECT 3::integer AS category,row_number() OVER(ORDER BY created_at,variation_id) AS ordinal,(pg_catalog.jsonb_build_object('variation_id',record.variation_id,'plan_id',record.plan_id,'subject_kind',record.subject_kind,'subject_id',record.subject_id,'target_membership_id',record.target_membership_id,'target_group_id',record.target_group_id,'operation',record.operation,'patch',record.patch,'change_summary',record.change_summary,'version',record.version,'created_at',record.created_at))::text AS encoded FROM variation_definitions record JOIN input_gate ON true
 UNION ALL
@@ -1236,7 +1277,7 @@ SELECT 5::integer AS category,row_number() OVER(ORDER BY _ord) AS ordinal,(pg_ca
 UNION ALL
 SELECT 6::integer AS category,row_number() OVER(ORDER BY event_id) AS ordinal,(pg_catalog.jsonb_build_object('event_id',record.event_id,'starts_at',record.starts_at))::text AS encoded FROM referenced_events record JOIN input_gate ON true
 UNION ALL
-SELECT 7::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'snapshot_sha256',record.snapshot_sha256))::text AS encoded FROM latest_hashes record JOIN input_gate ON true
+SELECT 7::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'placement_id',record.placement_id,'snapshot_sha256',record.snapshot_sha256))::text AS encoded FROM latest_hashes record JOIN input_gate ON true
 ),
 record_totals AS (SELECT category,count(*) AS records,COALESCE(sum(octet_length(convert_to(encoded,'UTF8'))::numeric),0) AS bytes FROM records GROUP BY category), budget AS MATERIALIZED (
  SELECT LEAST(33554433::numeric,238::numeric+octet_length(convert_to(header_record.encoded,'UTF8'))+COALESCE((SELECT sum(bytes+GREATEST(records-1,0)) FROM record_totals),0))::bigint AS source_bytes,
@@ -1289,21 +1330,24 @@ WITH RECURSIVE actor AS (
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 ),
 candidates AS MATERIALIZED (
- SELECT DISTINCT session.id AS session_id,membership.id AS membership_id,membership.user_id AS subject_id,membership.starts_on,membership.ends_on,
+ SELECT DISTINCT session.id AS session_id,placement.id AS placement_id,membership.id AS membership_id,structural_subject.id AS subject_id,membership.starts_on,membership.ends_on,
  public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
- FROM scoped plan JOIN public.training_group_members group_member ON group_member.group_id=plan.group_id JOIN public.user_memberships membership ON membership.id=group_member.membership_id JOIN public.training_sessions session ON session.plan_id=plan.id
- WHERE (plan.group_programme_id IS NULL OR membership.programme_id=plan.group_programme_id) AND (plan.group_team_id IS NULL OR membership.team_id=plan.group_team_id)
- AND (plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND (plan.team_id IS NULL OR membership.team_id=plan.team_id)
- AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- ORDER BY session.id,membership.id LIMIT 4097
+ FROM scoped plan JOIN public.training_group_placements placement ON placement.group_id=plan.group_id
+ JOIN public.users structural_subject ON structural_subject.id=placement.subject_user_id
+ JOIN public.training_sessions session ON session.plan_id=plan.id
+ LEFT JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,plan.group_id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+ LEFT JOIN public.user_memberships membership ON membership.id=resolved.membership_id
+ AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+ WHERE placement.subject_user_id IS NOT NULL AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+ AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN placement.starts_on AND COALESCE(placement.ends_on,'infinity'::date)
+ ORDER BY session.id,placement.id,membership.id LIMIT 4097
 ), candidate_stats AS MATERIALIZED (SELECT count(*)::bigint AS raw_tuple_count FROM candidates), latest_hashes AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
  FROM header JOIN public.training_prescriptions prescription ON prescription.publication_id=header.latest_publication_id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), latest_stats AS MATERIALIZED(SELECT count(*)::bigint AS latest_tuple_count FROM latest_hashes), input_gate AS MATERIALIZED (
  SELECT header.plan_id FROM header CROSS JOIN candidate_stats CROSS JOIN latest_stats WHERE candidate_stats.raw_tuple_count<=4096 AND latest_stats.latest_tuple_count<=4096
 )
-SELECT session_id,membership_id,subject_id,starts_on,ends_on,session_on FROM candidates ORDER BY session_id,membership_id
+SELECT session_id,placement_id,membership_id,subject_id,starts_on,ends_on,session_on FROM candidates ORDER BY session_id,membership_id
 `
 
 type PublicationStructuralCandidatesParams struct {
@@ -1313,8 +1357,9 @@ type PublicationStructuralCandidatesParams struct {
 
 type PublicationStructuralCandidatesRow struct {
 	SessionID    uuid.UUID   `json:"session_id"`
-	MembershipID uuid.UUID   `json:"membership_id"`
-	SubjectID    *uuid.UUID  `json:"subject_id"`
+	PlacementID  uuid.UUID   `json:"placement_id"`
+	MembershipID *uuid.UUID  `json:"membership_id"`
+	SubjectID    uuid.UUID   `json:"subject_id"`
 	StartsOn     pgtype.Date `json:"starts_on"`
 	EndsOn       pgtype.Date `json:"ends_on"`
 	SessionOn    pgtype.Date `json:"session_on"`
@@ -1331,6 +1376,7 @@ func (q *Queries) PublicationStructuralCandidates(ctx context.Context, arg Publi
 		var i PublicationStructuralCandidatesRow
 		if err := rows.Scan(
 			&i.SessionID,
+			&i.PlacementID,
 			&i.MembershipID,
 			&i.SubjectID,
 			&i.StartsOn,
@@ -1364,24 +1410,27 @@ WITH RECURSIVE actor AS (
  FROM scoped plan LEFT JOIN public.training_plan_publications latest ON latest.id=(SELECT publication.id FROM public.training_plan_publications publication WHERE publication.plan_id=plan.id ORDER BY publication.revision DESC LIMIT 1)
 ),
 candidates AS MATERIALIZED (
- SELECT DISTINCT session.id AS session_id,membership.id AS membership_id,membership.user_id AS subject_id,membership.starts_on,membership.ends_on,
+ SELECT DISTINCT session.id AS session_id,placement.id AS placement_id,membership.id AS membership_id,structural_subject.id AS subject_id,membership.starts_on,membership.ends_on,
  public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
- FROM scoped plan JOIN public.training_group_members group_member ON group_member.group_id=plan.group_id JOIN public.user_memberships membership ON membership.id=group_member.membership_id JOIN public.training_sessions session ON session.plan_id=plan.id
- WHERE (plan.group_programme_id IS NULL OR membership.programme_id=plan.group_programme_id) AND (plan.group_team_id IS NULL OR membership.team_id=plan.group_team_id)
- AND (plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND (plan.team_id IS NULL OR membership.team_id=plan.team_id)
- AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on,'infinity'::date)
- ORDER BY session.id,membership.id LIMIT 4097
+ FROM scoped plan JOIN public.training_group_placements placement ON placement.group_id=plan.group_id
+ JOIN public.users structural_subject ON structural_subject.id=placement.subject_user_id
+ JOIN public.training_sessions session ON session.plan_id=plan.id
+ LEFT JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,plan.group_id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+ LEFT JOIN public.user_memberships membership ON membership.id=resolved.membership_id
+ AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+ WHERE placement.subject_user_id IS NOT NULL AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+ AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN placement.starts_on AND COALESCE(placement.ends_on,'infinity'::date)
+ ORDER BY session.id,placement.id,membership.id LIMIT 4097
 ), candidate_stats AS MATERIALIZED (SELECT count(*)::bigint AS raw_tuple_count FROM candidates), latest_hashes AS MATERIALIZED (
- SELECT prescription.session_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
+ SELECT prescription.session_id,prescription.placement_id,prescription.membership_id,historical_subject.id AS athlete_user_id,prescription.snapshot_sha256
  FROM header JOIN public.training_prescriptions prescription ON prescription.publication_id=header.latest_publication_id LEFT JOIN public.users historical_subject ON historical_subject.id=prescription.athlete_user_id ORDER BY prescription.session_id,prescription.membership_id LIMIT 4097
 ), latest_stats AS MATERIALIZED(SELECT count(*)::bigint AS latest_tuple_count FROM latest_hashes), input_gate AS MATERIALIZED (
  SELECT header.plan_id FROM header CROSS JOIN candidate_stats CROSS JOIN latest_stats WHERE candidate_stats.raw_tuple_count<=4096 AND latest_stats.latest_tuple_count<=4096
 ),
 eligible_recipients AS (
- SELECT candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
+ SELECT candidate.placement_id,candidate.membership_id,candidate.subject_id AS athlete_user_id,subject.name AS athlete_name,candidate.starts_on,candidate.ends_on,candidate.session_id
  FROM candidates candidate JOIN input_gate ON true JOIN public.users subject ON subject.id=candidate.subject_id
- WHERE subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ WHERE candidate.membership_id IS NOT NULL AND subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
 ),
 unordered_overview AS (
 SELECT 0::bigint AS _ord,group_row.id AS group_id, group_row.name AS group_name,
@@ -1515,9 +1564,9 @@ header_record AS MATERIALIZED(SELECT (pg_catalog.jsonb_build_object('plan_id',he
 records AS NOT MATERIALIZED (
 SELECT 0::integer AS category,row_number() OVER(ORDER BY _ord) AS ordinal,(pg_catalog.jsonb_build_object('group_id',record.group_id,'group_name',record.group_name,'programme_name',record.programme_name,'team_name',record.team_name,'member_count',record.member_count,'plan_id',record.plan_id,'plan_title',record.plan_title,'plan_description',record.plan_description,'season_name',record.season_name,'week_start',record.week_start,'planned_load_percentage',record.planned_load_percentage,'session_id',record.session_id,'session_title',record.session_title,'session_description',record.session_description,'starts_at',record.starts_at,'ends_at',record.ends_at,'entry_kind',record.entry_kind,'schedule_precision',record.schedule_precision,'scheduled_on',record.scheduled_on,'day_band',record.day_band,'session_on',record.session_on,'session_status',record.session_status,'segment_id',record.segment_id,'segment_position',record.segment_position,'segment_modality',record.segment_modality,'segment_title',record.segment_title,'segment_location',record.segment_location,'planned_duration_minutes',record.planned_duration_minutes,'planned_start_offset_minutes',record.planned_start_offset_minutes,'transition_duration_minutes',record.transition_duration_minutes,'equipment_notes',record.equipment_notes,'block_id',record.block_id,'block_position',record.block_position,'block_purpose',record.block_purpose,'block_title',record.block_title,'block_instructions',record.block_instructions,'gym_structure',record.gym_structure,'gym_objective',record.gym_objective,'gym_rounds',record.gym_rounds,'round_recovery_seconds',record.round_recovery_seconds) OPERATOR(pg_catalog.||) pg_catalog.jsonb_build_object('water_method',record.water_method,'water_intensity_profile_id',record.water_intensity_profile_id,'water_profile_name',record.water_profile_name,'water_profile_revision',record.water_profile_revision,'water_profile_craft',record.water_profile_craft,'water_target_distance_metres',record.water_target_distance_metres,'water_target_distance_certainty',record.water_target_distance_certainty,'water_step_id',record.water_step_id,'water_parent_step_id',record.water_parent_step_id,'water_step_position',record.water_step_position,'water_step_kind',record.water_step_kind,'water_step_name',record.water_step_name,'water_step_repeats',record.water_step_repeats,'water_step_duration_seconds',record.water_step_duration_seconds,'water_step_duration_certainty',record.water_step_duration_certainty,'water_step_distance_metres',record.water_step_distance_metres,'water_step_distance_certainty',record.water_step_distance_certainty,'water_step_recovery_seconds',record.water_step_recovery_seconds,'water_step_intensity_code',record.water_step_intensity_code,'water_step_cadence_spm',record.water_step_cadence_spm,'water_zone_label',record.water_zone_label,'water_zone_cadence_min',record.water_zone_cadence_min,'water_zone_cadence_max',record.water_zone_cadence_max,'water_zone_meaning',record.water_zone_meaning,'water_step_drill_focus',record.water_step_drill_focus,'water_step_drill_format',record.water_step_drill_format,'water_step_role_notes',record.water_step_role_notes,'water_step_instructions',record.water_step_instructions,'exercise_id',record.exercise_id,'exercise_position',record.exercise_position,'exercise_name',record.exercise_name,'exercise_sets',record.exercise_sets,'exercise_repetitions',record.exercise_repetitions,'exercise_duration_seconds',record.exercise_duration_seconds,'exercise_distance_metres',record.exercise_distance_metres,'exercise_recovery_seconds',record.exercise_recovery_seconds,'resistance_kind',record.resistance_kind,'resistance_value',record.resistance_value,'resistance_text',record.resistance_text,'execution_intent',record.execution_intent) OPERATOR(pg_catalog.||) pg_catalog.jsonb_build_object('tempo',record.tempo,'exercise_notes',record.exercise_notes))::text AS encoded FROM overview record JOIN input_gate ON true
 UNION ALL
-SELECT 1::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'subject_id',record.subject_id,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_on',record.session_on))::text AS encoded FROM candidates record JOIN input_gate ON true
+SELECT 1::integer AS category,row_number() OVER(ORDER BY session_id,placement_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'placement_id',record.placement_id,'membership_id',record.membership_id,'subject_id',record.subject_id,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_on',record.session_on))::text AS encoded FROM candidates record JOIN input_gate ON true
 UNION ALL
-SELECT 2::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'athlete_name',record.athlete_name,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_id',record.session_id))::text AS encoded FROM eligible_recipients record JOIN input_gate ON true
+SELECT 2::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('placement_id',record.placement_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'athlete_name',record.athlete_name,'starts_on',record.starts_on,'ends_on',record.ends_on,'session_id',record.session_id))::text AS encoded FROM eligible_recipients record JOIN input_gate ON true
 UNION ALL
 SELECT 3::integer AS category,row_number() OVER(ORDER BY created_at,variation_id) AS ordinal,(pg_catalog.jsonb_build_object('variation_id',record.variation_id,'plan_id',record.plan_id,'subject_kind',record.subject_kind,'subject_id',record.subject_id,'target_membership_id',record.target_membership_id,'target_group_id',record.target_group_id,'operation',record.operation,'patch',record.patch,'change_summary',record.change_summary,'version',record.version,'created_at',record.created_at))::text AS encoded FROM variation_definitions record JOIN input_gate ON true
 UNION ALL
@@ -1527,7 +1576,7 @@ SELECT 5::integer AS category,row_number() OVER(ORDER BY _ord) AS ordinal,(pg_ca
 UNION ALL
 SELECT 6::integer AS category,row_number() OVER(ORDER BY event_id) AS ordinal,(pg_catalog.jsonb_build_object('event_id',record.event_id,'starts_at',record.starts_at))::text AS encoded FROM referenced_events record JOIN input_gate ON true
 UNION ALL
-SELECT 7::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'snapshot_sha256',record.snapshot_sha256))::text AS encoded FROM latest_hashes record JOIN input_gate ON true
+SELECT 7::integer AS category,row_number() OVER(ORDER BY session_id,membership_id) AS ordinal,(pg_catalog.jsonb_build_object('session_id',record.session_id,'membership_id',record.membership_id,'athlete_user_id',record.athlete_user_id,'placement_id',record.placement_id,'snapshot_sha256',record.snapshot_sha256))::text AS encoded FROM latest_hashes record JOIN input_gate ON true
 ),
 record_totals AS (SELECT category,count(*) AS records,COALESCE(sum(octet_length(convert_to(encoded,'UTF8'))::numeric),0) AS bytes FROM records GROUP BY category), budget AS MATERIALIZED (
  SELECT LEAST(33554433::numeric,238::numeric+octet_length(convert_to(header_record.encoded,'UTF8'))+COALESCE((SELECT sum(bytes+GREATEST(records-1,0)) FROM record_totals),0))::bigint AS source_bytes,
