@@ -16,14 +16,13 @@ for the new features. Use new disposable local fixtures and proportionate real
 tests. Authentication, authorization, privacy and enforced protections remain
 required.
 
-Recipient publication review, full structured/mixed workout creation, and
-identity-preserving editing/cancellation are implemented and locally verified.
-The next bounded increment is contextual copying and routine reuse through the
-existing models. It needs scoped queries, authenticated handler/UI integration,
-review/replay and lifecycle checks, and proportionate real PostgreSQL/browser
-proof on newly owned disposable fixtures. No new schema definition is currently
-required; retain the implemented fresh-schema integrity constraints rather than
-adding existing-record conversion or upgrade rehearsals.
+Recipient publication review, structured/mixed workout creation, editing,
+contextual copying/routine reuse and dated placement/return/access integration
+are locally verified. See `../dated-training-placements-verification.md` for the
+placement evidence and its limits. Necessary fresh schema, generated queries,
+authenticated integration and proportionate PostgreSQL/browser checks implement
+these features; conversion or upgrade rehearsal of existing records is outside
+this delivery scope.
 Saving a draft does not publish it. Existing-record conversion, backfill and
 legacy upgrade rehearsals remain outside delivery gates; their optional work
 stays saved in isolated checkouts and frozen handoffs.
@@ -49,7 +48,8 @@ decision identifying its exact target.
 
 The dated-move implementation must include the return in the reviewed timeline,
 preserve one effective placement, and validate current eligibility and conflicts.
-The temporary-return workflow is not implemented by this decision record.
+This decision record supplies policy authority; implementation verification is
+recorded separately in `../dated-training-placements-verification.md`.
 
 ## Season dates
 
@@ -73,11 +73,13 @@ legacy upgrade controllers and upgrade rehearsals are dropped from required
 The current #401 draft copy/routine-reuse increment requires no additional DDL.
 Its scoped queries, native coach UI and authenticated integration are locally
 verified, including the combined twelve-case browser run. Mixed-schedule review/publication and the native copy → edit → publish path
-are now locally verified too. Dated placement/return/access integration is next;
-this does not establish full #391 acceptance or release.
-Later dated placements still need fresh-schema placement/return/access-withdrawal
-definitions, generated queries and all affected read/publication integration.
-Those are feature requirements, not a request to convert existing records.
+are now locally verified too. Dated placement/return/access integration is also
+locally verified, including proper-role PostgreSQL and native browser journeys;
+see `../dated-training-placements-verification.md`. This does not establish full
+#391 acceptance or release. Its fresh-schema definitions, generated queries and
+affected read/publication integration are feature requirements, not conversion
+of existing records. Craft guidance and full real-plan/manual/coach/natural-clock
+acceptance remain outstanding.
 Temporary placements return to the previous group; exact season dates remain
 unknown and configurable. No destructive database operation is needed or
 authorized for this local increment. GitHub and release actions remain separate.
