@@ -16,12 +16,16 @@ for the new features. Use new disposable local fixtures and proportionate real
 tests. Authentication, authorization, privacy and enforced protections remain
 required.
 
-The next bounded increment is the coach's group/week publication review:
-preview current authorised recipients, explicitly confirm, reject stale reviews,
-and preserve prior publications and outcomes. Complete its fresh authenticated
-application/CSRF integration and focused denial checks before handoff. Existing
-legacy-upgrade, receipt-lineage and old-writer transition rehearsals do not gate
-that increment.
+The recipient publication-review increment is implemented and locally verified;
+its legacy-upgrade, receipt-lineage and old-writer transition rehearsals are not
+delivery gates. The next bounded increment is **water workout creation**: a coach
+selects a group/week/day, supplies an actual start and optional explicit end,
+adds ordered own-word phases, previews the instructions and explicitly saves a
+draft. Saving does not publish. Necessary work is the fresh schema's nullable
+end-time definitions and retained constraints, scoped generated queries,
+authenticated handler/UI integration and focused real PostgreSQL/browser checks.
+No existing-record conversion, backfill or legacy upgrade rehearsal is required.
+Existing optional work remains saved in isolated checkouts and frozen handoffs.
 
 This correction does **not** authorise deleting, resetting or wiping any existing
 or production database, discarding records, removing backups or performing live
