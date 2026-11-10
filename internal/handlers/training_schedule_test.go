@@ -238,3 +238,13 @@ func TestStoredScheduleRejectsInfiniteFactsBeforeFormatting(t *testing.T) {
 		t.Fatalf("infinite date acquired a civil schedule: %+v, %v", out, err)
 	}
 }
+
+func TestTrainingScheduleOvernightIntervalDisplaysBothCivilDates(t *testing.T) {
+	start := time.Date(2026, time.November, 13, 23, 45, 0, 0, time.UTC)
+	end := start.Add(30 * time.Minute)
+	s := TrainingSessionSchedule{Precision: TrainingScheduleInterval, Date: "2026-11-13", StartsAt: &start, EndsAt: &end}
+	v := trainingScheduleView(s, lisbonLocation())
+	if v.Unavailable || v.Label != "2026-11-13 23:45–2026-11-14 00:15" {
+		t.Fatalf("overnight schedule omitted a civil date: %+v", v)
+	}
+}

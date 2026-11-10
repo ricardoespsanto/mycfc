@@ -410,3 +410,29 @@ func TestIndependentReuseRetainsExplicitDayBandWithoutAliasing(t *testing.T) {
 		t.Fatalf("copy altered the selected band or invented an exact time: %+v", out.Graph.Schedule)
 	}
 }
+
+func TestIndependentReuseCopiesNativeModalityWithoutAliasing(t *testing.T) {
+	item := reuseExample(t).Source.Items[0]
+	modality := uuid.New()
+	item.Raw = &focusedEditRaw{Session: dbgen.GetFocusedWorkoutSessionRow{ModalityID: &modality}}
+	out, err := independentReuseGraph(item, item.Graph.Context, item.Graph.Schedule, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := modality
+	modality = uuid.New()
+	if !out.NativeNullDate || out.ModalityID == nil || *out.ModalityID != want {
+		t.Fatalf("reuse lost the legacy source date or modality: %+v", out)
+	}
+}
+
+func TestIndependentReuseRefusesOversizedGraphAndInvalidSchedule(t *testing.T) {
+	item := reuseExample(t).Source.Items[0]
+	if _, err := independentReuseGraph(item, item.Graph.Context, TrainingSessionSchedule{}, nil); !errors.Is(err, ErrTrainingScheduleInvalid) {
+		t.Fatalf("invalid destination schedule returned %v", err)
+	}
+	item.Graph.Title = strings.Repeat("A", focusedWorkoutMaxRequestBytes+1)
+	if _, err := independentReuseGraph(item, item.Graph.Context, item.Graph.Schedule, nil); !errors.Is(err, errFocusedWorkoutLimit) {
+		t.Fatalf("oversized source graph returned %v", err)
+	}
+}

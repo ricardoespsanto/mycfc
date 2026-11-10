@@ -371,3 +371,36 @@ func TestFocusedGraphWholeTaskCountsIncludeRemovals(t *testing.T) {
 		t.Fatal("rest silently dropped actual activity content", e)
 	}
 }
+
+func TestStoredWaterTotalsDoNotReportPartialNumbersForMalformedGraphs(t *testing.T) {
+	valid := pages.StructuredWaterStep{ID: "valid", Kind: "EFFORT", DurationSeconds: 60, DistanceMetres: 250}
+	for _, tc := range []struct {
+		name  string
+		steps []pages.StructuredWaterStep
+	}{
+		{"parent is an effort", []pages.StructuredWaterStep{{ID: "child", ParentID: valid.ID, Kind: "EFFORT"}}},
+		{"repeat group is empty", []pages.StructuredWaterStep{{ID: "empty", Kind: "REPEAT_GROUP", Repeats: 2}}},
+		{"effort declares repeats", []pages.StructuredWaterStep{{ID: "repeated", Kind: "EFFORT", Repeats: 2}}},
+		{"unknown kind", []pages.StructuredWaterStep{{ID: "unknown", Kind: "UNRECOGNIZED"}}},
+		{"cycle disconnected from root", []pages.StructuredWaterStep{
+			{ID: "a", ParentID: "b", Kind: "REPEAT_GROUP", Repeats: 2},
+			{ID: "b", ParentID: "a", Kind: "REPEAT_GROUP", Repeats: 2},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			steps := append([]pages.StructuredWaterStep{valid}, tc.steps...)
+			if totals, err := calculateWaterTotalsChecked(steps); totals != nil || !errors.Is(err, errFocusedArithmetic) {
+				t.Fatalf("malformed graph returned totals %v and error %v", totals, err)
+			}
+			totals := calculateWaterTotals(steps)
+			if len(totals) != 3 {
+				t.Fatalf("expected the three standard totals, got %v", totals)
+			}
+			for _, total := range totals {
+				if total.Value != "Desconhecido" {
+					t.Fatalf("malformed graph displayed a numeric total: %+v", total)
+				}
+			}
+		})
+	}
+}
