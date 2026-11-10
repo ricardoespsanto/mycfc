@@ -1277,27 +1277,27 @@ templ structuredWeekFormBody(page StructuredTrainingPage) {
 <p><a class="action action--secondary" href={ templ.SafeURL(page.SeasonSetupURL) }>Configurar épocas</a></p>
 }
             }
-			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.WeekForm.Errors), []components.FieldErrorRef{{Key: "group_id", Field: "structured-week-group"}, {Key: "title", Field: "structured-week-name"}, {Key: "week_start", Field: "structured-week-start"}}))
+			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.WeekForm.Errors), []components.FieldErrorRef{{Key: "group_id", Field: "structured-week-group"}, {Key: "title", Field: "structured-week-name"}, {Key: "week_start", Field: "structured-week-start"}, {Key: "planned_load_percentage", Field: "structured-week-load"}, {Key: "description", Field: "structured-week-description"}}))
 			<form class="form-layout" method="post" action="/admin/treinos/estruturados/semanas" data-task-form>
 				@page.CSRFField
 				<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 				@components.RequiredNote()
 				@components.FieldLabel("structured-week-group", "Grupo", true)
-				<select id="structured-week-group" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["group_id"] != "") } aria-describedby="group_id-error" name="group_id" required>
+				<select id="structured-week-group" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["group_id"] != "") } aria-describedby="structured-week-group-error" name="group_id" required>
 					<option value="">Selecione</option>
 					for _, choice := range page.Groups {
 						<option value={ choice.ID } selected?={ choice.ID == page.WeekForm.GroupID }>{ choice.Name }</option>
 					}
-				</select>@components.FieldErrorMessage("group_id", page.WeekForm.Errors["group_id"])
+				</select>@components.FieldErrorMessage("structured-week-group", page.WeekForm.Errors["group_id"])
 				@components.FieldLabel("structured-week-name", "Título", true)
-				<input id="structured-week-name" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["title"] != "") } aria-describedby="title-error" name="title" value={ page.WeekForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.WeekForm.Errors["title"])
+				<input id="structured-week-name" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["title"] != "") } aria-describedby="structured-week-name-error" name="title" value={ page.WeekForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("structured-week-name", page.WeekForm.Errors["title"])
 				@components.FieldLabel("structured-week-start", "Segunda-feira da semana", true)
-				<input id="structured-week-start" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["week_start"] != "") } aria-describedby="week_start-error" name="week_start" type="date" value={ page.WeekForm.WeekStart } required/>@components.FieldErrorMessage("week_start", page.WeekForm.Errors["week_start"])
+				<input id="structured-week-start" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["week_start"] != "") } aria-describedby="structured-week-start-error" name="week_start" type="date" value={ page.WeekForm.WeekStart } required/>@components.FieldErrorMessage("structured-week-start", page.WeekForm.Errors["week_start"])
 				@components.FieldLabel("structured-week-load", "Carga planeada (%)", false)
-				<input id="structured-week-load" name="planned_load_percentage" type="number" min="0" max="100" value={ page.WeekForm.PlannedLoad } aria-describedby="structured-week-load-help"/>@components.FieldErrorMessage("planned_load_percentage", page.WeekForm.Errors["planned_load_percentage"])
+				<input id="structured-week-load" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["planned_load_percentage"] != "") } name="planned_load_percentage" type="number" min="0" max="100" value={ page.WeekForm.PlannedLoad } aria-describedby="structured-week-load-help structured-week-load-error"/>@components.FieldErrorMessage("structured-week-load", page.WeekForm.Errors["planned_load_percentage"])
 				<small id="structured-week-load-help">Distribuição de carga definida pelo treinador. Não é %1RM, esforço percebido nem uma recomendação automática.</small>
 				@components.FieldLabel("structured-week-description", "Notas (opcional)", false)
-				<textarea id="structured-week-description" name="description" maxlength="4000">{ page.WeekForm.Description }</textarea>
+				<textarea id="structured-week-description" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["description"] != "") } aria-describedby="structured-week-description-error" name="description" maxlength="4000">{ page.WeekForm.Description }</textarea>@components.FieldErrorMessage("structured-week-description", page.WeekForm.Errors["description"])
 				@components.FormActions(structuredPlannerReturnURL(page)) {
 					<button type="submit">Criar semana</button>
 				}
@@ -1323,34 +1323,34 @@ templ structuredSessionFormBody(page StructuredTrainingPage) {
 if page.Workspace.Enabled && page.SelectedDay != "" {
 <p>Dia selecionado: { page.SelectedDay }. Introduza as horas de início e fim; não são preenchidas automaticamente.</p>
 }
-			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "structured-session-week"}, {Key: "title", Field: "structured-session-name"}, {Key: "starts_at", Field: "structured-session-start"}, {Key: "ends_at", Field: "structured-session-end"}, {Key: "entry_kind", Field: "structured-session-kind"}}))
+			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "structured-session-week"}, {Key: "title", Field: "structured-session-name"}, {Key: "starts_at", Field: "structured-session-start"}, {Key: "ends_at", Field: "structured-session-end"}, {Key: "entry_kind", Field: "structured-session-kind"}, {Key: "description", Field: "structured-session-description"}}))
 			<form class="form-layout" method="post" action="/admin/treinos/estruturados/sessoes" data-task-form>
 				@page.CSRFField
 				<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 				@components.RequiredNote()
 				@components.FieldLabel("structured-session-week", "Semana", true)
-				<select id="structured-session-week" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["plan_id"] != "") } aria-describedby="plan_id-error" name="plan_id" required>
+				<select id="structured-session-week" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["plan_id"] != "") } aria-describedby="structured-session-week-error" name="plan_id" required>
 					<option value="">Selecione</option>
 					for _, choice := range page.Weeks {
       if !page.Workspace.Enabled || choice.ID == page.SelectedWeekID {
        <option value={ choice.ID } selected?={ choice.ID == page.SessionForm.PlanID }>{ choice.Name }</option>
       }
      }
-				</select>@components.FieldErrorMessage("plan_id", page.SessionForm.Errors["plan_id"])
+				</select>@components.FieldErrorMessage("structured-session-week", page.SessionForm.Errors["plan_id"])
 				@components.FieldLabel("structured-session-name", "Título", true)
-				<input id="structured-session-name" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["title"] != "") } aria-describedby="title-error" name="title" value={ page.SessionForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.SessionForm.Errors["title"])
+				<input id="structured-session-name" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["title"] != "") } aria-describedby="structured-session-name-error" name="title" value={ page.SessionForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("structured-session-name", page.SessionForm.Errors["title"])
 				@components.FieldLabel("structured-session-kind", "Tipo", true)
-				<select id="structured-session-kind" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["entry_kind"] != "") } aria-describedby="entry_kind-error" name="entry_kind" required>
+				<select id="structured-session-kind" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["entry_kind"] != "") } aria-describedby="structured-session-kind-error" name="entry_kind" required>
 					for _, value := range []string{"TRAINING", "REST", "COMPETITION", "LOGISTICS"} {
 						<option value={ value } selected?={ value == page.SessionForm.EntryKind }>{ structuredEntryKindLabel(value) }</option>
 					}
-				</select>@components.FieldErrorMessage("entry_kind", page.SessionForm.Errors["entry_kind"])
+				</select>@components.FieldErrorMessage("structured-session-kind", page.SessionForm.Errors["entry_kind"])
 				@components.FieldLabel("structured-session-start", "Início", true)
-				<input id="structured-session-start" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["starts_at"] != "") } aria-describedby="starts_at-error" name="starts_at" type="datetime-local" value={ page.SessionForm.StartsAt } required/>@components.FieldErrorMessage("starts_at", page.SessionForm.Errors["starts_at"])
+				<input id="structured-session-start" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["starts_at"] != "") } aria-describedby="structured-session-start-error" name="starts_at" type="datetime-local" value={ page.SessionForm.StartsAt } required/>@components.FieldErrorMessage("structured-session-start", page.SessionForm.Errors["starts_at"])
 				@components.FieldLabel("structured-session-end", "Fim", true)
-				<input id="structured-session-end" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["ends_at"] != "") } aria-describedby="ends_at-error" name="ends_at" type="datetime-local" value={ page.SessionForm.EndsAt } required/>@components.FieldErrorMessage("ends_at", page.SessionForm.Errors["ends_at"])
+				<input id="structured-session-end" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["ends_at"] != "") } aria-describedby="structured-session-end-error" name="ends_at" type="datetime-local" value={ page.SessionForm.EndsAt } required/>@components.FieldErrorMessage("structured-session-end", page.SessionForm.Errors["ends_at"])
 				@components.FieldLabel("structured-session-description", "Instruções gerais (opcional)", false)
-				<textarea id="structured-session-description" name="description" maxlength="4000">{ page.SessionForm.Description }</textarea>
+				<textarea id="structured-session-description" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["description"] != "") } aria-describedby="structured-session-description-error" name="description" maxlength="4000">{ page.SessionForm.Description }</textarea>@components.FieldErrorMessage("structured-session-description", page.SessionForm.Errors["description"])
 				@components.FormActions(structuredPlannerReturnURL(page)) {
 					<button type="submit">Criar sessão</button>
 				}

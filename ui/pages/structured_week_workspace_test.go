@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/a-h/templ"
 	"github.com/cfcoimbra/mycfc/internal/validation"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -231,5 +232,39 @@ func TestUnavailablePublicationComparisonDoesNotClaimNoMaterialChanges(t *testin
 	body := out.String()
 	if !strings.Contains(body, "Não foi possível confirmar o estado de publicação") || strings.Contains(body, "Não há alterações materiais") || strings.Contains(body, "/publicar") || strings.Contains(body, "4 prescrições") {
 		t.Fatalf("failed comparison asserted a publication fact: %s", body)
+	}
+}
+
+func TestWeekAndSessionErrorsHaveUniqueAccessibleAssociations(t *testing.T) {
+	p := workspaceFixture()
+	p.OpenForm = "session"
+	p.SessionForm.Errors = validation.FieldErrors{"title": "O título deve ter entre 2 e 180 caracteres.", "description": "Reveja as instruções."}
+	p.WeekForm.Errors = validation.FieldErrors{"planned_load_percentage": "Indique uma percentagem até 100.", "description": "Reveja as notas."}
+	p.WeekForm.PlannedLoad = "101"
+	var out bytes.Buffer
+	if err := structuredTrainingContent(p).Render(context.Background(), &out); err != nil {
+		t.Fatal(err)
+	}
+	body := out.String()
+	for _, owner := range []string{"week", "session"} {
+		fields := []string{"group", "name", "start", "load", "description"}
+		if owner == "session" {
+			fields = []string{"week", "name", "kind", "start", "end", "description"}
+		}
+		for _, field := range fields {
+			id := "structured-" + owner + "-" + field
+			if strings.Count(body, `id="`+id+`-error"`) != 1 {
+				t.Errorf("error target %s must be unique", id)
+			}
+			opening := regexp.MustCompile(`<[^>]+id="` + id + `"[^>]*>`).FindString(body)
+			if !strings.Contains(opening, id+"-error") {
+				t.Errorf("control %s lost its own error association: %s", id, opening)
+			}
+		}
+	}
+	for _, expected := range []string{`href="#structured-week-load"`, `id="structured-week-load" aria-invalid="true"`, `value="101"`, `id="structured-session-name-error" class="field-error">O título deve ter entre 2 e 180 caracteres.`, `href="#structured-session-description"`, `href="#structured-week-description"`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("missing accessible feedback %q", expected)
+		}
 	}
 }
