@@ -99,30 +99,39 @@ func (h StructuredTraining) publishReviewedPlan(w http.ResponseWriter, r *http.R
 			h.publicationFailure(w, r, 422, page, err)
 			return
 		}
-		metadata := preview.Metadata
-		page.Mode = "preview"
-		page.PlanTitle = preview.Materialization.PlanTitle
-		page.GroupName = preview.Materialization.GroupName
-		page.WeekLabel = preview.Materialization.WeekLabel
-		page.Summary = metadata.ChangeSummary
-		page.SourceUpdatedAt = metadata.SourceUpdatedAt.Format(time.RFC3339Nano)
-		page.ReviewToken = preview.Token
-		page.LatestPublicationID = ""
-		if metadata.LatestPublicationID != uuid.Nil {
-			page.LatestPublicationID = metadata.LatestPublicationID.String()
+		if err := applyPublicationReview(&page, preview, source, "", h.location()); err != nil {
+			h.publicationFailure(w, r, 422, page, err)
+			return
 		}
-		page.ExistingRevision = int(metadata.LatestRevision)
-		page.ReturnGroup, page.ReturnWeek, page.ReturnSession, page.ReturnDay = publicationContextFields(metadata.Return)
-		page.ReturnURL, page.ReviewURL = publicationReturnURL(metadata.Return), publicationReviewURL(metadata.Return)
-		page.PrescriptionCount = len(preview.Materialization.Prescriptions)
-		page.AddedCount = preview.Materialization.Added
-		page.ChangedCount = preview.Materialization.Changed
-		page.RemovedCount = preview.Materialization.Removed
-		page.UnchangedCount = preview.Materialization.Unchanged
-		page.NoChanges = preview.Materialization.NoChanges
-		page.CanConfirm = preview.CanConfirm
-		for _, recipient := range preview.Recipients {
-			page.Recipients = append(page.Recipients, pages.TrainingPublicationRecipient{Name: recipient.Name, SessionCount: recipient.SessionCount})
+		h.renderPublicationReview(w, r, 200, page)
+	case "inspect":
+		if len(r.PostForm["instruction_key"]) != 1 || r.PostForm.Get("instruction_key") == "" {
+			h.publicationFailure(w, r, 422, page, errTrainingPublicationReviewInvalid)
+			return
+		}
+		metadata, err := publicationRequestMetadata(r.PostForm, actor.ID, plan)
+		if err != nil {
+			h.publicationFailure(w, r, 422, page, err)
+			return
+		}
+		claims, err := trainingPublicationReviews.verify(r.PostForm.Get("review_token"), metadata, time.Now())
+		if err != nil {
+			h.publicationFailure(w, r, 422, page, err)
+			return
+		}
+		source, err := store.ReadPublicationSource(ctx, actor.ID, plan)
+		if err != nil {
+			h.publicationFailure(w, r, 409, page, err)
+			return
+		}
+		preview, err := inspectPublication(source, claims, r.PostForm.Get("review_token"), h.location(), time.Now())
+		if err != nil {
+			h.publicationFailure(w, r, 409, page, err)
+			return
+		}
+		if err := applyPublicationReview(&page, preview, source, r.PostForm.Get("instruction_key"), h.location()); err != nil {
+			h.publicationFailure(w, r, 422, page, err)
+			return
 		}
 		h.renderPublicationReview(w, r, 200, page)
 	case "confirm":
@@ -220,6 +229,7 @@ func (h StructuredTraining) publicationFailure(w http.ResponseWriter, r *http.Re
 	}
 	page.CanConfirm = false
 	page.Recipients = nil
+	page.Instructions = nil
 	page.NoChanges = false
 	page.PrescriptionCount = 0
 	page.AddedCount = 0

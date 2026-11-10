@@ -72,6 +72,14 @@ func publicationPost(t *testing.T, h http.Handler, path string, values url.Value
 }
 func publicationConfirmForm(t *testing.T, body string) url.Values {
 	t.Helper()
+	// Review now has a separate read-only instruction-selection form. Read the
+	// original publication confirmation metadata from its actual form only.
+	for _, form := range regexp.MustCompile(`(?s)<form\b[^>]*>.*?</form>`).FindAllString(body, -1) {
+		if regexp.MustCompile(`name="confirm"\s+value="yes"`).MatchString(form) {
+			body = form
+			break
+		}
+	}
 	values := url.Values{}
 	for _, name := range []string{"publication_intent", "confirm", "change_summary", "source_updated_at", "review_token", "reviewed_latest_id", "reviewed_latest_revision", "return_group", "return_week", "return_session", "return_day"} {
 		pattern := regexp.MustCompile(`name="` + regexp.QuoteMeta(name) + `"\s+value="([^"]*)"`)

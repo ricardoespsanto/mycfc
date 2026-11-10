@@ -25,6 +25,7 @@ type TrainingPublicationReviewPage struct {
 	ActionURL, ReturnURL, ReviewURL, SetupURL                                 string
 	Error                                                                     string
 	Errors                                                                    validation.FieldErrors
+	Instructions                                                              *TrainingPublicationInstructionReview
 	Recipients                                                                []TrainingPublicationRecipient
 	ExistingRevision                                                          int
 	PrescriptionCount, AddedCount, ChangedCount, RemovedCount, UnchangedCount int
@@ -182,6 +183,7 @@ templ trainingPublicationReviewContent(page TrainingPublicationReviewPage) {
 								</ul>
 							}
 						</section>
+						@trainingPublicationInstructionReview(page)
 						<form class="form-layout" method="post" action={ templ.SafeURL(page.ActionURL) } data-task-form>
 							@page.CSRFField
 							<input type="hidden" name="publication_intent" value="confirm"/>
@@ -272,4 +274,35 @@ templ trainingPublicationReviewLinks(page TrainingPublicationReviewPage) {
 			<a class="action action--quiet" href={ templ.SafeURL(page.ReturnURL) }>Voltar à semana</a>
 		}
 	</nav>
+}
+
+func publicationReviewInstructionSelected(review *TrainingPublicationInstructionReview) bool {
+ if review == nil || review.SelectedKey == "" || review.Athlete == "" || review.Session.ID == "" { return false }
+ for _, choice := range review.Choices { if choice.Key == review.SelectedKey { return true } }
+ return false
+}
+
+templ trainingPublicationInstructionReview(page TrainingPublicationReviewPage) {
+ if page.Instructions != nil && len(page.Instructions.Choices) > 0 {
+  <form class="form-layout" method="post" action={ templ.SafeURL(page.ActionURL) }>
+   @page.CSRFField
+   <input type="hidden" name="publication_intent" value="inspect"/>
+   @trainingPublicationReviewMetadata(page)
+   <input type="hidden" name="change_summary" value={ page.Summary }/>
+   @components.FieldLabel("publication-instruction-key", "Atleta e treino", true)
+   <select id="publication-instruction-key" name="instruction_key" required>
+    for _, choice := range page.Instructions.Choices {
+     <option value={ choice.Key } selected?={ choice.Key == page.Instructions.SelectedKey }>{ choice.Label }</option>
+    }
+   </select>
+   <button class="action action--secondary" type="submit">Ver instruções</button>
+  </form>
+  if publicationReviewInstructionSelected(page.Instructions) {
+   <section aria-labelledby="publication-instruction-title">
+    <h2 id="publication-instruction-title">Instruções revistas</h2>
+    <p><strong>{ page.Instructions.Athlete }</strong></p>
+    @StructuredWorkoutInstructions(page.Instructions.Session)
+   </section>
+  }
+ }
 }
