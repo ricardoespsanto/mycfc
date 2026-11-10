@@ -12,7 +12,7 @@ func TestCompatibilityBinaryDeclaresOnlyExactV1WritesAndDualReaders(t *testing.T
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, expected := range []string{`"reader_generation":2`, `"writer_generation":1`, `"snapshot_read":[1,2]`, `"schema_read":["schedule-c1","schedule-p1"]`, `"write":["INTERVAL","snapshot-v1"]`} {
+	for _, expected := range []string{`"reader_generation":3`, `"writer_generation":1`, `"snapshot_read":[1,2]`, `"schema_read":["schedule-c1","schedule-p1"]`, `"write":["INTERVAL","snapshot-v1"]`} {
 		if !strings.Contains(string(raw), expected) {
 			t.Fatalf("missing %s: %s", expected, raw)
 		}

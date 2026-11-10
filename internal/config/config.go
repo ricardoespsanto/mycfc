@@ -593,11 +593,36 @@ func (c Config) ResolvedDatabaseURL() (string, error) {
 }
 
 func (c Config) BootstrapDatabaseURL() (string, error) {
-	return c.resolvedDatabaseURL(c.PostgresUser, c.PostgresPassword)
+	return c.databaseURLWithIdentity(c.PostgresUser, c.PostgresPassword)
 }
 
 func (c Config) MigrationDatabaseURL() (string, error) {
-	return c.resolvedDatabaseURL(c.MigrationDBUser, c.MigrationDBPassword)
+	return c.databaseURLWithIdentity(c.MigrationDBUser, c.MigrationDBPassword)
+}
+
+// databaseURLWithIdentity changes authentication only. An explicit endpoint is
+// authoritative for database, port and TLS; component defaults must not silently
+// send maintenance commands to a different server.
+func (c Config) databaseURLWithIdentity(username string, password Secret) (string, error) {
+	if c.DatabaseURL.Value() == "" {
+		return c.resolvedDatabaseURL(username, password)
+	}
+	u, err := url.Parse(c.DatabaseURL.Value())
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Host == "" || u.Fragment != "" || username == "" {
+		return "", errors.New("database maintenance endpoint rejected")
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return "", errors.New("database maintenance options rejected")
+	}
+	for key := range query {
+		switch strings.ToLower(key) {
+		case "user", "password", "dbname", "database", "host", "hostaddr", "port", "service", "servicefile", "passfile", "options", "sslpassword":
+			return "", errors.New("database maintenance endpoint or identity override rejected")
+		}
+	}
+	u.User = url.UserPassword(username, password.Value())
+	return u.String(), nil
 }
 
 func (c Config) resolvedDatabaseURL(username string, password Secret) (string, error) {

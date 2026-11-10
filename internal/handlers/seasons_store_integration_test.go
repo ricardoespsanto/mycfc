@@ -156,7 +156,7 @@ func TestSeasonManagementExplicitSelectionConcurrencyAndHistory(t *testing.T) {
 	}
 	payload := []byte(`{"schema_version":1,"session":{"title":"Preserved instruction"}}`)
 	sum := sha256.Sum256(payload)
-	if _, e = groups.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: week.ID, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, ChangeSummary: "Historical publication", PublishedByID: admin, Prescriptions: []StructuredPrescriptionInput{{SessionID: session.ID, MembershipID: membership, AthleteUserID: athlete, Snapshot: payload, SnapshotSHA256: hex.EncodeToString(sum[:])}}}); e != nil {
+	if _, e = confirmPublicationTestReview(ctx, groups, publicationTestReview{PlanID: week.ID, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, ChangeSummary: "Historical publication", PublishedByID: admin, Prescriptions: []StructuredPrescriptionInput{{SessionID: session.ID, MembershipID: membership, AthleteUserID: athlete, Snapshot: payload, SnapshotSHA256: hex.EncodeToString(sum[:])}}}); e != nil {
 		t.Fatal(e)
 	}
 	if n, e := q.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: session.ID, UserID: athlete, Status: dbgen.TrainingOutcomeStatusCOMPLETED}); e != nil || n != 1 {

@@ -73,7 +73,7 @@ func TestAdmissionBindsCompiledStampFloorAndReaderGeneration(t *testing.T) {
 	if p.Verify(state, different) == nil {
 		t.Fatal("different binary admitted")
 	}
-	state.RequiredReader = 3
+	state.RequiredReader = ReaderGeneration + 1
 	if p.Verify(state, c) == nil {
 		t.Fatal("later reader floor admitted C2")
 	}

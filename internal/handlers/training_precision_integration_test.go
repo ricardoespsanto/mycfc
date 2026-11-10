@@ -177,7 +177,7 @@ func TestPrecisionCompatibilityAdaptersRejectWholeSourcesAtomicallyAndKeepExactT
 	if _, e = store.CopyStructuredTrainingWeek(userCtx, StructuredWeekCopyInput{SourcePlanID: plan, WeekStart: start.AddDate(0, 0, 7), Title: "Attempt", ActorID: coach}); !errors.Is(e, ErrTrainingScheduleWriteUnsupported) {
 		t.Fatalf("whole copy error %v", e)
 	}
-	if _, e = store.PublishStructuredTrainingPlan(userCtx, StructuredPublicationInput{PlanID: plan, PublishedByID: coach, SourceUpdatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}}); !errors.Is(e, ErrTrainingScheduleWriteUnsupported) {
+	if _, e = confirmPublicationTestReview(userCtx, store, publicationTestReview{PlanID: plan, PublishedByID: coach, SourceUpdatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}, ChangeSummary: "Unsupported mixed plan"}); !errors.Is(e, ErrTrainingScheduleWriteUnsupported) {
 		t.Fatalf("whole publication error %v", e)
 	}
 	aa, bb, cc, dd := before()

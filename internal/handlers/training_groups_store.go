@@ -128,7 +128,7 @@ func (s PostgresTrainingGroupStore) SearchAthletes(ctx context.Context, actor, i
 	return s.athletes(ctx, actor, id, strings.TrimSpace(q), offset, false)
 }
 
-func lockTrainingGroupActor(ctx context.Context, tx pgx.Tx, actor uuid.UUID) error {
+func lockTrainingGroupActor(ctx context.Context, tx dbgen.DBTX, actor uuid.UUID) error {
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id=$1 AND is_active AND erased_at IS NULL AND NOT is_dependent AND date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date FOR SHARE`, actor).Scan(&id); err != nil {
 		return err

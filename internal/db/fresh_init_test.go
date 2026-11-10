@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/releasecontract"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -37,7 +38,7 @@ func (r freshTestRow) Scan(dest ...any) error {
 			candidate = releasecontract.Candidate
 		}
 		if digest == "" {
-			digest = releasecontract.FinalDigest
+			digest = releasecontract.NormalFinalDigest
 		}
 		*dest[1].(*string) = version
 		*dest[2].(*string) = candidate
@@ -62,6 +63,9 @@ type freshTestConn struct {
 }
 
 func (c *freshTestConn) QueryRow(_ context.Context, statement string, _ ...any) pgx.Row {
+	if strings.Contains(statement, "fresh initialization unlock") {
+		return freshTestRow{value: true}
+	}
 	if strings.Contains(statement, "a.backend_start") {
 		return freshTestRow{value: true}
 	}
@@ -93,6 +97,12 @@ func (tx freshInspectionTestTx) Exec(context.Context, string, ...any) (pgconn.Co
 }
 func (tx freshInspectionTestTx) Rollback(context.Context) error { return nil }
 func (tx freshInspectionTestTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "FROM training_schedule_control.status()") {
+		return freshScheduleStatusRow{}
+	}
+	if strings.Contains(sql, "training recipient ") {
+		return freshTestRow{value: true}
+	}
 	if strings.Contains(sql, "training schedule ") {
 		return freshTestRow{value: true}
 	}
@@ -174,7 +184,7 @@ func TestFreshReceiptAcceptsOnlyPinnedGenesisAcrossForwardMigration(t *testing.T
 	t.Cleanup(func() { releasecontract.Version, releasecontract.Candidate = oldVersion, oldCandidate })
 	var original []string
 	for _, version := range EmbeddedMigrationInventory() {
-		if version != "202610010003_privacy_attachment_trigger_runtime" && version != TrainingScheduleCompatibilityMigration {
+		if version != "202610010003_privacy_attachment_trigger_runtime" && version != TrainingScheduleCompatibilityMigration && version != TrainingRecipientRevisionMigration {
 			original = append(original, version)
 		}
 	}
@@ -229,4 +239,23 @@ func TestFreshInitRefusesBeforeDatabaseChanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Synthetic status for interface-only receipt tests; actual catalog/role/floor
+// proofs are exercised by the isolated PostgreSQL recipient suite.
+type freshScheduleStatusRow struct{}
+
+func (freshScheduleStatusRow) Scan(dest ...any) error {
+	if len(dest) != 8 {
+		return errors.New("unexpected status scan")
+	}
+	*dest[0].(*uuid.UUID) = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	*dest[1].(*string) = TrainingScheduleContractC
+	*dest[2].(*int64) = 0
+	*dest[3].(*int32) = 1
+	*dest[4].(**uuid.UUID) = nil
+	*dest[5].(**string) = nil
+	*dest[6].(*bool) = false
+	*dest[7].(*bool) = false
+	return nil
 }

@@ -24,8 +24,23 @@ export async function publish(page, plan) {
   await page.goto('/admin/treinos/estruturados#training-publication');
   const form = page.locator(`form[action$="/semanas/${id(plan)}/publicar"]`);
   await expect(form).toBeVisible();
+  const planTitle = await form.locator('xpath=ancestor::article[1]').locator('h3').innerText();
+  const plannerURL = page.url();
   await form.locator('[name="change_summary"]').fill('Publicação sintética de aceitação');
-  await postUI(page, form.getByRole('button'), `/semanas/${id(plan)}/publicar`);
+  await postUI(page, form.getByRole('button', { name: 'Rever destinatários', exact: true }), `/semanas/${id(plan)}/publicar`, 200);
+  const confirm = page.locator('form').filter({ has: page.locator('[name="publication_intent"][value="confirm"]') });
+  await expect(confirm.locator('[name="reviewed_latest_revision"]')).toHaveValue('0');
+  await expect(confirm.locator('[name="reviewed_latest_id"]')).toHaveValue('');
+  await expect(confirm.locator('[name="review_token"]')).not.toHaveValue('');
+  await expect(page.getByRole('heading', { name: 'Destinatários desta revisão', exact: true })).toBeVisible();
+  await expect(confirm.locator('[name="change_summary"]')).toHaveValue('Publicação sintética de aceitação');
+  const unchangedPlanner = await page.context().newPage();
+  await unchangedPlanner.goto(plannerURL);
+  const unchangedCard = unchangedPlanner.getByRole('heading', { name: planTitle, exact: true }).locator('xpath=ancestor::article[1]');
+  await expect(unchangedCard).toContainText('Rascunho nunca publicado');
+  await expect(unchangedCard).not.toContainText('revisão 1');
+  await unchangedPlanner.close();
+  await postUI(page, confirm.getByRole('button', { name: 'Publicar revisão', exact: true }), `/semanas/${id(plan)}/publicar`);
 }
 // Kept apart from crew/history helpers: preview integration may change only this flow.
 export async function submitTomorrowTransition(page) {

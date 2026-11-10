@@ -29,13 +29,15 @@ import (
 )
 
 type StructuredTraining struct {
-	Setup    TrainingSetupStore
-	Groups   TrainingGroupStore
-	Store    StructuredTrainingStore
-	System   System
-	PageMeta components.PageMeta
-	Location *time.Location
-	Sessions *scs.SessionManager
+	HTTPWriteTimeout time.Duration
+	Publications     recipientPublicationStore
+	Setup            TrainingSetupStore
+	Groups           TrainingGroupStore
+	Store            StructuredTrainingStore
+	System           System
+	PageMeta         components.PageMeta
+	Location         *time.Location
+	Sessions         *scs.SessionManager
 }
 
 type structuredTrainingRow struct {
@@ -421,55 +423,7 @@ func structuredPlannerContextAudience(audiences []pages.StructuredTrainingAudien
 }
 
 func (h StructuredTraining) PublishPlan(w http.ResponseWriter, r *http.Request) {
-	user, _ := CurrentUserFromContext(r.Context())
-	planID, err := uuid.Parse(r.PathValue("id"))
-	if err != nil || r.ParseForm() != nil {
-		h.System.RequestRejected(w, r)
-		return
-	}
-	sourceUpdatedAt, err := time.Parse(time.RFC3339Nano, r.PostForm.Get("source_updated_at"))
-	changeSummary := strings.TrimSpace(r.PostForm.Get("change_summary"))
-	if err != nil || !validTrainingText(changeSummary, 2, 500) {
-		h.System.RequestRejected(w, r)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*trainingQueryTimeout)
-	defer cancel()
-	if !h.canManageWeek(ctx, user, planID, w, r) {
-		return
-	}
-	input, err := h.buildStructuredPublication(ctx, user, planID, sourceUpdatedAt, changeSummary)
-	if errors.Is(err, errStructuredTrainingPublicationConflict) {
-		h.renderIndex(w, r, http.StatusConflict, pages.StructuredTrainingPage{OpenForm: "publication", Error: "O plano mudou desde a pré-visualização. Reveja os destinatários e tente novamente."})
-		return
-	}
-	if errors.Is(err, errStructuredTrainingPublicationVariationConflict) {
-		h.renderIndex(w, r, http.StatusConflict, pages.StructuredTrainingPage{OpenForm: "publication", Error: "Existem variações do mesmo nível em conflito. Resolva-as antes de publicar."})
-		return
-	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		h.System.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		if !h.writeTrainingScheduleError(w, r, err) {
-			h.System.InternalError(w, r)
-		}
-		return
-	}
-	publication, err := h.Store.PublishStructuredTrainingPlan(ctx, input)
-	if errors.Is(err, errStructuredTrainingPublicationConflict) || isUniqueViolation(err) {
-		h.renderIndex(w, r, http.StatusConflict, pages.StructuredTrainingPage{OpenForm: "publication", Error: "O plano já foi alterado ou publicado. Atualize a pré-visualização antes de confirmar."})
-		return
-	}
-	if err != nil {
-		if !h.writeTrainingScheduleError(w, r, err) {
-			h.System.InternalError(w, r)
-		}
-		return
-	}
-	h.flash(r, fmt.Sprintf("Revisão %d publicada para %d prescrições privadas.", publication.Revision, len(input.Prescriptions)))
-	h.redirectPlanner(w, r, "/admin/treinos/estruturados#training-publication")
+	h.publishReviewedPlan(w, r)
 }
 
 func (h StructuredTraining) PrescriptionDetail(w http.ResponseWriter, r *http.Request) {
@@ -3029,6 +2983,23 @@ func trainingVariationPatchLabel(encoded []byte) string {
 func (h StructuredTraining) structuredPublicationStates(ctx context.Context, audiences []pages.StructuredTrainingAudience, rows []dbgen.ListManagedTrainingPublicationStatesRow, matches []dbgen.ListTrainingVariationMatchesForManagerRow) []pages.StructuredPublicationState {
 	result := make([]pages.StructuredPublicationState, 0, len(rows))
 	for _, row := range rows {
+		if scoped, ok := h.Store.(recipientPublicationStore); ok {
+			state, err := h.publicationCanonicalStatus(ctx, scoped, row)
+			if publicationScopeDenied(err) {
+				continue
+			} // Never retain a newly denied plan's private metadata.
+			if err != nil {
+				publishedAt := ""
+				if row.PublishedAt.Valid {
+					publishedAt = row.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04")
+				}
+				result = append(result, pages.StructuredPublicationState{PlanID: row.ID.String(), Plan: row.Title, Revision: int(row.PublishedRevision), PublishedAt: publishedAt, PublishedBy: stringValue(row.PublishedByName), Unavailable: true, Status: "Não foi possível confirmar o estado de publicação"})
+			} else {
+				result = append(result, state)
+			}
+			continue
+		}
+
 		if inspector, ok := h.Store.(trainingScheduleWriteStatusStore); ok {
 			state, statusErr := inspector.TrainingSchedulePlanWriteStatus(ctx, dbgen.TrainingSchedulePlanWriteStatusParams{ActorID: trainingWriteActor(ctx), PlanID: row.ID})
 			if statusErr != nil || state.HasPartial || state.HasV2Publication {
@@ -3098,10 +3069,12 @@ func (h StructuredTraining) structuredPublicationStates(ctx context.Context, aud
 				unavailable = true
 			}
 		}
-		current := row.PublicationCurrent != nil && *row.PublicationCurrent && !unavailable && conflictCount == 0 && added+changed+removed == 0
+		current := row.PublishedRevision > 0 && !unavailable && conflictCount == 0 && added+changed+removed == 0
 		if unavailable {
 			status = "Não foi possível confirmar o estado de publicação"
-		} else if row.PublishedRevision > 0 && !current {
+		} else if current {
+			status = "Publicado · sem alterações pendentes"
+		} else if row.PublishedRevision > 0 {
 			status = "Rascunho alterado desde a última publicação"
 		}
 		result = append(result, pages.StructuredPublicationState{
@@ -3156,18 +3129,29 @@ func buildStructuredPrescriptionInputs(planID uuid.UUID, audience pages.Structur
 		}
 
 		id, err := uuid.Parse(session.ID)
-		if err == nil {
-			sessions[id] = session
+		if err != nil || id == uuid.Nil {
+			return nil, errPublicationSourceUnavailable
 		}
+		if _, duplicate := sessions[id]; duplicate {
+			return nil, errPublicationSourceUnavailable
+		}
+		sessions[id] = session
 	}
+	if len(recipients) > trainingPublicationReviewMaxTuples {
+		return nil, errTrainingPublicationReviewLimit
+	}
+	totalSnapshotBytes := 0
+	seenRecipients := map[[2]uuid.UUID]bool{}
 	result := make([]StructuredPrescriptionInput, 0, len(recipients))
 	for _, recipient := range recipients {
-		if recipient.AthleteUserID == nil {
-			continue
+		key := [2]uuid.UUID{recipient.SessionID, recipient.MembershipID}
+		if recipient.AthleteUserID == nil || *recipient.AthleteUserID == uuid.Nil || recipient.MembershipID == uuid.Nil || seenRecipients[key] {
+			return nil, errPublicationSourceUnavailable
 		}
+		seenRecipients[key] = true
 		session, ok := sessions[recipient.SessionID]
 		if !ok {
-			continue
+			return nil, errPublicationSourceUnavailable
 		}
 		encoded, err := json.Marshal(session)
 		if err != nil {
@@ -3184,64 +3168,14 @@ func buildStructuredPrescriptionInputs(planID uuid.UUID, audience pages.Structur
 		if err != nil {
 			return nil, err
 		}
+		if len(encoded) > trainingPublicationReviewMaxSnapshotBytes-totalSnapshotBytes {
+			return nil, errTrainingPublicationReviewLimit
+		}
+		totalSnapshotBytes += len(encoded)
 		digest := sha256.Sum256(encoded)
 		result = append(result, StructuredPrescriptionInput{SessionID: recipient.SessionID, MembershipID: recipient.MembershipID, AthleteUserID: *recipient.AthleteUserID, Snapshot: encoded, SnapshotSHA256: fmt.Sprintf("%x", digest)})
 	}
 	return result, nil
-}
-
-func (h StructuredTraining) buildStructuredPublication(ctx context.Context, user CurrentUser, planID uuid.UUID, expected time.Time, summary string) (StructuredPublicationInput, error) {
-	states, err := h.Store.ListManagedTrainingPublicationStates(ctx, dbgen.ListManagedTrainingPublicationStatesParams{IsAdmin: user.IsAdmin, UserID: user.ID})
-	if err != nil {
-		return StructuredPublicationInput{}, err
-	}
-	var sourceUpdatedAt pgtype.Timestamptz
-	for _, state := range states {
-		if state.ID == planID {
-			sourceUpdatedAt = state.SourceUpdatedAt
-			break
-		}
-	}
-	if !sourceUpdatedAt.Valid {
-		return StructuredPublicationInput{}, pgx.ErrNoRows
-	}
-	if !sourceUpdatedAt.Time.Equal(expected) {
-		return StructuredPublicationInput{}, errStructuredTrainingPublicationConflict
-	}
-	rows, err := h.Store.ListStructuredTrainingOverviewForManager(ctx, dbgen.ListStructuredTrainingOverviewForManagerParams{IsAdmin: user.IsAdmin, UserID: user.ID})
-	if err != nil {
-		return StructuredPublicationInput{}, err
-	}
-	audience, week, found := structuredPublicationWeek(assembleStructuredTraining(managerStructuredRows(rows), h.location()), planID)
-	if !found {
-		return StructuredPublicationInput{}, pgx.ErrNoRows
-	}
-	recipients, err := h.Store.ListStructuredTrainingPublicationMembers(ctx, planID)
-	if err != nil {
-		return StructuredPublicationInput{}, err
-	}
-	matches, err := h.Store.ListTrainingVariationMatchesForManager(ctx, dbgen.ListTrainingVariationMatchesForManagerParams{TimeZone: h.location().String(), IsAdmin: user.IsAdmin, UserID: user.ID})
-	if err != nil {
-		return StructuredPublicationInput{}, err
-	}
-	if structuredPublicationConflictCount(matches, planID) > 0 {
-		return StructuredPublicationInput{}, errStructuredTrainingPublicationVariationConflict
-	}
-	prescriptions, err := buildStructuredPrescriptionInputs(planID, audience, week, recipients, matches)
-	if err != nil {
-		return StructuredPublicationInput{}, err
-	}
-	input := StructuredPublicationInput{PlanID: planID, SourceUpdatedAt: sourceUpdatedAt, ChangeSummary: summary, PublishedByID: user.ID, Prescriptions: prescriptions}
-	if len(input.Prescriptions) == 0 {
-		previous, previousErr := h.Store.ListLatestTrainingPrescriptionHashesForPlan(ctx, planID)
-		if previousErr != nil {
-			return StructuredPublicationInput{}, previousErr
-		}
-		if len(previous) == 0 {
-			return StructuredPublicationInput{}, pgx.ErrNoRows
-		}
-	}
-	return input, nil
 }
 
 func resolveStructuredPrescription(session *pages.StructuredTrainingSession, rows []dbgen.ListTrainingVariationMatchesForManagerRow, planID, sessionID, membershipID uuid.UUID) error {

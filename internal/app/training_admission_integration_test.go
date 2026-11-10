@@ -46,7 +46,7 @@ func TestStampedTrainingAdmissionTrustedProjectionAndRevocation(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer pool.Close()
-	state, e := db.VerifyTrainingScheduleRuntime(t.Context(), pool, db.TrainingScheduleCapabilities{ReaderVersion: 2, WriterVersion: 1})
+	state, e := db.VerifyTrainingRecipientRuntime(t.Context(), pool, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
 	if e != nil {
 		t.Fatal(e)
 	}

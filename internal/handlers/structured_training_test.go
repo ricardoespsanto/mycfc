@@ -78,7 +78,6 @@ type structuredTrainingStoreStub struct {
 	retiredVariation   dbgen.RetireTrainingVariationParams
 	retiredRows        int64
 	variationGroup     StructuredVariationGroupInput
-	publishedInput     StructuredPublicationInput
 	copiedSessions     []struct {
 		SourceID, TargetID, ActorID uuid.UUID
 		StartsAt                    pgtype.Timestamptz
@@ -104,7 +103,6 @@ type structuredTrainingStoreStub struct {
 	weekCopyErr             error
 	createWaterBlockErr     error
 	createVariationGroupErr error
-	publishErr              error
 	listProfilesErr         error
 	createWaterStepErr      error
 	createWaterProfileErr   error
@@ -436,11 +434,6 @@ func (s *structuredTrainingStoreStub) RetireTrainingVariation(_ context.Context,
 func (s *structuredTrainingStoreStub) CreateTrainingVariationGroup(_ context.Context, input StructuredVariationGroupInput) (dbgen.TrainingVariationGroup, error) {
 	s.variationGroup = input
 	return dbgen.TrainingVariationGroup{ID: uuid.New(), Name: input.Params.Name}, s.createVariationGroupErr
-}
-
-func (s *structuredTrainingStoreStub) PublishStructuredTrainingPlan(_ context.Context, input StructuredPublicationInput) (dbgen.TrainingPlanPublication, error) {
-	s.publishedInput = input
-	return dbgen.TrainingPlanPublication{ID: uuid.New(), PlanID: input.PlanID, Revision: 1}, s.publishErr
 }
 
 func (s *structuredTrainingStoreStub) CreateGroup(_ context.Context, input StructuredTrainingGroupInput) (dbgen.TrainingGroup, error) {
@@ -1217,10 +1210,6 @@ func TestPostgresStructuredTrainingStorePropagatesTransactionStartFailures(t *te
 		name string
 		call func() error
 	}{
-		{"publish", func() error {
-			_, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{})
-			return err
-		}},
 		{"create group", func() error {
 			_, err := store.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{Name: "Training group", CreatedByID: id, ProgrammeID: &id}})
 			return err
@@ -1417,10 +1406,6 @@ func TestPostgresStructuredTrainingStorePropagatesFirstTransactionalOperationFai
 		name string
 		call func() error
 	}{
-		{"publish", func() error {
-			_, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: id})
-			return err
-		}},
 		{"create group", func() error {
 			_, err := store.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{Name: "Training group", CreatedByID: id, ProgrammeID: &id}})
 			return err
@@ -1600,15 +1585,6 @@ func TestPostgresStructuredTrainingStoreReadsEverySupportedRoutineSourceKind(t *
 	}
 	if _, err := store.GetRoutineSource(t.Context(), dbgen.TrainingRoutineKind("UNKNOWN"), uuid.New()); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("unknown routine kind error=%v", err)
-	}
-}
-
-func TestPostgresStructuredTrainingStorePublishesFreshPlanAtomically(t *testing.T) {
-	updated := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
-	tx := &structuredTrainingPublicationTransactionFake{updated: updated}
-	publication, err := (PostgresStructuredTrainingStore{Pool: structuredTrainingDBFake{tx: tx}}).PublishStructuredTrainingPlan(t.Context(), StructuredPublicationInput{PlanID: uuid.New(), SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}, ChangeSummary: "Initial publication", PublishedByID: uuid.New()})
-	if err != nil || publication.ID == uuid.Nil || !tx.committed {
-		t.Fatalf("publication=%#v committed=%v error=%v", publication, tx.committed, err)
 	}
 }
 
@@ -2814,149 +2790,6 @@ func TestStructuredPublicationStatesDistinguishesAddedChangedRemovedAndUnchanged
 	}
 }
 
-func TestBuildStructuredPublicationRejectsStaleSourceVersionBeforeWriting(t *testing.T) {
-	planID, actorID := uuid.New(), uuid.New()
-	updated := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
-	store := &structuredTrainingStoreStub{publicationStates: []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}}}
-	h := StructuredTraining{Store: store, Location: time.UTC}
-	_, err := h.buildStructuredPublication(context.Background(), CurrentUser{ID: actorID, IsAdmin: true}, planID, updated.Add(time.Second), "Publicação inicial")
-	if !errors.Is(err, errStructuredTrainingPublicationConflict) {
-		t.Fatalf("error=%v", err)
-	}
-}
-
-func TestBuildStructuredPublicationBuildsImmutableRecipientSnapshot(t *testing.T) {
-	planID, sessionID, membershipID, athleteID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	updated := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
-	planTitle, sessionTitle := "Semana 1", "Água"
-	store := &structuredTrainingStoreStub{
-		publicationStates:  []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}},
-		publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}},
-		overviewRows:       []dbgen.ListStructuredTrainingOverviewForManagerRow{{GroupID: uuid.New(), GroupName: "Competição", ProgrammeName: "Competição", PlanID: &planID, PlanTitle: &planTitle, WeekStart: pgtype.Date{Time: updated, Valid: true}, SessionID: &sessionID, SessionTitle: &sessionTitle, StartsAt: pgtype.Timestamptz{Time: updated.Add(24 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: updated.Add(25 * time.Hour), Valid: true}}},
-	}
-	h := StructuredTraining{Store: store, Location: time.UTC}
-	input, err := h.buildStructuredPublication(context.Background(), CurrentUser{ID: actorID, IsAdmin: true}, planID, updated, "Publicação inicial")
-	if err != nil || input.PlanID != planID || input.PublishedByID != actorID || len(input.Prescriptions) != 1 || input.Prescriptions[0].AthleteUserID != athleteID || len(input.Prescriptions[0].Snapshot) == 0 {
-		t.Fatalf("input=%#v error=%v", input, err)
-	}
-}
-
-func TestPublishStructuredPlanPersistsFreshPrivateRecipientRevision(t *testing.T) {
-	planID, sessionID, membershipID, athleteID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	updated := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
-	planTitle, sessionTitle := "Semana 1", "Água"
-	store := &structuredTrainingStoreStub{
-		weekOK:             true,
-		publicationStates:  []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}},
-		publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}},
-		overviewRows:       []dbgen.ListStructuredTrainingOverviewForManagerRow{{GroupID: uuid.New(), GroupName: "Competição", ProgrammeName: "Competição", PlanID: &planID, PlanTitle: &planTitle, WeekStart: pgtype.Date{Time: updated, Valid: true}, SessionID: &sessionID, SessionTitle: &sessionTitle, StartsAt: pgtype.Timestamptz{Time: updated.Add(24 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: updated.Add(25 * time.Hour), Valid: true}}},
-	}
-	h := StructuredTraining{Store: store, Location: time.UTC}
-	values := url.Values{"source_updated_at": {updated.Format(time.RFC3339Nano)}, "change_summary": {"Publicação inicial"}}
-	r := httptest.NewRequest(http.MethodPost, "/admin/treinos/estruturados/planos/"+planID.String()+"/publicar", strings.NewReader(values.Encode()))
-	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.SetPathValue("id", planID.String())
-	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actorID, IsAdmin: true}))
-	w := httptest.NewRecorder()
-
-	h.PublishPlan(w, r)
-
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/treinos/estruturados#training-publication" {
-		t.Fatalf("response=%d location=%q", w.Code, w.Header().Get("Location"))
-	}
-	input := store.publishedInput
-	if input.PlanID != planID || input.PublishedByID != actorID || !input.SourceUpdatedAt.Time.Equal(updated) || input.ChangeSummary != "Publicação inicial" || len(input.Prescriptions) != 1 || input.Prescriptions[0].AthleteUserID != athleteID || input.Prescriptions[0].MembershipID != membershipID {
-		t.Fatalf("publication input=%#v", input)
-	}
-}
-
-func TestPublishStructuredPlanReportsOptimisticConflictAndServiceFailures(t *testing.T) {
-	planID, sessionID, membershipID, athleteID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	updated := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
-	planTitle, sessionTitle := "Semana 1", "Água"
-	values := url.Values{"source_updated_at": {updated.Format(time.RFC3339Nano)}, "change_summary": {"Publicação inicial"}}
-	for _, tc := range []struct {
-		name string
-		err  error
-		want int
-	}{
-		{name: "concurrent publication", err: errStructuredTrainingPublicationConflict, want: http.StatusConflict},
-		{name: "unique publication", err: &pgconn.PgError{Code: "23505"}, want: http.StatusConflict},
-		{name: "service failure", err: errors.New("database unavailable"), want: http.StatusInternalServerError},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			store := &structuredTrainingStoreStub{weekOK: true, publishErr: tc.err,
-				publicationStates:  []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}},
-				publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}},
-				overviewRows:       []dbgen.ListStructuredTrainingOverviewForManagerRow{{GroupID: uuid.New(), GroupName: "Competição", ProgrammeName: "Competição", PlanID: &planID, PlanTitle: &planTitle, WeekStart: pgtype.Date{Time: updated, Valid: true}, SessionID: &sessionID, SessionTitle: &sessionTitle, StartsAt: pgtype.Timestamptz{Time: updated.Add(24 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: updated.Add(25 * time.Hour), Valid: true}}},
-			}
-			response := performStructuredTrainingRequest(t, CurrentUser{ID: actorID, IsAdmin: true}, http.MethodPost, "/admin/treinos/estruturados/planos/"+planID.String()+"/publicar", values, "id", planID.String(), (StructuredTraining{Store: store, Location: time.UTC}).PublishPlan)
-			if response.Code != tc.want {
-				t.Fatalf("status=%d, want %d", response.Code, tc.want)
-			}
-		})
-	}
-}
-
-func TestPublishStructuredPlanFailsClosedBeforePersistingInvalidPublicationInputs(t *testing.T) {
-	planID, sessionID, membershipID, athleteID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	updated := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
-	planTitle, sessionTitle := "Semana 1", "Água"
-	base := func() structuredTrainingStoreStub {
-		return structuredTrainingStoreStub{
-			weekOK:             true,
-			publicationStates:  []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}},
-			publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}},
-			overviewRows: []dbgen.ListStructuredTrainingOverviewForManagerRow{{
-				GroupID: uuid.New(), GroupName: "Competição", ProgrammeName: "Competição", PlanID: &planID, PlanTitle: &planTitle, WeekStart: pgtype.Date{Time: updated, Valid: true},
-				SessionID: &sessionID, SessionTitle: &sessionTitle, StartsAt: pgtype.Timestamptz{Time: updated.Add(24 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: updated.Add(25 * time.Hour), Valid: true},
-			}},
-		}
-	}
-	values := url.Values{"source_updated_at": {updated.Format(time.RFC3339Nano)}, "change_summary": {"Publicação inicial"}}
-	for _, tc := range []struct {
-		name   string
-		mutate func(*structuredTrainingStoreStub)
-		want   int
-	}{
-		{name: "unknown source plan", mutate: func(s *structuredTrainingStoreStub) { s.publicationStates = nil }, want: http.StatusNotFound},
-		{name: "source-state read failure", mutate: func(s *structuredTrainingStoreStub) { s.publicationStatesErr = errors.New("database unavailable") }, want: http.StatusInternalServerError},
-		{name: "overview read failure", mutate: func(s *structuredTrainingStoreStub) { s.overviewErr = errors.New("database unavailable") }, want: http.StatusInternalServerError},
-		{name: "missing assembled week", mutate: func(s *structuredTrainingStoreStub) { s.overviewRows = nil }, want: http.StatusNotFound},
-		{name: "recipient read failure", mutate: func(s *structuredTrainingStoreStub) { s.publicationMembersErr = errors.New("database unavailable") }, want: http.StatusInternalServerError},
-		{name: "variation-match read failure", mutate: func(s *structuredTrainingStoreStub) { s.variationMatchesErr = errors.New("database unavailable") }, want: http.StatusInternalServerError},
-		{name: "equal priority variation conflict", mutate: func(s *structuredTrainingStoreStub) {
-			subjectID := uuid.New()
-			s.variationMatches = []dbgen.ListTrainingVariationMatchesForManagerRow{{PlanID: planID, MembershipID: &membershipID, SubjectKind: dbgen.TrainingVariationSubjectKindSEGMENT, SubjectID: subjectID, Priority: 1}, {PlanID: planID, MembershipID: &membershipID, SubjectKind: dbgen.TrainingVariationSubjectKindSEGMENT, SubjectID: subjectID, Priority: 1}}
-		}, want: http.StatusConflict},
-		{name: "empty new publication", mutate: func(s *structuredTrainingStoreStub) { s.publicationMembers = nil }, want: http.StatusNotFound},
-		{name: "previous-hash read failure", mutate: func(s *structuredTrainingStoreStub) {
-			s.publicationMembers = nil
-			s.publicationHashesErr = errors.New("database unavailable")
-		}, want: http.StatusInternalServerError},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			store := base()
-			tc.mutate(&store)
-			response := performStructuredTrainingRequest(t, CurrentUser{ID: actorID, IsAdmin: true}, http.MethodPost, "/admin/treinos/estruturados/planos/"+planID.String()+"/publicar", values, "id", planID.String(), (StructuredTraining{Store: &store, Location: time.UTC}).PublishPlan)
-			if response.Code != tc.want {
-				t.Fatalf("status=%d, want %d", response.Code, tc.want)
-			}
-			if store.publishedInput.PlanID != uuid.Nil {
-				t.Fatalf("failed publication was persisted: %#v", store.publishedInput)
-			}
-		})
-	}
-
-	store := base()
-	store.publicationMembers = nil
-	store.publicationHashes = []dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{{}}
-	response := performStructuredTrainingRequest(t, CurrentUser{ID: actorID, IsAdmin: true}, http.MethodPost, "/admin/treinos/estruturados/planos/"+planID.String()+"/publicar", values, "id", planID.String(), (StructuredTraining{Store: &store, Location: time.UTC}).PublishPlan)
-	if response.Code != http.StatusSeeOther || store.publishedInput.PlanID != planID || len(store.publishedInput.Prescriptions) != 0 {
-		t.Fatalf("valid republish without recipients: status=%d input=%#v", response.Code, store.publishedInput)
-	}
-}
-
 func TestCreateStructuredWaterBlockPersistsValidatedPrescriptionAndEffort(t *testing.T) {
 	segmentID, planID, actorID := uuid.New(), uuid.New(), uuid.New()
 	store := &structuredTrainingStoreStub{planID: planID, weekOK: true}
@@ -3596,7 +3429,7 @@ func TestApplyStructuredPrescriptionVariationChangesSegmentBlockAndGymExercise(t
 	}
 }
 
-func TestBuildStructuredPrescriptionInputsCreatesPrivateSnapshotAndSkipsUnknownSession(t *testing.T) {
+func TestBuildStructuredPrescriptionInputsCreatesPrivateSnapshotAndRejectsIncompleteRecipients(t *testing.T) {
 	planID, sessionID, membershipID, athleteID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	week := pages.StructuredTrainingWeek{
 		ID: planID.String(), Title: "M42", Description: "Transformação", Season: "2025/2026", DateRange: "15–21 junho", PlannedLoad: "70%",
@@ -3608,7 +3441,12 @@ func TestBuildStructuredPrescriptionInputsCreatesPrivateSnapshotAndSkipsUnknownS
 		{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: testUUIDPtr(uuid.New())},
 	}
 
-	inputs, err := buildStructuredPrescriptionInputs(planID, pages.StructuredTrainingAudience{GroupName: "Cadetes"}, week, recipients, nil)
+	for _, invalid := range recipients[1:] {
+		if _, err := buildStructuredPrescriptionInputs(planID, pages.StructuredTrainingAudience{GroupName: "Cadetes"}, week, []dbgen.ListStructuredTrainingPublicationMembersRow{recipients[0], invalid}, nil); !errors.Is(err, errPublicationSourceUnavailable) {
+			t.Fatal("silently omitted recipient", err)
+		}
+	}
+	inputs, err := buildStructuredPrescriptionInputs(planID, pages.StructuredTrainingAudience{GroupName: "Cadetes"}, week, recipients[:1], nil)
 	if err != nil {
 		t.Fatal(err)
 	}

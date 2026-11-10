@@ -23,8 +23,14 @@ const FinalDigest = "88bdc8ccf003c6a4994310c11e2d1c18ce5d4b212ccb6eff8113f8499b9
 // BaselineDigest remains the retired disposable-reset schema pin.
 const BaselineDigest = "fc8f9dbb96dcfd7f49aa81e562bf53684416a32282a26d4d9a9d329f20c14a1f"
 
-// NormalBaselineDigest is for normal C fresh/forward verification, not reset.
-const NormalBaselineDigest = "bf22784f1d8cef7a4bf9fe9fe59e41fcb9b0425f7fc0237b5f06b9556f01626c"
+// NormalBaselineDigest is for corrected normal fresh/forward verification, not reset.
+const NormalBaselineDigest = "2237c6e0b0843d2dc3f951bd663dff1001becaae97fdf87dce0e4936b2c03334"
+
+// NormalFinalDigest is independent of the retired disposable FinalDigest pin.
+const NormalFinalDigest = "c90c7f02fcc0859420133135bd4b12ea0a4aa27cfccdf150eaea08a9fb08c335"
+
+// NormalRecipientParentDigest is the reviewed compatibility79 inventory.
+const NormalRecipientParentDigest = "88bdc8ccf003c6a4994310c11e2d1c18ce5d4b212ccb6eff8113f8499b9152ec"
 
 const NormalParentDigest = "98de2a416ee0006262398c32d012d81c2b5fcb599c2e607bbb006692919fac84"
 

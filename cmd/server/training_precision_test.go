@@ -41,7 +41,7 @@ func TestNormalReleaseContractRequiresCompiledIdentityAndExactFinalInventory(t *
 	if e = json.Unmarshal(raw, &object); e != nil {
 		t.Fatal(e)
 	}
-	if len(object) != 6 || object["contract"] != "mycfc/normal-release/v1" || object["version"] != "v99.0.0" || object["candidate"] != strings.Repeat("a", 40) || object["database"] != "mycfc" || object["parent_digest"] != releasecontract.NormalParentDigest || object["final_digest"] != db.EmbeddedMigrationDigest() {
+	if len(object) != 6 || object["contract"] != "mycfc/normal-release/v1" || object["version"] != "v99.0.0" || object["candidate"] != strings.Repeat("a", 40) || object["database"] != "mycfc" || object["parent_digest"] != releasecontract.NormalRecipientParentDigest || object["final_digest"] != db.EmbeddedMigrationDigest() {
 		t.Fatalf("wrong normal contract %s", raw)
 	}
 	if _, ok := object["baseline_digest"]; ok {

@@ -19,7 +19,7 @@ func FreshInitializeDatabase(ctx context.Context, conn interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
 	Begin(context.Context) (pgx.Tx, error)
-}, database string, roles RoleCredentials) error {
+}, database string, roles RoleCredentials) (resultErr error) {
 	if err := validateBootstrapInput(database, roles); err != nil {
 		return err
 	}
@@ -27,20 +27,17 @@ func FreshInitializeDatabase(ctx context.Context, conn interface {
 		strings.TrimSpace(roles.DataRetentionUsername) == "" || strings.TrimSpace(roles.DataRetentionPassword) == "" {
 		return errors.New("fresh initialization requires both maintenance login credentials")
 	}
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtext('mycfc-explicit-fresh-init'))"); err != nil {
+	if _, err := conn.Exec(ctx, "SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtext('mycfc-explicit-fresh-init'::pg_catalog.text)::pg_catalog.int8)"); err != nil {
 		return fmt.Errorf("lock fresh initialization: %w", err)
 	}
 	defer func() {
-		_, _ = conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock(hashtext('mycfc-explicit-fresh-init'))")
+		var unlocked bool
+		if err := conn.QueryRow(ctx, `SELECT /* fresh initialization unlock */ pg_catalog.pg_advisory_unlock(pg_catalog.hashtext('mycfc-explicit-fresh-init'::pg_catalog.text)::pg_catalog.int8)`).Scan(&unlocked); err != nil || !unlocked {
+			resultErr = errors.Join(resultErr, errors.New("fresh initialization session cleanup failed"))
+		}
 	}()
-	var allowed bool
-	if err := conn.QueryRow(ctx, `SELECT current_database()=$1 AND
-  (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) AND
-  NOT EXISTS(SELECT 1 FROM pg_depend d WHERE d.refclassid='pg_namespace'::regclass
-    AND d.refobjid='public'::regnamespace) AND
-  NOT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname NOT IN ('public','pg_catalog','information_schema')
-    AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp%') AND
-  NOT EXISTS(SELECT 1 FROM pg_extension WHERE extnamespace='public'::regnamespace)`, database).Scan(&allowed); err != nil {
+	allowed, err := IsTrainingRecipientEmptyTarget(ctx, conn, database)
+	if err != nil {
 		return fmt.Errorf("inspect empty database: %w", err)
 	}
 	if !allowed {
@@ -52,13 +49,21 @@ func FreshInitializeDatabase(ctx context.Context, conn interface {
 	if _, err := conn.Exec(ctx, "SET ROLE "+quoteIdentifier(roles.MigrationUsername)); err != nil {
 		return fmt.Errorf("assume migration role: %w", err)
 	}
-	defer func() { _, _ = conn.Exec(context.WithoutCancel(ctx), "RESET ROLE") }()
+	assumedRole := true
+	defer func() {
+		if assumedRole {
+			if _, err := conn.Exec(ctx, "RESET ROLE"); err != nil {
+				resultErr = errors.Join(resultErr, errors.New("fresh initialization role cleanup failed"))
+			}
+		}
+	}()
 	if err := ApplyBaselineAndHarden(ctx, conn, database, roles); err != nil {
 		return fmt.Errorf("fresh baseline and migrations: %w", err)
 	}
 	if _, err := conn.Exec(ctx, "RESET ROLE"); err != nil {
 		return fmt.Errorf("restore bootstrap role: %w", err)
 	}
+	assumedRole = false
 	// This private receipt is NOT a disposable-reset completion marker. Its
 	// superuser-owned rows are read-only for the migration identity.
 	for _, sql := range []string{
@@ -125,7 +130,7 @@ func FreshInitializationMatchesWithInspector(ctx context.Context, receiptConn in
 		return false, err
 	}
 	genesis := genesisVersion == releasecontract.FreshGenesisVersion && genesisCandidate == releasecontract.FreshGenesisCandidate && receiptDigest == releasecontract.FreshGenesisDigest
-	if !receipt || EmbeddedMigrationDigest() != releasecontract.FinalDigest ||
+	if !receipt || EmbeddedMigrationDigest() != releasecontract.NormalFinalDigest ||
 		!releasecontract.CompatibleFreshGenesis(database, version, candidate, genesisVersion, genesisCandidate) ||
 		!(genesis || receiptDigest == EmbeddedMigrationDigest() && genesisVersion == version && genesisCandidate == candidate) {
 		return false, errors.New("fresh initialization receipt identity mismatch")
@@ -134,16 +139,21 @@ func FreshInitializationMatchesWithInspector(ctx context.Context, receiptConn in
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 	// Before the reviewed forward migration, the original protected receipt
 	// still has its genesis ledger. After migration, the immutable receipt
 	// remains genesis-owned while the actual ledger advances to this binary.
-	if ledgerDigest != EmbeddedMigrationDigest() && !(genesis && (ledgerDigest == releasecontract.FreshGenesisDigest || ledgerDigest == releasecontract.NormalParentDigest)) {
+	if ledgerDigest != EmbeddedMigrationDigest() && !(genesis && (ledgerDigest == releasecontract.FreshGenesisDigest || ledgerDigest == releasecontract.NormalParentDigest || ledgerDigest == releasecontract.NormalRecipientParentDigest)) {
 		return false, errors.New("fresh initialization ledger mismatch")
 	}
 	if err := VerifyDatedParticipationContract(ctx, tx); err != nil {
 		return false, errors.New("fresh initialization schema mismatch")
 	}
-	if err := verifyTrainingScheduleAdmissionSchema(ctx,tx,ledgerDigest);err!=nil{return false,err}
+	if _, err := InspectTrainingRecipientParent(ctx, tx, ledgerDigest); err != nil {
+		return false, err
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		return false, errors.New("fresh initialization inspection cleanup failed")
+	}
 	return true, nil
 }

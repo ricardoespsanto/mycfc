@@ -6,34 +6,9 @@ if [[ ${CI:-} != true ]]; then
 	exit 1
 fi
 
-if [[ ! -f .env ]]; then
-	cp .env.example .env
+if [[ ! -e .env && ! -L .env ]]; then
+	(umask 077; cp -n .env.example .env)
 fi
-
-compose_project_was_set=${COMPOSE_PROJECT_NAME+x}
-compose_project_before=${COMPOSE_PROJECT_NAME:-}
-docker_host_was_set=${DOCKER_HOST+x}
-docker_host_before=${DOCKER_HOST:-}
-docker_context_was_set=${DOCKER_CONTEXT+x}
-docker_context_before=${DOCKER_CONTEXT:-}
-compose_file_was_set=${COMPOSE_FILE+x}
-compose_file_before=${COMPOSE_FILE:-}
-compose_profiles_was_set=${COMPOSE_PROFILES+x}
-compose_profiles_before=${COMPOSE_PROFILES:-}
-compose_env_files_was_set=${COMPOSE_ENV_FILES+x}
-compose_env_files_before=${COMPOSE_ENV_FILES:-}
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
-# The caller owns Docker/Compose targeting. An ignored .env must never redirect
-# a CI trial or its cleanup to another project, context, or daemon.
-if [[ $compose_project_was_set ]]; then export COMPOSE_PROJECT_NAME=$compose_project_before; else unset COMPOSE_PROJECT_NAME; fi
-if [[ $docker_host_was_set ]]; then export DOCKER_HOST=$docker_host_before; else unset DOCKER_HOST; fi
-if [[ $docker_context_was_set ]]; then export DOCKER_CONTEXT=$docker_context_before; else unset DOCKER_CONTEXT; fi
-if [[ $compose_file_was_set ]]; then export COMPOSE_FILE=$compose_file_before; else unset COMPOSE_FILE; fi
-if [[ $compose_profiles_was_set ]]; then export COMPOSE_PROFILES=$compose_profiles_before; else unset COMPOSE_PROFILES; fi
-if [[ $compose_env_files_was_set ]]; then export COMPOSE_ENV_FILES=$compose_env_files_before; else unset COMPOSE_ENV_FILES; fi
 
 if [[ ${E2E_BOOTSTRAP_VALIDATE_ENV_ONLY:-false} == true ]]; then
 	printf 'COMPOSE_PROJECT_NAME=%s\n' "${COMPOSE_PROJECT_NAME:-}"
@@ -45,7 +20,17 @@ if [[ ${E2E_BOOTSTRAP_VALIDATE_ENV_ONLY:-false} == true ]]; then
 	exit 0
 fi
 
-compose=(docker compose -f compose.yaml -f compose.e2e-ci.yaml)
+# Treat owned local .env as data, preserve caller Docker/Compose targeting, and
+# refuse inherited production/admission context before any infrastructure action.
+if [[ ${MYCFC_LOCAL_E2E_CHILD:-} != yes ]]; then
+  script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+  exec python3 "$script_dir/local-db-command.py" bootstrap -- env MYCFC_LOCAL_E2E_CHILD=yes bash "$0"
+fi
+
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+python3 "$script_dir/local-db-command.py" bootstrap -- true
+
+compose=(docker compose --env-file /dev/null --project-name "${COMPOSE_PROJECT_NAME:-mycfc}" -f compose.yaml -f compose.e2e-ci.yaml)
 
 # Pull the pinned browser and CI app images, and cross-build the server, while
 # the independent database bootstrap runs. Use the same Compose files as the
@@ -86,7 +71,12 @@ e2e_database=mycfc_test
 
 "${compose[@]}" exec -T postgres dropdb -U "$POSTGRES_USER" --if-exists --force "$e2e_database"
 "${compose[@]}" exec -T postgres createdb -U "$POSTGRES_USER" "$e2e_database"
-"${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$e2e_database" < internal/db/schema.sql
+
+# Provision fixed application/migration roles and explicitly install the unsigned
+# local Reader3 fixture before starting a low-privilege browser runtime.
+python3 scripts/local-db-command.py --database mycfc_test bootstrap -- go run ./cmd/server bootstrap-db
+python3 scripts/local-db-command.py --database mycfc_test migration -- go run ./cmd/server migrate
+python3 scripts/local-db-command.py --database mycfc_test migration -- go run ./cmd/server prepare-local-recipient-floor
 
 if ! wait "$minio_init_pid"; then
 	printf '%s\n' 'failed to initialize the E2E MinIO bucket' >&2

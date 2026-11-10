@@ -5,9 +5,7 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -1382,16 +1380,14 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 		}
 		return pgtype.Timestamptz{Time: value, Valid: true}
 	}
-	publish := func(source pgtype.Timestamptz, summary string, snapshot []byte) dbgen.TrainingPlanPublication {
-		sum := sha256.Sum256(snapshot)
-		publication, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: week.ID, SourceUpdatedAt: source, ChangeSummary: summary, PublishedByID: actorID, Prescriptions: []StructuredPrescriptionInput{{SessionID: session.ID, MembershipID: membership.ID, AthleteUserID: athleteID, Snapshot: snapshot, SnapshotSHA256: hex.EncodeToString(sum[:])}}})
+	publish := func(source pgtype.Timestamptz, summary string) dbgen.TrainingPlanPublication {
+		publication, err := confirmPublicationTestReview(ctx, store, publicationTestReview{PlanID: week.ID, SourceUpdatedAt: source, ChangeSummary: summary, PublishedByID: actorID})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return publication
 	}
-	snapshot1 := []byte(`{"schema_version":1,"session":{"title":"Versão um"}}`)
-	publication1 := publish(readSource(), "Publicação inicial", snapshot1)
+	publication1 := publish(readSource(), "Publicação inicial")
 	if publication1.Revision != 1 {
 		t.Fatalf("first revision = %d", publication1.Revision)
 	}
@@ -1408,7 +1404,9 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 		}
 	}
 	var firstPrescriptionID, outcomePrescriptionID uuid.UUID
-	if err := pool.QueryRow(ctx, `SELECT id FROM training_prescriptions WHERE publication_id = $1`, publication1.ID).Scan(&firstPrescriptionID); err != nil {
+	var originalHash string
+	var snapshot1 []byte
+	if err := pool.QueryRow(ctx, `SELECT id,snapshot_sha256,snapshot FROM training_prescriptions WHERE publication_id = $1`, publication1.ID).Scan(&firstPrescriptionID, &originalHash, &snapshot1); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT prescription_id FROM training_session_outcomes WHERE session_id = $1 AND user_id = $2`, session.ID, athleteID).Scan(&outcomePrescriptionID); err != nil || outcomePrescriptionID != firstPrescriptionID {
@@ -1428,11 +1426,10 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 	if _, err := pool.Exec(ctx, `UPDATE training_sessions SET title = 'Água republicada' WHERE id = $1`, session.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: week.ID, SourceUpdatedAt: staleSource, ChangeSummary: "Versão obsoleta", PublishedByID: actorID}); !errors.Is(err, errStructuredTrainingPublicationConflict) {
+	if _, err := confirmPublicationTestReview(ctx, store, publicationTestReview{PlanID: week.ID, SourceUpdatedAt: staleSource, ChangeSummary: "Versão obsoleta", PublishedByID: actorID}); !errors.Is(err, errStructuredTrainingPublicationConflict) {
 		t.Fatalf("stale publication err=%v", err)
 	}
-	snapshot2 := []byte(`{"schema_version":1,"session":{"title":"Versão dois"}}`)
-	publication2 := publish(readSource(), "Ajuste da carga", snapshot2)
+	publication2 := publish(readSource(), "Ajuste da carga")
 	if publication2.Revision != 2 || publication2.SupersedesID == nil || *publication2.SupersedesID != publication1.ID {
 		t.Fatalf("second publication = %#v", publication2)
 	}
@@ -1456,7 +1453,7 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 		}
 	}
 	oldRow, err := queries.GetTrainingPrescriptionForViewer(ctx, dbgen.GetTrainingPrescriptionForViewerParams{ID: firstPrescriptionID, UserID: guardianID, IsAdmin: false})
-	if err != nil || !strings.Contains(string(oldRow.Snapshot), `"Versão um"`) || oldRow.IsCurrent || oldRow.ActualDurationMinutes == nil || *oldRow.ActualDurationMinutes != correctedDuration || oldRow.PerceivedExertion == nil || *oldRow.PerceivedExertion != correctedExertion || oldRow.RecoveryFeeling == nil || *oldRow.RecoveryFeeling != correctedFeeling || oldRow.PerceptionNote == nil || *oldRow.PerceptionNote != correctedNote || oldRow.OutcomeVersion != 2 {
+	if err != nil || !bytes.Equal(oldRow.Snapshot, snapshot1) || oldRow.IsCurrent || oldRow.ActualDurationMinutes == nil || *oldRow.ActualDurationMinutes != correctedDuration || oldRow.PerceivedExertion == nil || *oldRow.PerceivedExertion != correctedExertion || oldRow.RecoveryFeeling == nil || *oldRow.RecoveryFeeling != correctedFeeling || oldRow.PerceptionNote == nil || *oldRow.PerceptionNote != correctedNote || oldRow.OutcomeVersion != 2 {
 		t.Fatalf("historical snapshot changed or hidden: row=%#v err=%v", oldRow, err)
 	}
 	var currentPrescriptionID uuid.UUID
@@ -1481,11 +1478,10 @@ func TestPostgresTrainingPublicationsPreservePrivateRevisionLineage(t *testing.T
 	var publishedMembership uuid.UUID
 	var publishedHash string
 	var publishedSnapshot []byte
-	expectedHash := sha256.Sum256(snapshot1)
-	if err := pool.QueryRow(ctx, `SELECT membership_id,snapshot_sha256,snapshot FROM training_prescriptions WHERE id=$1`, firstPrescriptionID).Scan(&publishedMembership, &publishedHash, &publishedSnapshot); err != nil || publishedMembership != membership.ID || publishedHash != hex.EncodeToString(expectedHash[:]) {
+	if err := pool.QueryRow(ctx, `SELECT membership_id,snapshot_sha256,snapshot FROM training_prescriptions WHERE id=$1`, firstPrescriptionID).Scan(&publishedMembership, &publishedHash, &publishedSnapshot); err != nil || publishedMembership != membership.ID || publishedHash != originalHash {
 		t.Fatalf("published prescription context changed: membership=%s hash=%s err=%v", publishedMembership, publishedHash, err)
 	}
-	if !strings.Contains(string(publishedSnapshot), `"Versão um"`) {
+	if !bytes.Equal(publishedSnapshot, snapshot1) {
 		t.Fatalf("published snapshot changed: %s", publishedSnapshot)
 	}
 	var publicationCount int

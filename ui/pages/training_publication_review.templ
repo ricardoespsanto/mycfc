@@ -1,0 +1,275 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
+	"sort"
+	"strings"
+	"unicode/utf8"
+)
+
+// Page-only recipient review. It is not a prescription or a signed authority
+// model. The caller authorizes all context and supplies validated relative URLs.
+type TrainingPublicationRecipient struct {
+	Name         string
+	SessionCount int
+}
+type TrainingPublicationReviewPage struct {
+	Meta                                                                      components.PageMeta
+	CSRFField                                                                 templ.Component
+	Mode                                                                      string
+	PlanTitle, GroupName, WeekLabel                                           string
+	Summary, SourceUpdatedAt, ReviewToken, LatestPublicationID                string
+	ReturnGroup, ReturnWeek, ReturnSession, ReturnDay                         string
+	ActionURL, ReturnURL, ReviewURL, SetupURL                                 string
+	Error                                                                     string
+	Errors                                                                    validation.FieldErrors
+	Recipients                                                                []TrainingPublicationRecipient
+	ExistingRevision                                                          int
+	PrescriptionCount, AddedCount, ChangedCount, RemovedCount, UnchangedCount int
+	CanConfirm, NoChanges                                                     bool
+}
+type publicationReviewError struct{ Field, Message string }
+
+func publicationReviewHasErrors(page TrainingPublicationReviewPage) bool {
+	if page.Error != "" {
+		return true
+	}
+	for _, message := range page.Errors {
+		if message != "" {
+			return true
+		}
+	}
+	return false
+}
+func publicationReviewEditable(page TrainingPublicationReviewPage) bool {
+	return (page.Mode == "preview" || page.Mode == "error") && page.ActionURL != ""
+}
+func publicationReviewErrors(page TrainingPublicationReviewPage) []publicationReviewError {
+	out := []publicationReviewError{}
+	seen := map[string]bool{}
+	appendError := func(field, message string) {
+		if message != "" && !seen[message] {
+			out = append(out, publicationReviewError{field, message})
+			seen[message] = true
+		}
+	}
+	field := ""
+	if publicationReviewEditable(page) {
+		field = "publication-review-summary"
+	}
+	appendError(field, page.Errors["summary"])
+	appendError("", page.Error)
+	keys := []string{}
+	for key := range page.Errors {
+		if key != "summary" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		appendError("", page.Errors[key])
+	}
+	return out
+}
+func publicationReviewValidPreview(page TrainingPublicationReviewPage) bool {
+	if page.Mode != "preview" || !page.CanConfirm || page.ActionURL == "" || page.SourceUpdatedAt == "" || page.ReviewToken == "" || publicationReviewHasErrors(page) {
+		return false
+	}
+	length := utf8.RuneCountInString(page.Summary)
+	if !utf8.ValidString(page.Summary) || length < 2 || length > 500 || strings.TrimSpace(page.Summary) != page.Summary {
+		return false
+	}
+	if page.ExistingRevision < 0 || (page.ExistingRevision == 0) != (page.LatestPublicationID == "") {
+		return false
+	}
+	if page.NoChanges && page.ExistingRevision == 0 {
+		return false
+	}
+	if page.PrescriptionCount < 0 || page.PrescriptionCount > 4096 || len(page.Recipients) > 4096 {
+		return false
+	}
+	if page.AddedCount < 0 || page.ChangedCount < 0 || page.RemovedCount < 0 || page.UnchangedCount < 0 {
+		return false
+	}
+	if (page.PrescriptionCount == 0) != (len(page.Recipients) == 0) {
+		return false
+	}
+	if page.PrescriptionCount == 0 && page.ExistingRevision == 0 {
+		return false
+	}
+	for _, recipient := range page.Recipients {
+		if recipient.SessionCount < 1 || recipient.SessionCount > 4096 {
+			return false
+		}
+	}
+	return true
+}
+
+// HTML removes one LF immediately after a textarea start tag. Compensate
+// only that parser behavior; callers continue to pass the untouched raw value.
+func publicationReviewTextareaValue(value string) string {
+	if strings.HasPrefix(value, "\n") {
+		return "\n" + value
+	}
+	return value
+}
+func publicationReviewSessionCount(count int) string {
+	if count == 1 {
+		return "1 sessão"
+	}
+	return fmt.Sprintf("%d sessões", count)
+}
+func publicationReviewSummaryDescription(page TrainingPublicationReviewPage) string {
+	if page.Errors["summary"] != "" {
+		return "publication-review-summary-error"
+	}
+	return ""
+}
+func publicationReviewTitle(page TrainingPublicationReviewPage) string {
+	if page.Mode == "unknown" {
+		return "Resultado da publicação por confirmar"
+	}
+	return "Rever destinatários"
+}
+
+templ TrainingPublicationReview(page TrainingPublicationReviewPage) {
+	@components.Base(page.Meta, trainingPublicationReviewContent(page))
+}
+
+templ trainingPublicationReviewContent(page TrainingPublicationReviewPage) {
+	<div class="task-route-page">
+		@components.TaskRoute(components.TaskSurfaceConfig{ID: "publication-review-task", TitleID: "publication-review-title", Variant: "modal", Eyebrow: "Treinos · " + page.GroupName, Title: publicationReviewTitle(page), Description: page.PlanTitle + " · " + page.WeekLabel, ReturnURL: page.ReturnURL}) {
+			<div class="task-form">
+				@trainingPublicationReviewErrors(page)
+				if page.Mode=="unknown"||(page.Mode!="preview"&&page.Mode!="error") {
+					<section role="status" tabindex="-1" autofocus?={ len(publicationReviewErrors(page))==0 }>
+						<h2>Confirme o estado atual antes de continuar</h2>
+						<p>Não foi possível confirmar o resultado deste pedido. Consulte o histórico autorizado e reveja o estado da semana antes de voltar a publicar.</p>
+						@trainingPublicationReviewLinks(page)
+					</section>
+				} else {
+					if publicationReviewValidPreview(page) {
+						<section aria-labelledby="publication-reviewed-summary-title"><h2 id="publication-reviewed-summary-title">Resumo aprovado</h2><p>{ page.Summary }</p></section>
+						if page.ExistingRevision>0 {
+							<p>Última revisão publicada: { fmt.Sprint(page.ExistingRevision) }.</p>
+						} else {
+							<p>Primeira publicação desta semana.</p>
+						}
+						if page.NoChanges {
+							<div class="notice notice--info" role="note"><p>Os destinatários e as instruções mantêm-se como na revisão { fmt.Sprint(page.ExistingRevision) }. Concluir a revisão não cria outra publicação; o resumo introduzido não será guardado como uma nova revisão.</p></div>
+						} else if page.PrescriptionCount==0 {
+							<div class="notice notice--info" role="note"><p>Esta revisão ficará sem destinatários. Reveja as prescrições removidas antes de confirmar. O histórico anterior mantém-se.</p></div>
+						}
+						<dl class="status-summary" aria-label="Revisão dos destinatários">
+							<div><dt>Atletas abrangidos</dt><dd>{ fmt.Sprint(len(page.Recipients)) }</dd></div>
+							<div><dt>Prescrições previstas</dt><dd>{ fmt.Sprint(page.PrescriptionCount) }</dd></div>
+							<div><dt>Novas</dt><dd>{ fmt.Sprint(page.AddedCount) }</dd></div>
+							<div><dt>Alteradas</dt><dd>{ fmt.Sprint(page.ChangedCount) }</dd></div>
+							<div><dt>Removidas</dt><dd>{ fmt.Sprint(page.RemovedCount) }</dd></div>
+							<div><dt>Sem alterações</dt><dd>{ fmt.Sprint(page.UnchangedCount) }</dd></div>
+						</dl>
+						<section aria-labelledby="publication-recipient-title">
+							<h2 id="publication-recipient-title">Destinatários desta revisão</h2>
+							if len(page.Recipients)==0 {
+								<p>Sem destinatários nesta revisão.</p>
+							} else {
+								<ul class="record-list">
+									for _,recipient:=range page.Recipients {
+										<li class="record-item"><p class="record-item__copy"><strong>{ recipient.Name }</strong></p><span class="record-meta">{ publicationReviewSessionCount(recipient.SessionCount) }</span></li>
+									}
+								</ul>
+							}
+						</section>
+						<form class="form-layout" method="post" action={ templ.SafeURL(page.ActionURL) } data-task-form>
+							@page.CSRFField
+							<input type="hidden" name="publication_intent" value="confirm"/>
+							<input type="hidden" name="confirm" value="yes"/>
+							@trainingPublicationReviewMetadata(page)
+							<input type="hidden" name="change_summary" value={ page.Summary }/>
+							<button class="action action--primary" type="submit">
+								if page.NoChanges {
+									Concluir revisão
+								} else {
+									Publicar revisão
+								}
+							</button>
+						</form>
+						<details>
+							<summary>Alterar o resumo e rever os destinatários</summary>
+							<p>Para confirmar alterações ao resumo, escolha Rever destinatários e reveja a nova lista.</p>
+							@trainingPublicationReviewAgainForm(page)
+						</details>
+					} else {
+						if !publicationReviewHasErrors(page) {
+							<p role="status" tabindex="-1" autofocus>Reveja os destinatários e a configuração da semana antes de confirmar.</p>
+						}
+						if page.SetupURL!="" {
+							<p><a class="action action--secondary" href={ templ.SafeURL(page.SetupURL) }>Rever configuração do grupo</a></p>
+						}
+						@trainingPublicationReviewAgainForm(page)
+					}
+					@trainingPublicationReviewLinks(page)
+				}
+			</div>
+		}
+	</div>
+}
+
+templ trainingPublicationReviewErrors(page TrainingPublicationReviewPage) {
+	if len(publicationReviewErrors(page))>0 {
+		<section class="error-summary" aria-labelledby="publication-review-errors-title" role="alert" tabindex="-1" autofocus>
+			<h2 id="publication-review-errors-title">Reveja o pedido de publicação</h2>
+			<ul>
+				for _,item:=range publicationReviewErrors(page) {
+					<li>
+						if item.Field!="" {
+							<a href={ "#" + item.Field }>{ item.Message }</a>
+						} else {
+							<span>{ item.Message }</span>
+						}
+					</li>
+				}
+			</ul>
+		</section>
+	}
+}
+
+templ trainingPublicationReviewMetadata(page TrainingPublicationReviewPage) {
+	<input type="hidden" name="source_updated_at" value={ page.SourceUpdatedAt }/>
+	<input type="hidden" name="review_token" value={ page.ReviewToken }/>
+	<input type="hidden" name="reviewed_latest_id" value={ page.LatestPublicationID }/>
+	<input type="hidden" name="reviewed_latest_revision" value={ fmt.Sprint(page.ExistingRevision) }/>
+	<input type="hidden" name="return_group" value={ page.ReturnGroup }/>
+	<input type="hidden" name="return_week" value={ page.ReturnWeek }/>
+	<input type="hidden" name="return_session" value={ page.ReturnSession }/>
+	<input type="hidden" name="return_day" value={ page.ReturnDay }/>
+}
+
+templ trainingPublicationReviewAgainForm(page TrainingPublicationReviewPage) {
+	if publicationReviewEditable(page) {
+		<form class="form-layout" method="post" action={ templ.SafeURL(page.ActionURL) }>
+			@page.CSRFField
+			<input type="hidden" name="publication_intent" value="preview"/>
+			@trainingPublicationReviewMetadata(page)
+			<div class="field-group">
+				@components.FieldLabel("publication-review-summary", "Resumo desta revisão", true)
+				<textarea id="publication-review-summary" name="change_summary" rows="3" required minlength="2" maxlength="500" aria-invalid={ fmt.Sprint(page.Errors["summary"] != "") } aria-describedby={ publicationReviewSummaryDescription(page) }>{ publicationReviewTextareaValue(page.Summary) }</textarea>
+				@components.FieldErrorMessage("publication-review-summary", page.Errors["summary"])
+			</div>
+			<button class="action action--secondary" type="submit">Rever destinatários</button>
+		</form>
+	}
+}
+
+templ trainingPublicationReviewLinks(page TrainingPublicationReviewPage) {
+	<nav class="cluster" aria-label="Opções da publicação">
+		if page.ReviewURL!="" {
+			<a class="action action--quiet" href={ templ.SafeURL(page.ReviewURL) }>Consultar a semana e o histórico</a>
+		}
+		if page.ReturnURL!="" {
+			<a class="action action--quiet" href={ templ.SafeURL(page.ReturnURL) }>Voltar à semana</a>
+		}
+	</nav>
+}

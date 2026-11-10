@@ -335,7 +335,7 @@ func TestFreshCurrentCandidateReceiptRealPostgres(t *testing.T) {
 		t.Fatalf("current candidate fresh initialization: %v", err)
 	}
 	var version, candidate, digest string
-	if err := conn.QueryRow(ctx, `SELECT version,candidate,schema_digest FROM mycfc_fresh_init.receipt WHERE database_name=$1`, parsed.Database).Scan(&version, &candidate, &digest); err != nil || version != releasecontract.Version || candidate != releasecontract.Candidate || digest != releasecontract.FinalDigest || digest == releasecontract.FreshGenesisDigest {
+	if err := conn.QueryRow(ctx, `SELECT version,candidate,schema_digest FROM mycfc_fresh_init.receipt WHERE database_name=$1`, parsed.Database).Scan(&version, &candidate, &digest); err != nil || version != releasecontract.Version || candidate != releasecontract.Candidate || digest != releasecontract.NormalFinalDigest || digest == releasecontract.FreshGenesisDigest {
 		t.Fatalf("current candidate receipt identity invalid: %v", err)
 	}
 	var ledgerCount int

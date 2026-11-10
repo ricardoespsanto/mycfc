@@ -56,13 +56,16 @@ func newPublicationRaceFixture(t *testing.T, ctx context.Context) publicationRac
 			t.Fatal(e)
 		}
 	}
+	if _, err := p.Exec(ctx, `INSERT INTO staff_grants(user_id,capability,programme_id,granted_by_id) VALUES($1,'COACH',$2,$1)`, f.actor, f.programme); err != nil {
+		t.Fatal(err)
+	}
 	if e = p.QueryRow(ctx, `SELECT updated_at FROM training_plans WHERE id=$1`, f.plan).Scan(&f.source); e != nil {
 		t.Fatal(e)
 	}
 	return f
 }
-func (f publicationRaceFixture) input() StructuredPublicationInput {
-	return StructuredPublicationInput{PlanID: f.plan, PublishedByID: f.actor, SourceUpdatedAt: pgtype.Timestamptz{Time: f.source, Valid: true}, ChangeSummary: "Race", Prescriptions: []StructuredPrescriptionInput{{SessionID: f.session, MembershipID: f.membership, AthleteUserID: f.athlete, Snapshot: []byte(`{"schema_version":1}`), SnapshotSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}
+func (f publicationRaceFixture) input() publicationTestReview {
+	return publicationTestReview{PlanID: f.plan, PublishedByID: f.actor, SourceUpdatedAt: pgtype.Timestamptz{Time: f.source, Valid: true}, ChangeSummary: "Race", Prescriptions: []StructuredPrescriptionInput{{SessionID: f.session, MembershipID: f.membership, AthleteUserID: f.athlete, Snapshot: []byte(`{"schema_version":1}`), SnapshotSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}
 }
 
 func TestPublicationAfterCommittedShorteningCannotPublish(t *testing.T) {
@@ -79,10 +82,10 @@ func TestPublicationAfterCommittedShorteningCannotPublish(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := (PostgresStructuredTrainingStore{Pool: f.pool}).PublishStructuredTrainingPlan(ctx, f.input())
+		_, err := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: f.pool}, f.input())
 		done <- err
 	}()
-	waitForRaceQuery(t, ctx, f.pool, `SELECT plan.id, plan.updated_at`, "transactionid")
+	waitForRaceQuery(t, ctx, f.pool, `LockPublicationPlan`, "transactionid")
 	if e = tx.Commit(ctx); e != nil {
 		t.Fatal(e)
 	}
@@ -90,7 +93,7 @@ func TestPublicationAfterCommittedShorteningCannotPublish(t *testing.T) {
 		t.Fatalf("stale publication not rejected: %v", e)
 	}
 	var n int
-	if e = f.pool.QueryRow(ctx, `SELECT count(*) FROM training_plan_publications WHERE plan_id=$1`, f.plan).Scan(&n); e != nil || n != 0 {
+	if e := f.pool.QueryRow(ctx, `SELECT count(*) FROM training_plan_publications WHERE plan_id=$1`, f.plan).Scan(&n); e != nil || n != 0 {
 		t.Fatalf("partial publication %d %v", n, e)
 	}
 }
@@ -106,42 +109,21 @@ func TestFullTransitionRacesPublication(t *testing.T) {
 	if e := f.pool.QueryRow(ctx, `SELECT id FROM programmes WHERE code='Initiation'`).Scan(&initiation); e != nil {
 		t.Fatal(e)
 	}
-	// Force the publisher to hold the plan lock while the real service updates
-	// the old interval in a separate SERIALIZABLE connection.
-	if _, e := f.pool.Exec(ctx, `CREATE OR REPLACE FUNCTION publication_transition_gate() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.plan_id = '`+f.plan.String()+`'::uuid THEN PERFORM pg_advisory_xact_lock(7100340); END IF; RETURN NEW; END $$`); e != nil {
-		t.Fatal(e)
-	}
-	if _, e := f.pool.Exec(ctx, `CREATE TRIGGER publication_transition_gate BEFORE INSERT ON training_plan_publications FOR EACH ROW EXECUTE FUNCTION publication_transition_gate()`); e != nil {
-		t.Fatal(e)
-	}
-	defer func() {
-		f.pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS publication_transition_gate ON training_plan_publications`)
-		f.pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS publication_transition_gate()`)
-	}()
-	gate, e := f.pool.Acquire(ctx)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer gate.Release()
-	if _, e = gate.Exec(ctx, `SELECT pg_advisory_lock(7100340)`); e != nil {
-		t.Fatal(e)
-	}
-	defer gate.Exec(context.Background(), `SELECT pg_advisory_unlock(7100340)`)
+	ctx, reached, resume := withPublicationTestGate(ctx)
+	defer resume()
 	publishDone := make(chan error, 1)
 	go func() {
-		_, err := (PostgresStructuredTrainingStore{Pool: f.pool}).PublishStructuredTrainingPlan(ctx, f.input())
+		_, err := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: f.pool}, f.input())
 		publishDone <- err
 	}()
-	waitForRaceQuery(t, ctx, f.pool, `INSERT INTO training_plan_publications`, "advisory")
+	awaitPublicationTestGate(t, ctx, reached, publishDone)
 	transitionDone := make(chan error, 1)
 	go func() {
 		_, err := (dated.DatedParticipationService{Pool: f.pool}).TransitionNextDay(ctx, f.membership, dated.OrdinaryDatedAssignment{ActorID: f.actor, MemberID: f.athlete, SeasonID: f.season, ProgrammeID: initiation, StartsOn: f.today.AddDate(0, 0, 1)})
 		transitionDone <- err
 	}()
-	waitForRaceQuery(t, ctx, f.pool, `UPDATE user_memberships SET ends_on`, "transactionid")
-	if _, e = gate.Exec(ctx, `SELECT pg_advisory_unlock(7100340)`); e != nil {
-		t.Fatal(e)
-	}
+	waitForRaceQuery(t, ctx, f.pool, `FROM users member`, "transactionid")
+	resume()
 	pubErr, transitionErr := <-publishDone, <-transitionDone
 	t.Logf("publisher=%v; full transition=%v", pubErr, transitionErr)
 	if pubErr == nil && transitionErr == nil {
@@ -152,10 +134,10 @@ func TestFullTransitionRacesPublication(t *testing.T) {
 	}
 	var count int
 	var endsOn time.Time
-	if e = f.pool.QueryRow(ctx, `SELECT count(*) FROM training_prescriptions WHERE membership_id=$1`, f.membership).Scan(&count); e != nil {
+	if e := f.pool.QueryRow(ctx, `SELECT count(*) FROM training_prescriptions WHERE membership_id=$1`, f.membership).Scan(&count); e != nil {
 		t.Fatal(e)
 	}
-	if e = f.pool.QueryRow(ctx, `SELECT ends_on FROM user_memberships WHERE id=$1`, f.membership).Scan(&endsOn); e != nil {
+	if e := f.pool.QueryRow(ctx, `SELECT ends_on FROM user_memberships WHERE id=$1`, f.membership).Scan(&endsOn); e != nil {
 		t.Fatal(e)
 	}
 	if count != 0 && endsOn.Before(f.today.AddDate(0, 0, 1)) {
@@ -196,7 +178,7 @@ func TestGroupMemberInsertAfterConcurrentShortening(t *testing.T) {
 		t.Fatalf("ended membership associated: %+v", got)
 	}
 	var n int
-	if e = f.pool.QueryRow(ctx, `SELECT count(*) FROM training_group_members WHERE group_id=$1 AND membership_id=$2`, f.group, f.membership).Scan(&n); e != nil || n != 0 {
+	if e := f.pool.QueryRow(ctx, `SELECT count(*) FROM training_group_members WHERE group_id=$1 AND membership_id=$2`, f.group, f.membership).Scan(&n); e != nil || n != 0 {
 		t.Fatalf("ended association persisted %d %v", n, e)
 	}
 }

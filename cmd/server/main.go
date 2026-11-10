@@ -30,12 +30,20 @@ type databaseCommandConnection interface {
 
 var (
 	connectDatabaseCommand = func(ctx context.Context, databaseURL string) (databaseCommandConnection, error) {
-		return pgx.Connect(ctx, databaseURL)
+		cfg, err := pgx.ParseConfig(databaseURL)
+		if err != nil {
+			return nil, err
+		}
+		if localRecipientPreparationMode() {
+			if !strictUnstampedLocalConnection(cfg) {
+				return nil, errors.New("local database command endpoint rejected before authentication")
+			}
+			installLocalRecipientDialGuard(cfg)
+		}
+		return pgx.ConnectConfig(ctx, cfg)
 	}
 	loadDatabaseCommandConfig = config.Load
 )
-
-const legacyProductionAppDatabaseRole = "mycfc_app"
 
 func main() {
 	ctx := context.Background()
@@ -60,8 +68,17 @@ func main() {
 }
 
 func runServerCommand(ctx context.Context, args []string) error {
+	ctx, cancel := context.WithTimeout(ctx, recipientCLIOperationTimeout)
+	defer cancel()
+	if len(args) > 0 && args[0] == "prepare-local-recipient-floor" {
+		if len(args) != 1 {
+			return errors.New("local floor accepts no arguments")
+		}
+		return prepareLocalRecipientFloor(ctx)
+	}
+
 	if len(args) == 1 && args[0] == "normal-release-contract" {
-		if !releasecontract.Matches(releasecontract.Version, releasecontract.Candidate, releasecontract.Database) || releasecontract.FinalDigest != db.EmbeddedMigrationDigest() {
+		if !releasecontract.Matches(releasecontract.Version, releasecontract.Candidate, releasecontract.Database) || releasecontract.NormalFinalDigest != db.EmbeddedMigrationDigest() {
 			return errors.New("normal release compiled identity or inventory mismatch")
 		}
 		return json.NewEncoder(os.Stdout).Encode(struct {
@@ -71,7 +88,7 @@ func runServerCommand(ctx context.Context, args []string) error {
 			Database     string `json:"database"`
 			ParentDigest string `json:"parent_digest"`
 			FinalDigest  string `json:"final_digest"`
-		}{"mycfc/normal-release/v1", releasecontract.Version, releasecontract.Candidate, releasecontract.Database, releasecontract.NormalParentDigest, releasecontract.FinalDigest})
+		}{"mycfc/normal-release/v1", releasecontract.Version, releasecontract.Candidate, releasecontract.Database, releasecontract.NormalRecipientParentDigest, releasecontract.NormalFinalDigest})
 	}
 
 	if len(args) == 1 && args[0] == "precision-capabilities" {
@@ -141,7 +158,9 @@ func runFreshInitCommand(ctx context.Context) error {
 	}
 	defer conn.Close(ctx)
 	credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
-	return db.FreshInitializeDatabase(ctx, conn, databaseName, credentials)
+	return runOriginalRecipientWriter(ctx, conn, func(ctx context.Context) error {
+		return db.FreshInitializeDatabase(ctx, conn, databaseName, credentials)
+	})
 }
 
 func runDatabaseCommand(ctx context.Context, command string) error {
@@ -165,22 +184,14 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		defer conn.Close(ctx)
 		databaseName := connectionConfig.Database
 		if command == "provision-guardian-activation" {
-			return provisionGuardianActivation(ctx, conn, databaseName)
+			return runOriginalRecipientWriter(ctx, conn, func(ctx context.Context) error { return provisionGuardianActivation(ctx, conn, databaseName) })
 		}
 		if command == "provision-guardian-release-bind" {
-			return provisionGuardianReleaseBind(ctx, conn, databaseName)
+			return runOriginalRecipientWriter(ctx, conn, func(ctx context.Context) error { return provisionGuardianReleaseBind(ctx, conn, databaseName) })
 		}
 		credentials := databaseRoleCredentialsFromEnvironment()
 		configSource := "environment"
-		if command == "migrate" && !databaseRoleIdentifiersComplete(credentials) {
-			if strings.TrimSpace(credentials.AppUsername) == "" {
-				credentials.AppUsername = legacyProductionAppDatabaseRole
-			}
-			if strings.TrimSpace(credentials.MigrationUsername) == "" {
-				credentials.MigrationUsername = connectionConfig.User
-			}
-			configSource = "environment_connection+legacy_role_contract"
-		} else if os.Getenv("APP_ENV") == "production" && !databaseRoleCredentialsComplete(credentials) {
+		if os.Getenv("APP_ENV") == "production" && !databaseRoleCredentialsComplete(credentials) {
 			cfg, loadErr := loadDatabaseCommandConfig(ctx)
 			if loadErr != nil {
 				return fmt.Errorf("load production database role configuration: %w", loadErr)
@@ -188,26 +199,33 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 			credentials = databaseRoleCredentialsFromConfig(cfg)
 			configSource = "environment_connection+aws_remote_roles"
 		}
-		logDatabaseCommandConfiguration(command, configSource, connectionConfig.Host, databaseName, connectionConfig.User, credentials)
-		switch command {
-		case "bootstrap-db":
-			return bootstrapRelease(ctx, conn, databaseName, credentials, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"))
-		case "migrate":
-			if err := requireMigrationExecutionIdentity(ctx, conn, credentials.MigrationUsername); err != nil {
-				return err
-			}
-			if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"), credentials); err != nil {
-				return err
-			}
-			credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
-			return db.ApplyBaselineAndHarden(ctx, conn, databaseName, credentials)
-		case "harden-db":
-			if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"), credentials); err != nil {
-				return err
-			}
-			credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
-			return db.HardenPrivacyExecutionRoles(ctx, conn, databaseName, credentials)
+		if !databaseRoleIdentifiersComplete(credentials) {
+			return errors.New("database command requires configured application and migration identities; URL identity is not role configuration")
 		}
+
+		logDatabaseCommandConfiguration(command, configSource, connectionConfig.Host, databaseName, connectionConfig.User, credentials)
+		return runOriginalRecipientWriter(ctx, conn, func(ctx context.Context) error {
+			switch command {
+			case "bootstrap-db":
+				return bootstrapRelease(ctx, conn, databaseName, credentials, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"))
+			case "migrate":
+				if err := requireMigrationExecutionIdentity(ctx, conn, credentials.MigrationUsername); err != nil {
+					return err
+				}
+				if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"), credentials); err != nil {
+					return err
+				}
+				credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
+				return db.ApplyBaselineAndHarden(ctx, conn, databaseName, credentials)
+			case "harden-db":
+				if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"), credentials); err != nil {
+					return err
+				}
+				credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
+				return db.HardenPrivacyExecutionRoles(ctx, conn, databaseName, credentials)
+			}
+			return errors.New("database command has no mutation implementation")
+		})
 	}
 
 	cfg, err := loadDatabaseCommandConfig(ctx)
@@ -230,10 +248,10 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	}
 	defer conn.Close(ctx)
 	if command == "provision-guardian-activation" {
-		return provisionGuardianActivation(ctx, conn, cfg.DBName)
+		return runOriginalRecipientWriter(ctx, conn, func(ctx context.Context) error { return provisionGuardianActivation(ctx, conn, cfg.DBName) })
 	}
 	if command == "provision-guardian-release-bind" {
-		return provisionGuardianReleaseBind(ctx, conn, cfg.DBName)
+		return runOriginalRecipientWriter(ctx, conn, func(ctx context.Context) error { return provisionGuardianReleaseBind(ctx, conn, cfg.DBName) })
 	}
 
 	credentials := databaseRoleCredentialsFromConfig(cfg)
@@ -242,22 +260,24 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		connectionRole = cfg.PostgresUser
 	}
 	logDatabaseCommandConfiguration(command, "aws_remote", cfg.DBHost, cfg.DBName, connectionRole, credentials)
-	if command == "bootstrap-db" {
-		return bootstrapRelease(ctx, conn, cfg.DBName, credentials, cfg.AppVersion, cfg.GITSHA)
-	}
-	credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
-	if command == "migrate" {
-		if err := requireMigrationExecutionIdentity(ctx, conn, credentials.MigrationUsername); err != nil {
+	return runOriginalRecipientWriter(ctx, conn, func(ctx context.Context) error {
+		if command == "bootstrap-db" {
+			return bootstrapRelease(ctx, conn, cfg.DBName, credentials, cfg.AppVersion, cfg.GITSHA)
+		}
+		credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
+		if command == "migrate" {
+			if err := requireMigrationExecutionIdentity(ctx, conn, credentials.MigrationUsername); err != nil {
+				return err
+			}
+		}
+		if err := requireDisposableCompletion(ctx, conn, cfg.DBName, cfg.AppVersion, cfg.GITSHA, credentials); err != nil {
 			return err
 		}
-	}
-	if err := requireDisposableCompletion(ctx, conn, cfg.DBName, cfg.AppVersion, cfg.GITSHA, credentials); err != nil {
-		return err
-	}
-	if command == "harden-db" {
-		return db.HardenPrivacyExecutionRoles(ctx, conn, cfg.DBName, credentials)
-	}
-	return db.ApplyBaselineAndHarden(ctx, conn, cfg.DBName, credentials)
+		if command == "harden-db" {
+			return db.HardenPrivacyExecutionRoles(ctx, conn, cfg.DBName, credentials)
+		}
+		return db.ApplyBaselineAndHarden(ctx, conn, cfg.DBName, credentials)
+	})
 }
 
 func requireDisposableCompletion(ctx context.Context, conn databaseCommandConnection, database, version, candidate string, roles ...db.RoleCredentials) error {

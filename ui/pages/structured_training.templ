@@ -673,19 +673,23 @@ templ structuredPublicationManagement(page StructuredTrainingPage) {
 <p>Atualize a página antes de rever a publicação.</p>
 } else if publication.ConflictCount > 0 {
 						<div class="notice notice--error" role="alert"><p>{ fmt.Sprintf("%d conflitos de variação impedem a publicação.", publication.ConflictCount) }</p></div>
-					} else if publication.PrescriptionCount == 0 && publication.RemovedCount == 0 {
+					} else if publication.PrescriptionCount == 0 && publication.RemovedCount == 0 && publication.Revision == 0 {
 						<p class="record-meta">Não existem sessões com destinatários válidos nesta semana.</p>
-					} else if publication.Revision > 0 && publication.AddedCount == 0 && publication.ChangedCount == 0 && publication.RemovedCount == 0 {
-						<p class="record-meta">Não há alterações materiais para publicar.</p>
 					} else {
+						if publication.Revision > 0 && publication.AddedCount == 0 && publication.ChangedCount == 0 && publication.RemovedCount == 0 {
+							<p class="record-meta">Não há alterações materiais para publicar. Pode rever os destinatários.</p>
+						}
 						<form class="form-layout form-layout--compact" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/semanas/" + publication.PlanID + "/publicar") }>
 <input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 
 							@page.CSRFField
+							<input type="hidden" name="publication_intent" value="preview"/>
 							<input type="hidden" name="source_updated_at" value={ publication.SourceUpdatedAt }/>
+							<div class="field-group">
 							@components.FieldLabel("publication-summary-" + publication.PlanID, "Resumo desta revisão", true)
-							<input id={ "publication-summary-" + publication.PlanID } name="change_summary" required minlength="2" maxlength="500" placeholder="Ex.: semana publicada após revisão das variações"/>
-							<button type="submit">Pré-visualizado · publicar revisão</button>
+							<textarea id={ "publication-summary-" + publication.PlanID } name="change_summary" rows="3" required minlength="2" maxlength="500" placeholder="Explique a revisão que pretende confirmar"></textarea>
+							</div>
+							<button type="submit">Rever destinatários</button>
 						</form>
 					}
 				</div></article>

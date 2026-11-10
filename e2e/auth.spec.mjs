@@ -1336,7 +1336,30 @@ test.describe('authentication', () => {
     let publicationCard = page.getByRole('heading', { name: weekTitle, exact: true }).locator('xpath=ancestor::article[1]');
     await expect(publicationCard).toContainText('Pré-visualização: 1 novas · 0 alteradas · 0 removidas · 0 sem alterações');
     await publicationCard.getByLabel('Resumo desta revisão').fill('Primeira publicação E2E');
-    await publicationCard.getByRole('button', { name: 'Pré-visualizado · publicar revisão' }).click();
+    const plannerURL = page.url();
+    const [previewResponse] = await Promise.all([
+      page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/publicar')),
+      publicationCard.getByRole('button', { name: 'Rever destinatários', exact: true }).click(),
+    ]);
+    expect(previewResponse.status()).toBe(200);
+    await expect(page.getByRole('heading', { name: 'Destinatários desta revisão', exact: true })).toBeVisible();
+    await expect(page.getByRole('listitem').filter({ hasText: athleteName })).toBeVisible();
+    const confirmation = page.locator('form').filter({ has: page.locator('[name="publication_intent"][value="confirm"]') });
+    await expect(confirmation.locator('[name="reviewed_latest_revision"]')).toHaveValue('0');
+    await expect(confirmation.locator('[name="reviewed_latest_id"]')).toHaveValue('');
+    await expect(confirmation.locator('[name="review_token"]')).not.toHaveValue('');
+    const unchangedPlanner = await page.context().newPage();
+    await unchangedPlanner.goto(plannerURL);
+    const unchangedCard = unchangedPlanner.getByRole('heading', { name: weekTitle, exact: true }).locator('xpath=ancestor::article[1]');
+    await expect(unchangedCard).toContainText('Rascunho nunca publicado');
+    await expect(unchangedCard).not.toContainText('revisão 1');
+    await unchangedPlanner.close();
+    await expect(confirmation.locator('[name="change_summary"]')).toHaveValue('Primeira publicação E2E');
+    const [confirmedResponse] = await Promise.all([
+      page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/publicar')),
+      confirmation.getByRole('button', { name: 'Publicar revisão', exact: true }).click(),
+    ]);
+    expect(confirmedResponse.status()).toBe(303);
     await expect(page.getByRole('status')).toHaveText('Revisão 1 publicada para 1 prescrições privadas.');
     await page.getByRole('tab', { name: 'Publicar' }).click();
     publicationCard = page.getByRole('heading', { name: weekTitle, exact: true }).locator('xpath=ancestor::article[1]');

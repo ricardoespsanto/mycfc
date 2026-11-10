@@ -26,7 +26,7 @@ func trainingPrecisionStatus(ctx context.Context) error {
 		return fmt.Errorf("connect precision status database: %w", e)
 	}
 	defer conn.Close(ctx)
-	state, e := db.VerifyTrainingScheduleRuntime(ctx, conn, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
+	state, e := db.VerifyTrainingRecipientRuntime(ctx, conn, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
 	if e != nil {
 		return e
 	}

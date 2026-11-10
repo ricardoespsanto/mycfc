@@ -60,39 +60,24 @@ func testPublicationRacesMembershipShortening(t *testing.T, iso pgx.TxIsoLevel) 
 			t.Fatal(err)
 		}
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO staff_grants(user_id,capability,programme_id,granted_by_id) VALUES($1,'COACH',$2,$1)`, actor, programme); err != nil {
+		t.Fatal(err)
+	}
 	var source time.Time
 	if err := pool.QueryRow(ctx, `SELECT updated_at FROM training_plans WHERE id=$1`, plan).Scan(&source); err != nil {
 		t.Fatal(err)
 	}
-	input := StructuredPublicationInput{PlanID: plan, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, PublishedByID: actor, ChangeSummary: "Race", Prescriptions: []StructuredPrescriptionInput{{SessionID: session, MembershipID: membership, AthleteUserID: athlete, Snapshot: []byte(`{"schema_version":1}`), SnapshotSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}
-	// Test-only gate after publisher has locked the plan and inserted the header.
-	// The advisory lock holds the publisher while the serializable update takes
-	// the membership row and waits on the plan-touch trigger.
-	if _, err := pool.Exec(ctx, `CREATE OR REPLACE FUNCTION publication_race_gate() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.plan_id = '`+plan.String()+`'::uuid THEN PERFORM pg_advisory_xact_lock(7100339); END IF; RETURN NEW; END $$`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `CREATE TRIGGER publication_race_gate BEFORE INSERT ON training_plan_publications FOR EACH ROW EXECUTE FUNCTION publication_race_gate()`); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		pool.Exec(context.Background(), `DROP TRIGGER IF EXISTS publication_race_gate ON training_plan_publications`)
-		pool.Exec(context.Background(), `DROP FUNCTION IF EXISTS publication_race_gate()`)
-	}()
-	gate, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer gate.Release()
-	if _, err := gate.Exec(ctx, `SELECT pg_advisory_lock(7100339)`); err != nil {
-		t.Fatal(err)
-	}
-	defer gate.Exec(context.Background(), `SELECT pg_advisory_unlock(7100339)`)
+	input := publicationTestReview{PlanID: plan, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, PublishedByID: actor, ChangeSummary: "Race", Prescriptions: []StructuredPrescriptionInput{{SessionID: session, MembershipID: membership, AthleteUserID: athlete, Snapshot: []byte(`{"schema_version":1}`), SnapshotSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}
+	// Pause the real admitted transaction in Go; changing publication triggers
+	// would correctly violate the runtime catalog and test a different failure.
+	ctx, reached, resume := withPublicationTestGate(ctx)
+	defer resume()
 	publishDone := make(chan error, 1)
 	go func() {
-		_, e := (PostgresStructuredTrainingStore{Pool: pool}).PublishStructuredTrainingPlan(ctx, input)
+		_, e := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: pool}, input)
 		publishDone <- e
 	}()
-	waitForRaceQuery(t, ctx, pool, `INSERT INTO training_plan_publications`, "advisory")
+	awaitPublicationTestGate(t, ctx, reached, publishDone)
 	updateDone := make(chan error, 1)
 	go func() {
 		tx, e := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: iso})
@@ -108,9 +93,7 @@ func testPublicationRacesMembershipShortening(t *testing.T, iso pgx.TxIsoLevel) 
 		updateDone <- e
 	}()
 	waitForRaceQuery(t, ctx, pool, `UPDATE user_memberships SET ends_on`, "transactionid")
-	if _, err := gate.Exec(ctx, `SELECT pg_advisory_unlock(7100339)`); err != nil {
-		t.Fatal(err)
-	}
+	resume()
 	pubErr, updateErr := <-publishDone, <-updateDone
 	t.Logf("publisher=%v; shortening=%v", pubErr, updateErr)
 	if pubErr == nil && updateErr == nil {

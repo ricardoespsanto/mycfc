@@ -61,7 +61,7 @@ var (
 		if err := db.VerifyDatedParticipationRuntime(ctx, pool); err != nil {
 			return err
 		}
-		_, err := db.VerifyTrainingScheduleRuntime(ctx, pool, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
+		_, err := db.VerifyTrainingRecipientRuntime(ctx, pool, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
 		return err
 	}
 	loadApplicationAWS = awsconfig.LoadDefaultConfig
@@ -273,7 +273,7 @@ func New(ctx context.Context) (*Application, error) {
 	events := handlers.Events{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	training := handlers.Training{Store: handlers.PostgresTrainingScheduleStore{Querier: dbgen.New(pool), Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
-	structuredTraining := handlers.StructuredTraining{Setup: handlers.PostgresTrainingSetupStore{Pool: pool}, Groups: handlers.PostgresTrainingGroupStore{Pool: pool}, Store: handlers.PostgresStructuredTrainingStore{Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	structuredTraining := handlers.StructuredTraining{HTTPWriteTimeout: cfg.HTTPWriteTimeout, Setup: handlers.PostgresTrainingSetupStore{Pool: pool}, Groups: handlers.PostgresTrainingGroupStore{Pool: pool}, Store: handlers.PostgresStructuredTrainingStore{Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	members := handlers.Members{Seasons: handlers.Seasons{Store: handlers.PostgresSeasonStore{Pool: pool}, System: system, PageMeta: pageMeta, Sessions: sessions}, Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, Classification: handlers.Classification{Setup: handlers.PostgresTrainingSetupStore{Pool: pool}, Store: handlers.PostgresClassificationStore{Pool: pool}, Definitions: handlers.PostgresDefinitionStore{Pool: pool}}, Definitions: handlers.Definitions{Setup: handlers.PostgresTrainingSetupStore{Pool: pool}, Store: handlers.PostgresDefinitionStore{Pool: pool}}}
 	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, Uploads: uploadCoordinator, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: imageDocument.Version, ImageSHA256: imageDocument.SHA256, ImageURL: versionedLegalURL(imageDocument), HealthVersion: privacyDocument.Version, HealthSHA256: privacyDocument.SHA256, HealthURL: versionedLegalURL(privacyDocument), HealthConsentStatement: legalcontent.HealthConsentStatement}
 	polarKey, polarKeyID, polarEnabled, polarConfigErr := cfg.PolarCredentials()
@@ -325,7 +325,7 @@ func newHTTPServer(cfg config.Config, logger *slog.Logger, sessions *scs.Session
 	if len(admission) > 0 {
 		admissionMiddleware = func(next http.Handler) http.Handler { return trainingAdmissionGuard(admission[0], next) }
 	}
-	handler := httpx.Chain(router, httpx.RecoveryMiddleware(logger, http.HandlerFunc(system.InternalError)), httpx.RequestIDMiddleware(), httpx.TrustedProxyMiddleware(trusted), httpx.SecurityHeadersMiddleware(cfg.IsProduction(), cfg.ObjectStorageOrigin()), httpx.AccessLogMiddleware(logger), admissionMiddleware, func(next http.Handler) http.Handler { return sessions.LoadAndSave(next) }, func(next http.Handler) http.Handler { return csrfMiddleware(next) })
+	handler := httpx.Chain(router, httpx.PublicationIngressMiddleware(cfg.HTTPWriteTimeout), httpx.RecoveryMiddleware(logger, http.HandlerFunc(system.InternalError)), httpx.RequestIDMiddleware(), httpx.TrustedProxyMiddleware(trusted), httpx.SecurityHeadersMiddleware(cfg.IsProduction(), cfg.ObjectStorageOrigin()), httpx.AccessLogMiddleware(logger), admissionMiddleware, func(next http.Handler) http.Handler { return sessions.LoadAndSave(next) }, func(next http.Handler) http.Handler { return csrfMiddleware(next) })
 	return &http.Server{Addr: cfg.HTTPAddress(), Handler: handler, ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout, ReadTimeout: cfg.HTTPReadTimeout, WriteTimeout: cfg.HTTPWriteTimeout, IdleTimeout: cfg.HTTPIdleTimeout}
 }
 

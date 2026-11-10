@@ -76,6 +76,10 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO training_sessions(id,plan_id,title,starts_at,ends_at,created_by_id) VALUES($1,$2,'Future training',$3,$4,$5)`, session, plan, sessionAt, sessionAt.Add(time.Hour), actor); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO staff_grants(user_id,capability,programme_id,granted_by_id) VALUES($1,'COACH',$2,$1)`, actor, programme); err != nil {
+		t.Fatal(err)
+	}
+	ctx = context.WithValue(ctx, currentUserKey{}, CurrentUser{ID: actor})
 	recipients, err := store.ListStructuredTrainingPublicationMembers(ctx, plan)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +98,7 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 		return StructuredPrescriptionInput{SessionID: session, MembershipID: memberships[user], AthleteUserID: user, Snapshot: snapshot, SnapshotSHA256: hash}
 	}
 	publish := func(items ...StructuredPrescriptionInput) error {
-		_, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: plan, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, ChangeSummary: "Publication test", PublishedByID: actor, Prescriptions: items})
+		_, err := confirmPublicationTestReview(ctx, store, publicationTestReview{PlanID: plan, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, ChangeSummary: "Publication test", PublishedByID: actor, Prescriptions: items})
 		return err
 	}
 	for _, user := range []uuid.UUID{future, expired} {
@@ -111,7 +115,7 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 	if err := publish(missing); !errors.Is(err, errStructuredTrainingPublicationConflict) {
 		t.Fatalf("missing membership accepted: %v", err)
 	}
-	if _, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: uuid.New()}); err == nil {
+	if _, err := confirmPublicationTestReview(ctx, store, publicationTestReview{PlanID: uuid.New()}); err == nil {
 		t.Fatal("missing plan accepted")
 	}
 	// A database insert fault must be distinct from stale-eligibility conflicts
@@ -127,7 +131,7 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 	if faultErr == nil || errors.Is(faultErr, errStructuredTrainingPublicationConflict) {
 		t.Fatalf("insert failure not propagated: %v", faultErr)
 	}
-	if _, err := store.PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: plan, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, PublishedByID: uuid.New()}); err == nil {
+	if _, err := confirmPublicationTestReview(ctx, store, publicationTestReview{PlanID: plan, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, PublishedByID: uuid.New()}); err == nil {
 		t.Fatal("missing publisher accepted")
 	}
 	closed, err := pgxpool.New(ctx, os.Getenv("TEST_DATABASE_URL"))
@@ -135,7 +139,7 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	closed.Close()
-	if _, err := (PostgresStructuredTrainingStore{Pool: closed}).PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{}); err == nil {
+	if _, err := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: closed}, publicationTestReview{}); err == nil {
 		t.Fatal("closed database accepted publication")
 	}
 	// A row lock held by another writer must fail without a partial header.
@@ -156,7 +160,7 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 	if _, err := held.Exec(ctx, `SELECT id FROM user_memberships WHERE id=$1 FOR UPDATE`, memberships[current]); err != nil {
 		t.Fatal(err)
 	}
-	_, lockErr := (PostgresStructuredTrainingStore{Pool: limited}).PublishStructuredTrainingPlan(ctx, StructuredPublicationInput{PlanID: plan, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, ChangeSummary: "Lock test", PublishedByID: actor, Prescriptions: []StructuredPrescriptionInput{prescription(current)}})
+	_, lockErr := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: limited}, publicationTestReview{PlanID: plan, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, ChangeSummary: "Lock test", PublishedByID: actor, Prescriptions: []StructuredPrescriptionInput{prescription(current)}})
 	if err := held.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +183,9 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 		t.Fatalf("first publish: %v", err)
 	}
 	var originalID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT prescription.snapshot,prescription.snapshot_sha256 FROM training_prescriptions prescription JOIN training_plan_publications publication ON publication.id=prescription.publication_id WHERE publication.plan_id=$1`, plan).Scan(&snapshot, &hash); err != nil {
+		t.Fatal(err)
+	}
 	if err := pool.QueryRow(ctx, `SELECT prescription.id FROM training_prescriptions prescription JOIN training_plan_publications publication ON publication.id=prescription.publication_id WHERE publication.plan_id=$1`, plan).Scan(&originalID); err != nil {
 		t.Fatal(err)
 	}

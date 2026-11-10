@@ -701,7 +701,7 @@ JOIN training_plans plan ON plan.id = publication.plan_id
 JOIN training_groups group_row ON group_row.id = plan.training_group_id
 JOIN training_sessions session ON session.id = $4 AND session.plan_id = plan.id
 JOIN user_memberships membership ON membership.id = $5 AND membership.user_id = $6
-JOIN users athlete ON athlete.id = membership.user_id AND athlete.is_active
+JOIN users athlete ON athlete.id = membership.user_id AND athlete.is_active AND athlete.erased_at IS NULL AND (NOT athlete.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=athlete.id AND guardian_authority_current(relationship.guardian_user_id,athlete.id)))
 JOIN training_group_members group_member ON group_member.group_id = group_row.id AND group_member.membership_id = membership.id
 WHERE publication.id = $1
   AND (group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id)
@@ -2169,6 +2169,7 @@ SELECT plan.id, plan.title, plan.updated_at AS source_updated_at,
        latest.published_at, publisher.name AS published_by_name,
        (latest.source_updated_at IS NOT NULL AND latest.source_updated_at = plan.updated_at) AS publication_current
 FROM training_plans plan
+JOIN training_groups group_row ON group_row.id=plan.training_group_id
 LEFT JOIN LATERAL (
  SELECT publication.revision, publication.source_updated_at, publication.published_at, publication.published_by_id
  FROM training_plan_publications publication
@@ -2178,12 +2179,11 @@ LEFT JOIN LATERAL (
 ) latest ON true
 LEFT JOIN users publisher ON publisher.id = latest.published_by_id
 WHERE plan.training_group_id IS NOT NULL
-  AND ($1::boolean OR EXISTS (
-    SELECT 1 FROM staff_grants grant_row
-    WHERE grant_row.user_id = $2
-      AND grant_row.capability = 'COACH' AND grant_row.revoked_at IS NULL
-      AND (grant_row.programme_id = plan.programme_id OR grant_row.team_id = plan.team_id)
-  ))
+ -- Deprecated is_admin is retained only for source compatibility, never authority.
+ AND $1::boolean IS NOT NULL AND EXISTS(SELECT 1 FROM users actual_actor WHERE actual_actor.id=$2::uuid AND actual_actor.is_active AND actual_actor.erased_at IS NULL AND NOT actual_actor.is_dependent
+ AND actual_actor.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
+ AND (EXISTS(SELECT 1 FROM user_platform_roles assignment JOIN platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actual_actor.id AND role.code='ADMIN') OR EXISTS(SELECT 1 FROM staff_grants grant_row WHERE grant_row.user_id=actual_actor.id AND grant_row.capability='COACH' AND grant_row.revoked_at IS NULL
+ AND ((group_row.programme_id IS NOT NULL AND grant_row.programme_id=group_row.programme_id) OR (group_row.team_id IS NOT NULL AND grant_row.team_id=group_row.team_id)))))
 ORDER BY plan.week_start DESC, plan.id
 `
 
@@ -2967,7 +2967,7 @@ FROM training_plans plan
 JOIN training_groups group_row ON group_row.id = plan.training_group_id
 JOIN training_group_members group_member ON group_member.group_id = group_row.id
 JOIN user_memberships membership ON membership.id = group_member.membership_id
-JOIN users subject ON subject.id = membership.user_id AND subject.is_active
+JOIN users subject ON subject.id = membership.user_id AND subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND guardian_authority_current(relationship.guardian_user_id,subject.id)))
 JOIN training_sessions session ON session.plan_id = plan.id
 WHERE plan.id = $1
   AND (group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id)
@@ -3328,21 +3328,16 @@ JOIN training_group_members current_group_member
  AND current_group_member.membership_id = targets.membership_id
 JOIN users athlete ON athlete.id = membership.user_id
 WHERE variation.is_active
-  AND athlete.is_active
+  AND athlete.is_active AND athlete.erased_at IS NULL AND (NOT athlete.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=athlete.id AND guardian_authority_current(relationship.guardian_user_id,athlete.id)))
   AND membership.starts_on <= details.session_on
   AND (membership.ends_on IS NULL OR membership.ends_on >= details.session_on)
   AND (targets.effective_from IS NULL OR details.session_on >= targets.effective_from)
   AND (targets.effective_until IS NULL OR details.session_on <= targets.effective_until)
-  AND (
-      $1::boolean
-      OR EXISTS (
-          SELECT 1 FROM staff_grants grant_row
-          WHERE grant_row.user_id = $2
-            AND grant_row.capability = 'COACH'
-            AND grant_row.revoked_at IS NULL
-            AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
-      )
-  )
+  -- Deprecated is_admin is a non-authorizing compatibility parameter.
+ AND $1::boolean IS NOT NULL AND EXISTS(SELECT 1 FROM users actual_actor WHERE actual_actor.id=$2::uuid AND actual_actor.is_active AND actual_actor.erased_at IS NULL AND NOT actual_actor.is_dependent
+ AND actual_actor.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
+ AND (EXISTS(SELECT 1 FROM user_platform_roles assignment JOIN platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actual_actor.id AND role.code='ADMIN') OR EXISTS(SELECT 1 FROM staff_grants grant_row WHERE grant_row.user_id=actual_actor.id AND grant_row.capability='COACH' AND grant_row.revoked_at IS NULL
+ AND ((group_row.programme_id IS NOT NULL AND grant_row.programme_id=group_row.programme_id) OR (group_row.team_id IS NOT NULL AND grant_row.team_id=group_row.team_id)))))
 ORDER BY plan.week_start DESC,details.session_on, details.starts_at NULLS LAST, athlete.name, details.subject_label,
          targets.priority DESC, variation.created_at, variation.id
 `

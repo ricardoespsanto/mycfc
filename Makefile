@@ -107,15 +107,15 @@ approval-packet: ## Generate a short human approval packet (set APPROVAL_KIND an
 	sh scripts/approval-packet.sh "$(APPROVAL_KIND)" "$(OUTPUT)"
 
 dev-infra: ## Start local PostgreSQL, MinIO, and Mailpit
-	docker compose up -d --wait postgres minio mailpit
-	docker compose run --rm minio-init
+	python3 scripts/local-db-command.py bootstrap -- docker compose --env-file /dev/null --project-name "$${COMPOSE_PROJECT_NAME:-mycfc}" -f compose.yaml up -d --wait postgres minio mailpit
+	python3 scripts/local-db-command.py bootstrap -- docker compose --env-file /dev/null --project-name "$${COMPOSE_PROJECT_NAME:-mycfc}" -f compose.yaml run --rm minio-init
 
 dev-infra-down: ## Stop local services without deleting data
-	docker compose down
+	python3 scripts/local-db-command.py bootstrap -- docker compose --env-file /dev/null --project-name "$${COMPOSE_PROJECT_NAME:-mycfc}" -f compose.yaml down
 
 dev-infra-clean: ## Delete local services and all local data
 	@if [[ "$${CI:-}" != "true" ]]; then read -r -p "Delete all local MyCFC data? [y/N] " answer; [[ $$answer == [yY] ]]; fi
-	docker compose down -v
+	python3 scripts/local-db-command.py bootstrap -- docker compose --env-file /dev/null --project-name "$${COMPOSE_PROJECT_NAME:-mycfc}" -f compose.yaml down -v
 
 generate: ## Generate templ/sqlc output and production browser assets
 	$(TEMPL) generate
@@ -128,26 +128,26 @@ generate-fast: ## Regenerate source and assets for Air
 	$(SQLC) generate
 	npm run build
 
-db-provision: ## Provision the reset-only baseline into an empty local database
-	@set -a; source .env; set +a; if docker compose exec -T postgres psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc "SELECT to_regclass('public.users') IS NOT NULL" | grep -qx t; then echo "local database already has the baseline; use make reset-local to recreate it"; else docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" < internal/db/schema.sql; fi
+db-provision: ## Provision and explicitly prepare the owned local baseline
+	bash scripts/local-fixture.sh mycfc
 
-db-provision-test: ## Recreate and provision the local integration-test database
-	@set -a; source .env; set +a; docker compose exec -T postgres dropdb -U "$$POSTGRES_USER" --if-exists mycfc_test; docker compose exec -T postgres createdb -U "$$POSTGRES_USER" mycfc_test; docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d mycfc_test < internal/db/schema.sql
+db-provision-test: ## Recreate and prepare the owned local integration-test database
+	bash scripts/local-fixture.sh mycfc_test
 
 dev-bootstrap: ## Create .env, start infrastructure, migrate and build assets
 	./scripts/local-bootstrap.sh
 
 dev: ## Run the application through Air (never go run)
-	@set -a; source .env; set +a; exec $(AIR) -c .air.toml
+	@python3 scripts/local-db-command.py runtime -- $(AIR) -c .air.toml
 
 ui-review-reset: ## Recreate the isolated UI-review database and deterministic personas
 	./scripts/ui-review-reset.sh
 
 ui-review-dev: ui-review-reset ## Run the UI-review dataset through Air
-	@set -a; source .env; set +a; DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_ui_review?sslmode=disable" exec $(AIR) -c .air.toml
+	@python3 scripts/local-db-command.py --database mycfc_ui_review runtime -- $(AIR) -c .air.toml
 
 ui-review-screenshots: ui-review-reset ## Capture deterministic desktop/mobile UI-review screenshots
-	docker compose --profile ui-review up --force-recreate --abort-on-container-exit --exit-code-from ui-review-capture ui-review-app ui-review-capture
+	python3 scripts/local-db-command.py runtime -- docker compose --env-file /dev/null --project-name "$${COMPOSE_PROJECT_NAME:-mycfc}" -f compose.yaml --profile ui-review up --force-recreate --abort-on-container-exit --exit-code-from ui-review-capture ui-review-app ui-review-capture
 
 test: ## Run unit tests
 	go test ./internal/... ./cmd/... ./ui/...
@@ -157,6 +157,7 @@ test-coverage: ## Run unit tests and write text/HTML reports with a regression f
 
 test-deployment: ## Run production release orchestration tests
 	python3 deployment/precision-admission_test.py
+	python3 scripts/local-db-command_test.py
 	$(MAKE) test-release-tooling
 	sh deployment/mycfc-pull-release-timer_test.sh
 	sh deployment/pull-release_test.sh
@@ -171,14 +172,14 @@ test-deployment: ## Run production release orchestration tests
 	sh deployment/retire-privacy-automation_test.sh
 
 test-integration: dev-infra db-provision-test ## Run integration tests against local services
-	@set -a; source .env; set +a; TEST_DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:5432/mycfc_test?sslmode=disable" go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/app/... ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/mediauploads/... ./cmd/media-cleanup/... ./cmd/data-retention/... ./cmd/guardian-activation/... ./cmd/server/...
+	@python3 scripts/local-db-command.py --database mycfc_test bootstrap -- bash -c 'export TEST_DATABASE_URL="$$DATABASE_URL"; exec go test -p=1 -tags=integration $(INTEGRATION_TEST_FLAGS) ./internal/app/... ./internal/db/... ./internal/handlers/... ./internal/storage/... ./internal/mediauploads/... ./cmd/media-cleanup/... ./cmd/data-retention/... ./cmd/guardian-activation/... ./cmd/server/...'
 
 test-e2e: dev-bootstrap ## Run browser and accessibility tests
-	docker compose --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e
+	python3 scripts/local-db-command.py runtime -- docker compose --env-file /dev/null --project-name "$${COMPOSE_PROJECT_NAME:-mycfc}" -f compose.yaml --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e
 
 test-e2e-ci: ## Run the lean CI browser and accessibility gate
 	./scripts/e2e-ci-bootstrap.sh
-	docker compose -f compose.yaml -f compose.e2e-ci.yaml --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e
+	python3 scripts/local-db-command.py runtime -- docker compose --env-file /dev/null --project-name "$${COMPOSE_PROJECT_NAME:-mycfc}" -f compose.yaml -f compose.e2e-ci.yaml --profile e2e up --force-recreate --abort-on-container-exit --exit-code-from e2e e2e-app e2e
 
 test-e2e-workers: ## Record 20 representative E2E runs (set E2E_WORKERS=2, 3, or 4)
 	@test -n "$(E2E_WORKERS)" || { echo 'set E2E_WORKERS to the candidate worker count'; exit 2; }

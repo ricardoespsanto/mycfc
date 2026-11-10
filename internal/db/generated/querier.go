@@ -186,6 +186,8 @@ type Querier interface {
 	HasConsentVersion(ctx context.Context, arg HasConsentVersionParams) (bool, error)
 	HasCurrentGuardianAuthorityForSubject(ctx context.Context, subjectID uuid.UUID) (bool, error)
 	HasVerifiedGuardianAuthority(ctx context.Context, actorID uuid.UUID) (bool, error)
+	InsertPrescription(ctx context.Context, arg InsertPrescriptionParams) (TrainingPrescription, error)
+	InsertPublication(ctx context.Context, arg InsertPublicationParams) (TrainingPlanPublication, error)
 	InsertTaskTrainingGroup(ctx context.Context, arg InsertTaskTrainingGroupParams) (TrainingGroup, error)
 	IsGuardianAuthorityCurrent(ctx context.Context, arg IsGuardianAuthorityCurrentParams) (bool, error)
 	IssueGuardianAuthorityInvitation(ctx context.Context, arg IssueGuardianAuthorityInvitationParams) (IssueGuardianAuthorityInvitationRow, error)
@@ -281,6 +283,10 @@ type Querier interface {
 	ListVisibleTrainingRoutines(ctx context.Context, arg ListVisibleTrainingRoutinesParams) ([]ListVisibleTrainingRoutinesRow, error)
 	ListWhatsAppGroupsForUserProgramme(ctx context.Context, arg ListWhatsAppGroupsForUserProgrammeParams) ([]WhatsappGroup, error)
 	LockActiveAdult(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	LockPublicationCandidateMemberships(ctx context.Context, arg LockPublicationCandidateMembershipsParams) ([]uuid.UUID, error)
+	LockPublicationCandidateUsers(ctx context.Context, arg LockPublicationCandidateUsersParams) ([]uuid.UUID, error)
+	LockPublicationPlan(ctx context.Context, arg LockPublicationPlanParams) (LockPublicationPlanRow, error)
+	LockPublicationReferencedEvents(ctx context.Context, arg LockPublicationReferencedEventsParams) ([]LockPublicationReferencedEventsRow, error)
 	// Lock every intended row in UUID order before any prescription insert. A
 	// concurrent non-key ends_on update must finish (or abort the serializable
 	// publication) before final eligibility is accepted.
@@ -296,6 +302,16 @@ type Querier interface {
 	MoveTrainingSessionSegment(ctx context.Context, arg MoveTrainingSessionSegmentParams) (bool, error)
 	ProposeGuardianAgeHandoffEmail(ctx context.Context, arg ProposeGuardianAgeHandoffEmailParams) (GuardianAgeHandoff, error)
 	PruneGuardianApplicationRateEvents(ctx context.Context) (int64, error)
+	PublicationEligibleRecipients(ctx context.Context, arg PublicationEligibleRecipientsParams) ([]PublicationEligibleRecipientsRow, error)
+	PublicationFinalFacts(ctx context.Context, arg PublicationFinalFactsParams) (PublicationFinalFactsRow, error)
+	PublicationLatestHashes(ctx context.Context, arg PublicationLatestHashesParams) ([]PublicationLatestHashesRow, error)
+	// Corrected recipient publication: exact actor/group scope and bounded typed source.
+	// Shared projections are intentionally repeated for independently authorized statements.
+	PublicationPlanForReview(ctx context.Context, arg PublicationPlanForReviewParams) (PublicationPlanForReviewRow, error)
+	PublicationRawSource(ctx context.Context, arg PublicationRawSourceParams) (PublicationRawSourceRow, error)
+	PublicationSourceBudget(ctx context.Context, arg PublicationSourceBudgetParams) (PublicationSourceBudgetRow, error)
+	PublicationStructuralCandidates(ctx context.Context, arg PublicationStructuralCandidatesParams) ([]PublicationStructuralCandidatesRow, error)
+	PublicationVariationMatches(ctx context.Context, arg PublicationVariationMatchesParams) ([]PublicationVariationMatchesRow, error)
 	PublishAnnouncement(ctx context.Context, arg PublishAnnouncementParams) (int64, error)
 	PublishNews(ctx context.Context, id uuid.UUID) (int64, error)
 	ReactivateEquipmentWithAudit(ctx context.Context, arg ReactivateEquipmentWithAuditParams) (ReactivateEquipmentWithAuditRow, error)

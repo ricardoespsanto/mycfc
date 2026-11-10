@@ -99,18 +99,32 @@ test('routine filters retain selected empty day and advanced contextual results 
 
 test('real engine publishes only selected week and shows current revision with prospective counts',async({page})=>{
   test.skip(phase!=='publish');await login(page);await page.goto(url());await expect(page.locator('.week-publication')).toContainText('Rascunho · nunca publicado');await expect(page.locator('.week-publication')).toContainText('2 destinatários · 10 prescrições previstas');
-  await openReview(page);await expect(review(page).locator('article h3')).toHaveText(['Semana forma A']);const form=review(page).locator(`form[action$="/${id(300)}/publicar"]`);await form.locator('[name="change_summary"]').fill('Publicação sintética verificada');await submit(page,form.getByRole('button'));
+  await openReview(page);await expect(review(page).locator('article h3')).toHaveText(['Semana forma A']);const form=review(page).locator(`form[action$="/${id(300)}/publicar"]`);await form.locator('[name="change_summary"]').fill('Publicação sintética verificada');await submit(page,form.getByRole('button',{name:'Rever destinatários',exact:true}),200);
+  const confirm=page.locator('form').filter({has:page.locator('[name="publication_intent"][value="confirm"]')});
+  await expect(confirm.locator('[name="reviewed_latest_revision"]')).toHaveValue('0');await expect(confirm.locator('[name="reviewed_latest_id"]')).toHaveValue('');await expect(confirm.locator('[name="review_token"]')).not.toHaveValue('');
+  await expect(page.getByRole('heading',{name:'Destinatários desta revisão',exact:true})).toBeVisible();
+  const uncommitted=await page.request.get(url());expect(await uncommitted.text()).toContain('Rascunho · nunca publicado');
+  await expect(confirm.locator('[name="return_group"]')).toHaveValue(id(200));await expect(confirm.locator('[name="return_week"]')).toHaveValue(id(300));await expect(confirm.locator('[name="return_day"]')).toHaveValue(fixture().days[0]);
+  await submit(page,confirm.getByRole('button',{name:'Publicar revisão',exact:true}));
   await exactContext(page);await expect(page.locator('.week-publication')).toContainText('Publicado · revisão 1');await audit(page,'published-current');
 });
 
 test('published snapshots and outcomes survive navigation and actual draft edit reports changes',async({browser})=>{
   test.skip(phase!=='changes');const context=await browser.newContext();const page=await context.newPage();await login(page);await page.goto(url());await expect(page.locator('.week-publication')).toContainText('Publicado · revisão 1');
   const stale=await context.newPage();await stale.goto(url());await openReview(stale);const form=review(stale).locator(`form[action$="/${id(300)}/publicar"]`);
-  // A current revision has no publish mutation; get a real pending draft first.
+  // Prepare a genuine pending draft before signing the review that will become stale.
   const session=await addSession(page,{title:'Alteração real de rascunho'});expect(session).toBeTruthy();await expect(page.locator('.week-publication')).toContainText('Alterações por publicar · última revisão 1');await expect(page.locator('.week-publication')).toContainText('Os atletas continuam a ver a versão publicada');
-  await stale.reload();await openReview(stale);await expect(form).toBeVisible();await form.locator('[name="change_summary"]').fill('Revisão obsoleta recusada');
-  await addSession(page,{day:fixture().days[3],title:'Segunda alteração real de rascunho',start:'19:10',end:'19:50'});await submit(stale,form.getByRole('button'),409);
-  await exactContext(stale);await expect(stale.getByRole('alert').filter({hasText:/plano mudou|plano já foi/})).toBeVisible();await audit(stale,'stale-publication');await context.close();
+  await stale.reload();await openReview(stale);await expect(form).toBeVisible();await form.locator('[name="change_summary"]').fill('Revisão obsoleta recusada');await submit(stale,form.getByRole('button',{name:'Rever destinatários',exact:true}),200);
+  const confirm=stale.locator('form').filter({has:stale.locator('[name="publication_intent"][value="confirm"]')});
+  const original={};for(const name of ['source_updated_at','review_token','reviewed_latest_id','reviewed_latest_revision','return_group','return_week','return_session','return_day'])original[name]=await confirm.locator(`[name="${name}"]`).inputValue();
+  const names=await stale.locator('.record-list .record-item__copy strong').allTextContents();expect(names.length).toBeGreaterThan(0);
+  await addSession(page,{day:fixture().days[3],title:'Segunda alteração real de rascunho',start:'19:10',end:'19:50'});await submit(stale,confirm.getByRole('button',{name:'Publicar revisão',exact:true}),409);
+  await expect(stale.getByRole('alert').filter({hasText:/semana, os destinatários ou a revisão atual mudaram/})).toBeVisible();await expect(stale.locator('[name="confirm"]')).toHaveCount(0);
+  for(const name of names)await expect(stale.locator('.task-form')).not.toContainText(name);
+  const retry=stale.locator('form').filter({has:stale.locator('[name="publication_intent"][value="preview"]')});for(const [name,value]of Object.entries(original))await expect(retry.locator(`[name="${name}"]`)).toHaveValue(value);
+  await expect(retry.locator('[name="change_summary"]')).toHaveValue('Revisão obsoleta recusada');await audit(stale,'stale-publication');
+  await submit(stale,retry.getByRole('button',{name:'Rever destinatários',exact:true}),200);await expect(stale.locator('[name="publication_intent"][value="confirm"]')).toHaveCount(1);await expect(stale.locator('[name="review_token"]').first()).not.toHaveValue(original.review_token);
+  await stale.getByRole('link',{name:'Voltar à semana',exact:true}).click();await exactContext(stale);await context.close();
 });
 
 test('forged group week and session combinations never expose another scope',async({page})=>{

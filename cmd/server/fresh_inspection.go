@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/cfcoimbra/mycfc/internal/db"
-	"github.com/cfcoimbra/mycfc/internal/releasecontract"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -16,9 +15,6 @@ var connectFreshInspector = func(ctx context.Context, cfg *pgx.ConnConfig) (data
 // A safe inspection does not authorize executing migrations on a privileged
 // original connection. Unstamped local explicit-connection behavior is retained.
 func requireMigrationExecutionIdentity(ctx context.Context, conn databaseCommandConnection, migrationRole string) error {
-	if releasecontract.Version == "" && releasecontract.Candidate == "" {
-		return nil
-	}
 	var allowed bool
 	err := conn.QueryRow(ctx, `SELECT session_user OPERATOR(pg_catalog.=) current_user
  AND session_user OPERATOR(pg_catalog.=) $1::pg_catalog.name AND NOT r.rolsuper
@@ -29,7 +25,7 @@ func requireMigrationExecutionIdentity(ctx context.Context, conn databaseCommand
 	return nil
 }
 
-func inspectFreshInitialization(ctx context.Context, receipt databaseCommandConnection, roles db.RoleCredentials, database, version, candidate string) (bool, error) {
+func inspectFreshInitialization(ctx context.Context, receipt databaseCommandConnection, roles db.RoleCredentials, database, version, candidate string) (matches bool, resultErr error) {
 	// Preserve the old disposable path: it need not have a migration login yet.
 	// This fixed catalog lookup never evaluates a migration-owned relation.
 	var exists bool
@@ -62,6 +58,11 @@ func inspectFreshInitialization(ctx context.Context, receipt databaseCommandConn
 	if err != nil {
 		return false, errors.New("fresh initialization migration connection rejected")
 	}
-	defer inspector.Close(context.WithoutCancel(ctx))
+	defer func() {
+		if closeErr := inspector.Close(ctx); closeErr != nil && resultErr == nil {
+			matches = false
+			resultErr = errors.New("fresh initialization inspector cleanup failed")
+		}
+	}()
 	return db.FreshInitializationMatchesWithInspector(ctx, receipt, inspector, roles.MigrationUsername, database, version, candidate)
 }

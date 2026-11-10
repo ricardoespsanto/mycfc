@@ -83,7 +83,7 @@ func VerifyTrainingScheduleMigrationFinal(ctx context.Context, q TrainingSchedul
 // verifyTrainingScheduleAdmissionSchema accepts only explicitly reviewed old
 // inventories before migration, and the current final C schema afterward.
 func verifyTrainingScheduleAdmissionSchema(ctx context.Context, q TrainingScheduleQueryReader, digest string) error {
-	if digest == EmbeddedMigrationDigest() {
+	if digest == EmbeddedMigrationDigest() || digest == releasecontract.NormalRecipientParentDigest {
 		return verifyTrainingScheduleSchema(ctx, q, TrainingScheduleContractC, false)
 	}
 	if digest != releasecontract.NormalParentDigest && digest != releasecontract.FreshGenesisDigest {

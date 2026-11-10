@@ -15,6 +15,7 @@ import (
 )
 
 func TestFreshInitCommandDispatchAndConfigurationBoundaries(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	if err := runServerCommand(t.Context(), []string{"fresh-init-db"}); err == nil || !strings.Contains(err.Error(), "--confirm-empty") {
 		t.Fatalf("missing explicit confirmation accepted: %v", err)
 	}
@@ -90,7 +91,7 @@ func (freshReceiptRow) Scan(dest ...any) error {
 	*dest[0].(*bool) = true
 	*dest[1].(*string) = releasecontract.Version
 	*dest[2].(*string) = releasecontract.Candidate
-	*dest[3].(*string) = releasecontract.FinalDigest
+	*dest[3].(*string) = releasecontract.NormalFinalDigest
 	return nil
 }
 

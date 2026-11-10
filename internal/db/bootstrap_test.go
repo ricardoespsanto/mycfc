@@ -148,6 +148,9 @@ func (t *bootstrapTransactionFake) QueryRow(_ context.Context, statement string,
 	if strings.Contains(statement, "dated participation postcondition") {
 		return bootstrapRow{exists: !t.missingDatedContract}
 	}
+	if strings.Contains(statement, "training recipient ") {
+		return bootstrapRow{exists: true}
+	}
 	if strings.Contains(statement, "training schedule ") {
 		return bootstrapRow{exists: true}
 	}

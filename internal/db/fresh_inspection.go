@@ -56,7 +56,7 @@ func inspectFreshInitializationLedger(ctx context.Context, receipt interface {
 	success := false
 	defer func() {
 		if !success {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+			_ = tx.Rollback(ctx)
 		}
 	}()
 	// No untrusted relation/expression has been evaluated before this boundary.

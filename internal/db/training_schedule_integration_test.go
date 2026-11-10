@@ -107,7 +107,7 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, version := range EmbeddedMigrationInventory() {
-		if version != TrainingScheduleCompatibilityMigration {
+		if version != TrainingScheduleCompatibilityMigration && version != TrainingRecipientRevisionMigration {
 			if _, err := low.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES($1)`, version); err != nil {
 				t.Fatal(err)
 			}

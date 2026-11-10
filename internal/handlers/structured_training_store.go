@@ -110,14 +110,6 @@ type StructuredPrescriptionInput struct {
 	SnapshotSHA256 string
 }
 
-type StructuredPublicationInput struct {
-	PlanID          uuid.UUID
-	SourceUpdatedAt pgtype.Timestamptz
-	ChangeSummary   string
-	PublishedByID   uuid.UUID
-	Prescriptions   []StructuredPrescriptionInput
-}
-
 type StructuredTrainingStore interface {
 	ListEligibleTrainingGroupMemberships(context.Context, dbgen.ListEligibleTrainingGroupMembershipsParams) ([]dbgen.ListEligibleTrainingGroupMembershipsRow, error)
 	ListStructuredTrainingOverviewForManager(context.Context, dbgen.ListStructuredTrainingOverviewForManagerParams) ([]dbgen.ListStructuredTrainingOverviewForManagerRow, error)
@@ -171,7 +163,6 @@ type StructuredTrainingStore interface {
 	RetireTrainingVariation(context.Context, dbgen.RetireTrainingVariationParams) (int64, error)
 	ListManagedTrainingPublicationStates(context.Context, dbgen.ListManagedTrainingPublicationStatesParams) ([]dbgen.ListManagedTrainingPublicationStatesRow, error)
 	ListStructuredTrainingPublicationMembers(context.Context, uuid.UUID) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error)
-	PublishStructuredTrainingPlan(context.Context, StructuredPublicationInput) (dbgen.TrainingPlanPublication, error)
 	ListTrainingPrescriptionsForViewer(context.Context, dbgen.ListTrainingPrescriptionsForViewerParams) ([]dbgen.ListTrainingPrescriptionsForViewerRow, error)
 	ListLatestTrainingPrescriptionHashesForPlan(context.Context, uuid.UUID) ([]dbgen.ListLatestTrainingPrescriptionHashesForPlanRow, error)
 	GetTrainingPrescriptionForViewer(context.Context, dbgen.GetTrainingPrescriptionForViewerParams) (dbgen.GetTrainingPrescriptionForViewerRow, error)
@@ -246,8 +237,16 @@ func (s PostgresStructuredTrainingStore) ListManagedTrainingPublicationStates(ct
 	return s.queries().ListManagedTrainingPublicationStates(ctx, params)
 }
 
-func (s PostgresStructuredTrainingStore) ListStructuredTrainingPublicationMembers(ctx context.Context, params uuid.UUID) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error) {
-	return s.queries().ListStructuredTrainingPublicationMembers(ctx, params)
+func (s PostgresStructuredTrainingStore) ListStructuredTrainingPublicationMembers(ctx context.Context, plan uuid.UUID) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error) {
+	rows, err := s.queries().PublicationEligibleRecipients(ctx, dbgen.PublicationEligibleRecipientsParams{ActorID: trainingWriteActor(ctx), PlanID: plan})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]dbgen.ListStructuredTrainingPublicationMembersRow, len(rows))
+	for i, row := range rows {
+		result[i] = dbgen.ListStructuredTrainingPublicationMembersRow(row)
+	}
+	return result, nil
 }
 
 func (s PostgresStructuredTrainingStore) ListTrainingPrescriptionsForViewer(ctx context.Context, params dbgen.ListTrainingPrescriptionsForViewerParams) ([]dbgen.ListTrainingPrescriptionsForViewerRow, error) {
@@ -255,7 +254,27 @@ func (s PostgresStructuredTrainingStore) ListTrainingPrescriptionsForViewer(ctx 
 }
 
 func (s PostgresStructuredTrainingStore) ListLatestTrainingPrescriptionHashesForPlan(ctx context.Context, planID uuid.UUID) ([]dbgen.ListLatestTrainingPrescriptionHashesForPlanRow, error) {
-	return s.queries().ListLatestTrainingPrescriptionHashesForPlan(ctx, planID)
+	actor := trainingWriteActor(ctx)
+	q := s.queries()
+	header, err := q.PublicationPlanForReview(ctx, dbgen.PublicationPlanForReviewParams{ActorID: actor, PlanID: planID})
+	if err != nil {
+		return nil, err
+	}
+	if header.LatestPublicationID == nil {
+		return []dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{}, nil
+	}
+	rows, err := q.PublicationLatestHashes(ctx, dbgen.PublicationLatestHashesParams{ActorID: actor, PlanID: planID, PublicationID: *header.LatestPublicationID})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > trainingPublicationReviewMaxTuples {
+		return nil, errTrainingPublicationReviewLimit
+	}
+	result := make([]dbgen.ListLatestTrainingPrescriptionHashesForPlanRow, len(rows))
+	for i, row := range rows {
+		result[i] = dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{MembershipID: row.MembershipID, SessionID: row.SessionID, SnapshotSha256: row.SnapshotSha256}
+	}
+	return result, nil
 }
 
 func (s PostgresStructuredTrainingStore) GetTrainingPrescriptionForViewer(ctx context.Context, params dbgen.GetTrainingPrescriptionForViewerParams) (dbgen.GetTrainingPrescriptionForViewerRow, error) {
@@ -272,78 +291,6 @@ func structuredPublicationConcurrencyError(err error) error {
 		return errStructuredTrainingPublicationConflict
 	}
 	return err
-}
-
-func (s PostgresStructuredTrainingStore) PublishStructuredTrainingPlan(ctx context.Context, input StructuredPublicationInput) (publication dbgen.TrainingPlanPublication, err error) {
-	defer func() { err = trainingScheduleWriteError(err) }()
-	defer func() { err = structuredPublicationConcurrencyError(err) }()
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	if err != nil {
-		return publication, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err = lockTrainingGroupActor(ctx, tx, input.PublishedByID); err != nil {
-		return publication, trainingScopeWriteError(err)
-	}
-	queries := dbgen.New(tx)
-	if err = guardTrainingSchedulePlans(ctx, queries, input.PublishedByID, input.PlanID); err != nil {
-		return publication, err
-	}
-	for _, p := range input.Prescriptions {
-		if e := unsupportedTrainingArtifact(p.Snapshot); e != nil {
-			return publication, e
-		}
-	}
-	state, err := queries.LockStructuredTrainingPlanForPublication(ctx, input.PlanID)
-	if err != nil {
-		return publication, err
-	}
-	if !state.UpdatedAt.Valid || !input.SourceUpdatedAt.Valid || !state.UpdatedAt.Time.Equal(input.SourceUpdatedAt.Time) {
-		return publication, errStructuredTrainingPublicationConflict
-	}
-	lockedIDs := make([]uuid.UUID, 0, len(input.Prescriptions))
-	seen := make(map[uuid.UUID]bool, len(input.Prescriptions))
-	for _, prescription := range input.Prescriptions {
-		if !seen[prescription.MembershipID] {
-			seen[prescription.MembershipID] = true
-			lockedIDs = append(lockedIDs, prescription.MembershipID)
-		}
-	}
-	if len(lockedIDs) > 0 {
-		rows, lockErr := queries.LockStructuredPublicationMemberships(ctx, lockedIDs)
-		if lockErr != nil {
-			return publication, structuredPublicationConcurrencyError(lockErr)
-		}
-		if len(rows) != len(lockedIDs) {
-			return publication, errStructuredTrainingPublicationConflict
-		}
-	}
-	var supersedesID *uuid.UUID
-	if state.LatestPublicationID != uuid.Nil {
-		supersedesID = &state.LatestPublicationID
-	}
-	publication, err = queries.CreateTrainingPlanPublication(ctx, dbgen.CreateTrainingPlanPublicationParams{
-		PlanID: input.PlanID, Revision: state.LatestRevision + 1, SourceUpdatedAt: state.UpdatedAt,
-		ChangeSummary: input.ChangeSummary, SupersedesID: supersedesID, PublishedByID: input.PublishedByID,
-	})
-	if err != nil {
-		return publication, err
-	}
-	for _, prescription := range input.Prescriptions {
-		if _, err = queries.CreateTrainingPrescription(ctx, dbgen.CreateTrainingPrescriptionParams{
-			PublicationID: publication.ID, SessionID: prescription.SessionID, MembershipID: prescription.MembershipID,
-			AthleteUserID: &prescription.AthleteUserID, Snapshot: prescription.Snapshot, SnapshotSha256: prescription.SnapshotSHA256,
-		}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return publication, errStructuredTrainingPublicationConflict
-			}
-			return publication, err
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return publication, err
-	}
-	return publication, nil
 }
 
 func (s PostgresStructuredTrainingStore) CreateGroup(ctx context.Context, input StructuredTrainingGroupInput) (dbgen.TrainingGroup, error) {
