@@ -1176,7 +1176,7 @@ JOIN LATERAL (
 ) latest ON true
 WHERE (
     ((athlete.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),athlete.id))
-      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED')))
+      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED' AND EXISTS(SELECT 1 FROM public.training_sessions historical_session WHERE historical_session.id=prescription.session_id AND public.training_session_local_date(historical_session.scheduled_on,historical_session.starts_at)<(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date))))
     OR sqlc.arg(is_admin)::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -1228,7 +1228,7 @@ JOIN LATERAL (
 WHERE prescription.id = sqlc.arg(id)
   AND (
     ((athlete.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),athlete.id))
-      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED')))
+      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED' AND EXISTS(SELECT 1 FROM public.training_sessions historical_session WHERE historical_session.id=prescription.session_id AND public.training_session_local_date(historical_session.scheduled_on,historical_session.starts_at)<(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date))))
     OR sqlc.arg(is_admin)::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -1253,7 +1253,7 @@ WHERE prescription.session_id = sqlc.arg(session_id)
   )
   AND (
     ((athlete.id = sqlc.arg(user_id) OR guardian_authority_current(sqlc.arg(user_id),athlete.id))
-      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED')))
+      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED' AND EXISTS(SELECT 1 FROM public.training_sessions historical_session WHERE historical_session.id=prescription.session_id AND public.training_session_local_date(historical_session.scheduled_on,historical_session.starts_at)<(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date))))
     OR sqlc.arg(is_admin)::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row

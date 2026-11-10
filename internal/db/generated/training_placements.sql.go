@@ -672,8 +672,10 @@ SELECT prescription.id AS prescription_id,prescription.session_id,session.title,
  AND public.training_session_local_date(session.scheduled_on,session.starts_at)=$1::date
  AND(session.starts_at IS NULL OR session.starts_at<=captured.decision_at))::boolean AS requires_policy
 FROM public.training_group_placements placement JOIN public.training_prescriptions prescription ON prescription.placement_id=placement.id
+JOIN public.users subject ON subject.id=placement.subject_user_id AND subject.is_active AND subject.erased_at IS NULL
 JOIN public.training_sessions session ON session.id=prescription.session_id CROSS JOIN captured
 WHERE placement.id=$2::uuid AND placement.subject_user_id IS NOT NULL
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships r WHERE r.subject_user_id=subject.id AND public.guardian_authority_current(r.guardian_user_id,subject.id)))
  AND public.training_placement_actor_scope($3::uuid,placement.group_id)
 ORDER BY prescription.id LIMIT 4097
 `
@@ -922,8 +924,10 @@ SELECT placement.id,placement.subject_user_id,placement.programme_id,placement.g
  placement.starts_on,placement.ends_on,placement.change_id,placement.version,placement.superseded_by_change_id,placement.cancelled_by_change_id,
  head.revision,placement.created_at,placement.updated_at
 FROM public.training_group_placements placement JOIN public.training_groups group_row ON group_row.id=placement.group_id
+JOIN public.users subject ON subject.id=placement.subject_user_id AND subject.is_active AND subject.erased_at IS NULL
 JOIN public.training_placement_heads head ON head.subject_user_id=placement.subject_user_id AND head.programme_id=placement.programme_id
 WHERE placement.subject_user_id=$1::uuid AND placement.programme_id=$2::uuid
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships r WHERE r.subject_user_id=subject.id AND public.guardian_authority_current(r.guardian_user_id,subject.id)))
  AND public.training_placement_actor_scope($3::uuid,placement.group_id)
 ORDER BY placement.starts_on,placement.id LIMIT $4::integer
 `

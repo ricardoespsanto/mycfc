@@ -597,7 +597,7 @@ FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
 LEFT JOIN training_session_outcomes o ON o.session_id = s.id AND o.user_id = $1
-WHERE (p.training_group_id IS NULL OR o.status='COMPLETED' OR EXISTS(SELECT 1 FROM training_prescriptions available WHERE available.session_id=s.id AND available.athlete_user_id=$1 AND public.training_prescription_current_delivery(available.id)))
+WHERE (p.training_group_id IS NULL OR(o.status='COMPLETED' AND public.training_session_local_date(s.scheduled_on,s.starts_at)<(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date) OR EXISTS(SELECT 1 FROM training_prescriptions available WHERE available.session_id=s.id AND available.athlete_user_id=$1 AND public.training_prescription_current_delivery(available.id)))
 AND EXISTS (
     SELECT 1 FROM user_memberships membership
     WHERE membership.user_id = $1 AND membership.starts_on <= CURRENT_DATE AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)

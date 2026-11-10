@@ -12545,6 +12545,9 @@ BEGIN
   WHERE target_membership_id IN(SELECT id FROM user_memberships WHERE user_id=subject_ref);
  END IF;
  IF checkpoint_status='PENDING' AND p_operation_code='MEMBERSHIP_HISTORY_ANONYMIZE' THEN
+  -- Freeze the subject before capturing the complete new attachment closure.
+  PERFORM 1 FROM public.users WHERE id=subject_ref FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_membership_subject_missing'; END IF;
   SELECT COALESCE(array_agg(p.id ORDER BY p.id),ARRAY[]::uuid[]) INTO placement_ids FROM public.training_group_placements p WHERE p.subject_user_id=subject_ref;
   SELECT COALESCE(array_agg(c.id ORDER BY c.id),ARRAY[]::uuid[]) INTO placement_change_ids FROM public.training_placement_changes c WHERE c.subject_user_id=subject_ref;
   IF cardinality(placement_ids)>4096 OR cardinality(placement_change_ids)>4096 THEN RAISE EXCEPTION USING ERRCODE='54000',MESSAGE='privacy_placement_history_limit'; END IF;
@@ -12716,6 +12719,9 @@ BEGIN
  IF imported.id IS NULL OR imported.kind<>'closure' OR imported.closure_version<>'restore-tombstone-closure/v4' THEN
   RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_replay_rejected'; END IF;
  run_ref:=public.privacy_restore_begin_replay(p_import_id,p_worker_ref);
+ -- Existing validated replay admission precedes the subject/attachment fence.
+ PERFORM 1 FROM public.users WHERE id=imported.subject_user_id FOR UPDATE;
+ IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='privacy_restore_subject_missing'; END IF;
  SELECT EXISTS(SELECT 1 FROM users WHERE id=imported.subject_user_id AND erased_at IS NOT NULL) INTO has_erasure;
  IF NOT EXISTS(SELECT 1 FROM privacy_protected.membership_history_replay_captures WHERE run_id=run_ref) THEN
  IF has_erasure THEN

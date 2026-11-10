@@ -522,6 +522,10 @@ func TestTrainingPlacementPrivateUnlinkDeletionAndPopulatedRestore(t *testing.T)
 		if e = inspector.QueryRow(t.Context(), `SELECT count(*) FROM privacy_protected.training_placement_erasure_fence`).Scan(&count); e != nil || count != 0 {
 			t.Fatal("protected proof persisted after operation", e)
 		}
+		var retainedCommands string
+		if e = inspector.QueryRow(t.Context(), `SELECT COALESCE(string_agg(canonical_command::text,','),'') FROM training_placement_changes WHERE id=ANY($1::uuid[])`, changeIDs).Scan(&retainedCommands); e != nil || strings.Contains(retainedCommands, w.subject.String()) || strings.Contains(retainedCommands, w.actor.String()) {
+			t.Fatal("retained canonical command embeds direct person identity", e)
+		}
 		var canonical []byte
 		if e = c.QueryRow(t.Context(), `SELECT public.training_placement_history_canonical($1,$2,$3)`, placementIDs, changeIDs, principal).Scan(&canonical); e != nil {
 			t.Fatal("canonical placement proof", e)
@@ -817,6 +821,14 @@ func TestTrainingPlacementActualRuntimeFloorAndDefinition(t *testing.T) {
 	if _, err = VerifyTrainingPlacementRuntime(t.Context(), w.web, TrainingScheduleCapabilities{ReaderVersion: 3, WriterVersion: 2}); err == nil {
 		t.Fatal("reader3 admitted against actual floor4")
 	}
+	recipientSchemaExec(t, w.f.low, `GRANT UPDATE(revision) ON public.training_placement_heads TO `+quoteIdentifier(w.f.roles.AppUsername))
+	if _, err = VerifyTrainingPlacementRuntime(t.Context(), w.web, TrainingScheduleCapabilities{ReaderVersion: 4, WriterVersion: 2}); err == nil {
+		t.Fatal("column-only web write privilege admitted")
+	}
+	recipientSchemaExec(t, w.f.low, `REVOKE UPDATE(revision) ON public.training_placement_heads FROM `+quoteIdentifier(w.f.roles.AppUsername))
+	if _, err = VerifyTrainingPlacementRuntime(t.Context(), w.web, TrainingScheduleCapabilities{ReaderVersion: 4, WriterVersion: 2}); err != nil {
+		t.Fatal("runtime after removing column-only privilege", err)
+	}
 	var constraint string
 	if err = w.f.low.QueryRow(t.Context(), `SELECT conname FROM pg_constraint WHERE conrelid='public.training_group_placements'::regclass AND contype='x'`).Scan(&constraint); err != nil {
 		t.Fatal(err)
@@ -914,5 +926,234 @@ func TestTrainingPlacementFreshProductionBootstrap(t *testing.T) {
 	var count int
 	if err := f.low.QueryRow(t.Context(), `SELECT count(*) FROM mycfc_meta.schema_migrations`).Scan(&count); err != nil || count != 83 {
 		t.Fatalf("fresh83 ledger count %d: %v", count, err)
+	}
+}
+
+func TestTrainingPlacementPublicationLockOrdersAndFirstWitness(t *testing.T) {
+	w := newPlacementFixture(t)
+	joined, err := w.apply(t, w.input(t, "JOIN", nil, &w.groupA, 1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	instruction := w.instruction(t, w.groupA, joined.DestinationPlacementID, 5)
+	other := w.f.web(t)
+	pub, err := w.web.BeginTx(t.Context(), pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pub.Rollback(context.Background())
+	pq := dbgen.New(pub)
+	if _, err = pq.LockPublicationPlan(t.Context(), dbgen.LockPublicationPlanParams{ActorID: w.actor, PlanID: instruction.plan}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pq.LockPublicationPlacementHeads(t.Context(), dbgen.LockPublicationPlacementHeadsParams{ActorID: w.actor, PlanID: instruction.plan}); err != nil {
+		t.Fatal(err)
+	}
+	move, err := other.BeginTx(t.Context(), pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer move.Rollback(context.Background())
+	if _, err = move.Exec(t.Context(), `SELECT id FROM users WHERE id=$1 FOR UPDATE NOWAIT`, w.subject); err != nil {
+		t.Fatal(err)
+	}
+	// Supported publisher's late current-person lock must refuse this order,
+	// releasing its plan/head locks before the move requests the head UPDATE.
+	_, err = pub.Exec(t.Context(), `SELECT id FROM users WHERE id=$1 FOR SHARE NOWAIT`, w.subject)
+	var pe *pgconn.PgError
+	if !errors.As(err, &pe) || pe.Code != "55P03" {
+		t.Fatalf("publisher late person NOWAIT: %v", err)
+	}
+	if err = pub.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	in := w.input(t, "MOVE", &joined.DestinationPlacementID, &w.groupB, 2, 0)
+	if _, err = dbgen.New(move).ApplyTrainingPlacementChange(t.Context(), in); err != nil {
+		t.Fatal("move after bounded publisher abort", err)
+	}
+	// Reverse entry order: a publisher cannot acquire a plan already physically
+	// touched by the admitted move. A bounded transaction can abort safely.
+	pub, err = w.web.BeginTx(t.Context(), pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pub.Rollback(context.Background())
+	if _, err = pub.Exec(t.Context(), `SET LOCAL lock_timeout='100ms'`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = dbgen.New(pub).LockPublicationPlan(t.Context(), dbgen.LockPublicationPlanParams{ActorID: w.actor, PlanID: instruction.plan})
+	if !errors.As(err, &pe) || pe.Code != "55P03" {
+		t.Fatalf("move-first plan conflict: %v", err)
+	}
+	if err = pub.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err = move.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// First eligible-person INSERT is a physical head and affected-plan witness,
+	// including plans whose group has no placement for this person yet.
+	var before, after pgtype.Timestamptz
+	if err = w.web.QueryRow(t.Context(), `SELECT updated_at FROM training_plans WHERE id=$1`, instruction.plan).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	newcomer := uuid.New()
+	recipientSchemaExec(t, w.web, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Synthetic first witness',$2,'hash','1990-01-01')`, newcomer, newcomer.String()+"@example.test")
+	recipientSchemaExec(t, w.web, `INSERT INTO user_memberships(user_id,programme_id,season_id,starts_on) VALUES($1,$2,$3,(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date+1)`, newcomer, w.programme, w.season)
+	var revision int64
+	if err = w.web.QueryRow(t.Context(), `SELECT revision FROM training_placement_heads WHERE subject_user_id=$1 AND programme_id=$2`, newcomer, w.programme).Scan(&revision); err != nil || revision != 1 {
+		t.Fatalf("first actual head witness %d: %v", revision, err)
+	}
+	if err = w.web.QueryRow(t.Context(), `SELECT updated_at FROM training_plans WHERE id=$1`, instruction.plan).Scan(&after); err != nil || !after.Time.After(before.Time) {
+		t.Fatalf("first person did not physically touch affected plan: %v", err)
+	}
+}
+
+func TestTrainingPlacementStartedTodayIsHeldFutureRemainsAvailable(t *testing.T) {
+	w := newPlacementFixture(t)
+	joined, err := w.apply(t, w.input(t, "JOIN", nil, &w.groupA, 0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	instruction := w.instruction(t, w.groupA, joined.DestinationPlacementID, 0)
+	recipientSchemaExec(t, w.web, `UPDATE training_sessions SET starts_at=((clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon'),ends_at=((clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date::timestamp AT TIME ZONE 'Europe/Lisbon')+interval '1 microsecond' WHERE id=$1`, instruction.session)
+	q := dbgen.New(w.web)
+	rows, err := q.TrainingPlacementInstructionReview(t.Context(), dbgen.TrainingPlacementInstructionReviewParams{ActorID: w.actor, SourcePlacementID: joined.DestinationPlacementID, EffectiveOn: w.day(t, 0)})
+	if err != nil || len(rows) != 1 || !rows[0].RequiresPolicy {
+		t.Fatalf("started/finished today must remain owner-policy held: %+v %v", rows, err)
+	}
+	before := w.aggregate(t)
+	if _, err = w.apply(t, w.input(t, "MOVE", &joined.DestinationPlacementID, &w.groupB, 0, 0)); err == nil {
+		t.Fatal("started today move accepted without owner policy")
+	}
+	if before != w.aggregate(t) {
+		t.Fatal("held move rewrote retained history")
+	}
+	if _, err = w.apply(t, w.input(t, "MOVE", &joined.DestinationPlacementID, &w.groupB, 1, 0)); err != nil {
+		t.Fatal("independent known future move blocked", err)
+	}
+}
+
+func TestTrainingPlacementGuardianWithdrawalCurrentConsumers(t *testing.T) {
+	w := newPlacementFixture(t)
+	minor := uuid.New()
+	recipientSchemaExec(t, w.f.low, `CREATE SCHEMA IF NOT EXISTS mycfc_meta; CREATE TABLE IF NOT EXISTS mycfc_meta.schema_migrations(version text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now())`)
+	insertVerifiedDependentFixture(t, t.Context(), w.f.root, w.actor, minor, "Synthetic placement dependent", "2015-01-01")
+	w.subject = minor
+	recipientSchemaExec(t, w.web, `INSERT INTO user_memberships(user_id,programme_id,season_id,starts_on,ends_on) VALUES($1,$2,$3,(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date-20,(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date+300)`, w.subject, w.programme, w.season)
+	joined, err := w.apply(t, w.input(t, "JOIN", nil, &w.groupA, 0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := w.instruction(t, w.groupA, joined.DestinationPlacementID, 7)
+	q := dbgen.New(w.web)
+	if n, e := q.SaveTrainingSessionOutcome(t.Context(), dbgen.SaveTrainingSessionOutcomeParams{SessionID: old.session, UserID: minor, Status: dbgen.TrainingOutcomeStatusCOMPLETED}); e != nil || n != 1 {
+		t.Fatalf("pre-departure future completion setup %d: %v", n, e)
+	}
+	var completedBefore string
+	if err = w.web.QueryRow(t.Context(), `SELECT to_jsonb(outcome)::text FROM training_session_outcomes outcome WHERE session_id=$1 AND user_id=$2`, old.session, minor).Scan(&completedBefore); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = q.GetTrainingPrescriptionForViewer(t.Context(), dbgen.GetTrainingPrescriptionForViewerParams{ID: old.prescription, UserID: w.actor}); err != nil {
+		t.Fatal("current guardian direct instruction", err)
+	}
+	var now pgtype.Timestamptz
+	if err = w.web.QueryRow(t.Context(), `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	dashboard, err := q.ListUpcomingTrainingSessionsForDashboard(t.Context(), dbgen.ListUpcomingTrainingSessionsForDashboardParams{UserID: w.actor, FromTime: now, RowLimit: 100})
+	if err != nil || len(dashboard) != 1 {
+		t.Fatalf("current guardian Hoje instruction: %+v %v", dashboard, err)
+	}
+	moved, err := w.apply(t, w.input(t, "TEMPORARY", &joined.DestinationPlacementID, &w.groupB, 0, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.delivery(t, old.prescription, false)
+	var completedAfter string
+	if err = w.web.QueryRow(t.Context(), `SELECT to_jsonb(outcome)::text FROM training_session_outcomes outcome WHERE session_id=$1 AND user_id=$2`, old.session, minor).Scan(&completedAfter); err != nil || completedAfter != completedBefore {
+		t.Fatal("withdrawal rewrote stored future-completed result", err)
+	}
+	for _, viewer := range []uuid.UUID{minor, w.actor} {
+		if _, err = q.GetTrainingPrescriptionForViewer(t.Context(), dbgen.GetTrainingPrescriptionForViewerParams{ID: old.prescription, UserID: viewer}); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("withdrawn guardian/subject direct read %s: %v", viewer, err)
+		}
+		rows, e := q.ListTrainingPrescriptionsForViewer(t.Context(), dbgen.ListTrainingPrescriptionsForViewerParams{UserID: viewer})
+		if e != nil || len(rows) != 0 {
+			t.Fatalf("withdrawn prescription collection %s: %+v %v", viewer, rows, e)
+		}
+		links, e := q.ListTrainingPrescriptionLinksForSessionViewer(t.Context(), dbgen.ListTrainingPrescriptionLinksForSessionViewerParams{SessionID: old.session, UserID: viewer})
+		if e != nil || len(links) != 0 {
+			t.Fatalf("withdrawn session link %s: %+v %v", viewer, links, e)
+		}
+	}
+	calendar, err := q.ListTrainingSessionsForAthlete(t.Context(), dbgen.ListTrainingSessionsForAthleteParams{UserID: minor, RowLimit: 100})
+	if err != nil || len(calendar) != 0 {
+		t.Fatalf("withdrawn grouped calendar: %+v %v", calendar, err)
+	}
+	dashboard, err = q.ListUpcomingTrainingSessionsForDashboard(t.Context(), dbgen.ListUpcomingTrainingSessionsForDashboardParams{UserID: w.actor, FromTime: now, RowLimit: 100})
+	if err != nil || len(dashboard) != 0 {
+		t.Fatalf("withdrawn guardian Hoje: %+v %v", dashboard, err)
+	}
+	returned := w.instruction(t, w.groupA, moved.ReturnPlacementID, 8)
+	reason := "Synthetic replacement check"
+	if n, e := q.SaveTrainingSessionOutcome(t.Context(), dbgen.SaveTrainingSessionOutcomeParams{SessionID: returned.session, UserID: minor, Status: dbgen.TrainingOutcomeStatusREPLACED, ReplacementSessionID: &old.session, ReplacementReason: &reason}); e != nil || n != 0 {
+		t.Fatalf("withdrawn replacement target accepted %d %v", n, e)
+	}
+	if n, e := q.SaveTrainingSessionOutcome(t.Context(), dbgen.SaveTrainingSessionOutcomeParams{SessionID: old.session, UserID: minor, Status: dbgen.TrainingOutcomeStatusCOMPLETED}); e != nil || n != 0 {
+		t.Fatalf("withdrawn own outcome accepted %d %v", n, e)
+	}
+	// Revocation between private read queries cannot leak timeline or instruction metadata.
+	recipientSchemaExec(t, w.f.root, `UPDATE guardian_authority_relationships SET state='SUSPENDED',version=version+1,updated_at=clock_timestamp() WHERE guardian_user_id=$1 AND subject_user_id=$2`, w.actor, minor)
+	timeline, err := q.TrainingPlacementTimeline(t.Context(), dbgen.TrainingPlacementTimelineParams{ActorID: w.actor, SubjectID: minor, ProgrammeID: w.programme, RowLimit: 101})
+	if err != nil || len(timeline) != 0 {
+		t.Fatalf("private timeline after guardian suspension: %+v %v", timeline, err)
+	}
+	instructions, err := q.TrainingPlacementInstructionReview(t.Context(), dbgen.TrainingPlacementInstructionReviewParams{ActorID: w.actor, SourcePlacementID: moved.ReturnPlacementID, EffectiveOn: w.day(t, 3)})
+	if err != nil || len(instructions) != 0 {
+		t.Fatalf("private instruction metadata after guardian suspension: %+v %v", instructions, err)
+	}
+	w.delivery(t, returned.prescription, false)
+	if _, err = q.GetTrainingPrescriptionForViewer(t.Context(), dbgen.GetTrainingPrescriptionForViewerParams{ID: returned.prescription, UserID: w.actor}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatal("suspended guardian return instruction", err)
+	}
+}
+
+func TestTrainingPlacementSyntheticPriorDayCompletedHistoryRetained(t *testing.T) {
+	w := newPlacementFixture(t)
+	// Explicitly synthetic past source fixture, never a backdated web command:
+	// migration-owner inserts coherent immutable change+placement in one deferred-FK transaction.
+	change, placement := uuid.New(), uuid.New()
+	tx, err := w.f.low.BeginTx(t.Context(), pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	recipientSchemaExec(t, tx, `INSERT INTO training_group_placements(id,subject_user_id,programme_id,group_id,starts_on,change_id) VALUES($1,$2,$3,$4,(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date-10,$5)`, placement, w.subject, w.programme, w.groupA, change)
+	recipientSchemaExec(t, tx, `INSERT INTO training_placement_changes(id,subject_user_id,programme_id,season_id,kind,destination_placement_id,effective_on,actor_user_id,canonical_command,head_revision) SELECT $1,$2,$3,$4,'JOIN',$5,(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date-10,$6,jsonb_build_object('synthetic_fixture',true),head.revision FROM training_placement_heads head WHERE head.subject_user_id=$2 AND head.programme_id=$3`, change, w.subject, w.programme, w.season, placement, w.actor)
+	if err = tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	old := w.instruction(t, w.groupA, placement, -1)
+	q := dbgen.New(w.web)
+	if n, e := q.SaveTrainingSessionOutcome(t.Context(), dbgen.SaveTrainingSessionOutcomeParams{SessionID: old.session, UserID: w.subject, Status: dbgen.TrainingOutcomeStatusCOMPLETED}); e != nil || n != 1 {
+		t.Fatalf("prior-day completion %d %v", n, e)
+	}
+	if _, err = w.apply(t, w.input(t, "MOVE", &placement, &w.groupB, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = q.GetTrainingPrescriptionForViewer(t.Context(), dbgen.GetTrainingPrescriptionForViewerParams{ID: old.prescription, UserID: w.subject}); err != nil {
+		t.Fatal("prior-day completed body lost", err)
+	}
+	links, err := q.ListTrainingPrescriptionLinksForSessionViewer(t.Context(), dbgen.ListTrainingPrescriptionLinksForSessionViewerParams{SessionID: old.session, UserID: w.subject})
+	if err != nil || len(links) != 1 {
+		t.Fatalf("prior-day completed link %+v %v", links, err)
+	}
+	rows, err := q.ListTrainingPrescriptionsForViewer(t.Context(), dbgen.ListTrainingPrescriptionsForViewerParams{UserID: w.subject})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("prior-day completed collection %+v %v", rows, err)
+	}
+	if n, e := q.UpdateOwnCompletedSessionFeedback(t.Context(), dbgen.UpdateOwnCompletedSessionFeedbackParams{SessionID: old.session, UserID: w.subject, ExpectedVersion: 1}); e != nil || n != 1 {
+		t.Fatalf("prior-day feedback lost %d %v", n, e)
 	}
 }

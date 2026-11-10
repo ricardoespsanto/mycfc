@@ -24,7 +24,7 @@ const FinalDigest = "88bdc8ccf003c6a4994310c11e2d1c18ce5d4b212ccb6eff8113f8499b9
 const BaselineDigest = "fc8f9dbb96dcfd7f49aa81e562bf53684416a32282a26d4d9a9d329f20c14a1f"
 
 // NormalBaselineDigest is for corrected normal fresh/forward verification, not reset.
-const NormalBaselineDigest = "0ebfca5c7bca9f53c3015f9aa162f76f64b86d40c55797cef9871c8ab2e3d5d5"
+const NormalBaselineDigest = "508c02bc6d3fcbeac2eb486cb071894be44b7ea442a531ce6bded6d7b42cc8ed"
 
 // NormalFinalDigest is independent of the retired disposable FinalDigest pin.
 const NormalFinalDigest = "2b43433c02c70f2a1149e3db7db18a653519adc17e9560671e4998dfbc5c30ea"
