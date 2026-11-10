@@ -3141,15 +3141,25 @@ func structuredPublicationWeek(audiences []pages.StructuredTrainingAudience, pla
 }
 
 func buildStructuredPrescriptionInputs(planID uuid.UUID, audience pages.StructuredTrainingAudience, week pages.StructuredTrainingWeek, recipients []dbgen.ListStructuredTrainingPublicationMembersRow, matches []dbgen.ListTrainingVariationMatchesForManagerRow) ([]StructuredPrescriptionInput, error) {
+	return buildStructuredPrescriptionInputsWithSchedules(planID, audience, week, recipients, matches, nil)
+}
+
+func buildStructuredPrescriptionInputsWithSchedules(planID uuid.UUID, audience pages.StructuredTrainingAudience, week pages.StructuredTrainingWeek, recipients []dbgen.ListStructuredTrainingPublicationMembersRow, matches []dbgen.ListTrainingVariationMatchesForManagerRow, schedules map[uuid.UUID]TrainingSessionSchedule) ([]StructuredPrescriptionInput, error) {
 	sessions := map[uuid.UUID]pages.StructuredTrainingSession{}
 	for _, session := range week.Sessions {
-		if session.Schedule.Known && (session.Schedule.Unavailable || session.Schedule.Precision != "INTERVAL") {
+		if session.Schedule.Known && session.Schedule.Unavailable {
 			return nil, ErrTrainingScheduleWriteUnsupported
 		}
 
 		id, err := uuid.Parse(session.ID)
 		if err != nil || id == uuid.Nil {
 			return nil, errPublicationSourceUnavailable
+		}
+		if session.Schedule.Known && session.Schedule.Precision != "INTERVAL" {
+			schedule, ok := schedules[id]
+			if !ok || string(schedule.Precision) != session.Schedule.Precision || schedule.ValidateKind(session.EntryKind) != nil {
+				return nil, ErrTrainingScheduleWriteUnsupported
+			}
 		}
 		if _, duplicate := sessions[id]; duplicate {
 			return nil, errPublicationSourceUnavailable
@@ -3176,14 +3186,18 @@ func buildStructuredPrescriptionInputs(planID uuid.UUID, audience pages.Structur
 		if err != nil {
 			return nil, err
 		}
-		if err = json.Unmarshal(encoded, &session); err != nil {
+		// Decode into a fresh value: decoding into the shallow copy may reuse
+		// shared slice backing arrays and leak one athlete's variation to another.
+		var independent pages.StructuredTrainingSession
+		if err = json.Unmarshal(encoded, &independent); err != nil {
 			return nil, err
 		}
+		session = independent
 		if err = resolveStructuredPrescription(&session, matches, planID, recipient.SessionID, recipient.MembershipID); err != nil {
 			return nil, err
 		}
 		snapshot := structuredPrescriptionSnapshot{SchemaVersion: structuredPrescriptionSchemaVersion, PlanID: planID.String(), PlanTitle: week.Title, GroupName: audience.GroupName, WeekTitle: week.Title, WeekDescription: week.Description, Season: week.Season, DateRange: week.DateRange, PlannedLoad: week.PlannedLoad, Session: session}
-		encoded, err = json.Marshal(snapshot)
+		encoded, err = marshalPublicationPrescription(snapshot, schedules[recipient.SessionID])
 		if err != nil {
 			return nil, err
 		}

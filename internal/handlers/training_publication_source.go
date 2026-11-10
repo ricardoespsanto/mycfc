@@ -236,7 +236,11 @@ func materializePublicationSource(source publicationSourceEnvelope, location *ti
 	if structuredPublicationConflictCount(matches, source.Header.PlanID) > 0 {
 		return result, errStructuredTrainingPublicationVariationConflict
 	}
-	prescriptions, err := buildStructuredPrescriptionInputs(source.Header.PlanID, audience, week, source.EligibleRecipients, matches)
+	schedules, err := publicationSourceSchedules(source.Overview)
+	if err != nil {
+		return result, err
+	}
+	prescriptions, err := buildStructuredPrescriptionInputsWithSchedules(source.Header.PlanID, audience, week, source.EligibleRecipients, matches, schedules)
 	if err != nil {
 		return result, err
 	}

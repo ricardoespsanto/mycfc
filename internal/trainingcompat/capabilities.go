@@ -20,5 +20,5 @@ type Capabilities struct {
 }
 
 func Compiled() Capabilities {
-	return Capabilities{Protocol: 1, Version: releasecontract.Version, Candidate: releasecontract.Candidate, ReaderGeneration: ReaderGeneration, WriterGeneration: WriterGeneration, SnapshotRead: []int{1, 2}, SchemaRead: []string{"schedule-c1", "schedule-p1"}, Write: []string{"INTERVAL", "START_ONLY", "DAY", "BAND", "snapshot-v1"}}
+	return Capabilities{Protocol: 1, Version: releasecontract.Version, Candidate: releasecontract.Candidate, ReaderGeneration: ReaderGeneration, WriterGeneration: WriterGeneration, SnapshotRead: []int{1, 2}, SchemaRead: []string{"schedule-c1", "schedule-p1"}, Write: []string{"INTERVAL", "START_ONLY", "DAY", "BAND", "snapshot-v1", "snapshot-v2"}}
 }

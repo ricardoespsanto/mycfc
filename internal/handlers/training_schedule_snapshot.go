@@ -8,12 +8,12 @@ import (
 	"github.com/cfcoimbra/mycfc/ui/pages"
 )
 
-// v1 stays its original DTO and field order. This separate v2 reader must never
-// be used by compatibility-release persistence paths.
+// v1 keeps its original DTO and field order. Typed v2 publication uses this
+// separate envelope, preserving explicit nullable schedule facts.
 type structuredSessionSnapshotV2 struct {
 	pages.StructuredTrainingSession
 	Schedule  TrainingSessionSchedule `json:"schedule"`
-	EntryKind *string                 `json:"entry_kind"`
+	EntryKind *string                 `json:"entry_kind,omitempty"`
 }
 type structuredPrescriptionSnapshotV2 struct {
 	SchemaVersion   int                         `json:"schema_version"`

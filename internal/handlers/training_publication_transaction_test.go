@@ -14,16 +14,17 @@ import (
 )
 
 type publicationTransactionFake struct {
-	source      publicationSourceEnvelope
-	raw         []byte
-	budget      publicationSourceBudget
-	steps       []string
-	failStep    string
-	failErr     error
-	factsChange func(*publicationFinalFacts)
-	publication dbgen.TrainingPlanPublication
-	inserted    []StructuredPrescriptionInput
-	decision    time.Time
+	source         publicationSourceEnvelope
+	raw            []byte
+	budget         publicationSourceBudget
+	steps          []string
+	failStep       string
+	failErr        error
+	factsChange    func(*publicationFinalFacts)
+	publication    dbgen.TrainingPlanPublication
+	inserted       []StructuredPrescriptionInput
+	decision       time.Time
+	partialEnabled bool
 }
 
 func (q *publicationTransactionFake) step(s string) error {
@@ -32,6 +33,12 @@ func (q *publicationTransactionFake) step(s string) error {
 		return q.failErr
 	}
 	return nil
+}
+func (q *publicationTransactionFake) AdmitScheduleWrites(context.Context) (bool, error) {
+	return q.partialEnabled, q.step("admission")
+}
+func (q *publicationTransactionFake) CheckArtifactSizes(context.Context, []StructuredPrescriptionInput) error {
+	return q.step("artifacts")
 }
 func (q *publicationTransactionFake) VerifyRuntime(context.Context) error { return q.step("runtime") }
 func (q *publicationTransactionFake) LockActor(context.Context, uuid.UUID) error {
@@ -135,7 +142,7 @@ func TestPublicationTransactionOrdersPostAdmissionChecksAndOwnSuccessor(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := []string{"runtime", "actor", "guard", "plan", "budget", "candidates", "memberships", "events", "users", "source", "insert publication", "insert prescription", "final"}
+	expected := []string{"admission", "runtime", "actor", "guard", "plan", "budget", "candidates", "memberships", "events", "users", "source", "artifacts", "insert publication", "insert prescription", "final"}
 	if !reflect.DeepEqual(q.steps, expected) {
 		t.Fatalf("wrong ordering: %v", q.steps)
 	}
@@ -146,7 +153,7 @@ func TestPublicationTransactionOrdersPostAdmissionChecksAndOwnSuccessor(t *testi
 }
 
 func TestPublicationTransactionStaleLatestAndRuntimeFailBeforeMutation(t *testing.T) {
-	for _, step := range []string{"runtime", "actor", "guard", "plan", "budget", "candidates", "memberships", "events", "users", "source"} {
+	for _, step := range []string{"admission", "runtime", "actor", "guard", "plan", "budget", "candidates", "memberships", "events", "users", "source", "artifacts"} {
 		t.Run(step, func(t *testing.T) {
 			q, input, now := publicationTransactionFixture(t)
 			sentinel := errors.New("refused")
@@ -167,7 +174,7 @@ func TestPublicationTransactionStaleLatestAndRuntimeFailBeforeMutation(t *testin
 	if _, err := savePublicationInTransaction(t.Context(), q, input, time.UTC, func() time.Time { return now }); !errors.Is(err, errStructuredTrainingPublicationConflict) {
 		t.Fatal("stale latest was rebased", err)
 	}
-	if !reflect.DeepEqual(q.steps, []string{"runtime", "actor", "guard", "plan"}) {
+	if !reflect.DeepEqual(q.steps, []string{"admission", "runtime", "actor", "guard", "plan"}) {
 		t.Fatal("stale review evaluated no-op or wrote", q.steps)
 	}
 }

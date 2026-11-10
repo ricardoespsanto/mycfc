@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"time"
 
@@ -22,10 +23,16 @@ func (s PostgresStructuredTrainingStore) AuthorizePublication(ctx context.Contex
 	return publicationPlanHeader(row), err
 }
 func (s PostgresStructuredTrainingStore) ReadPublicationSource(ctx context.Context, actor, plan uuid.UUID) (publicationSourceEnvelope, error) {
-	if _, err := db.VerifyTrainingRecipientRuntime(ctx, s.Pool, publicationRuntimeCapabilities()); err != nil {
+	state, err := db.VerifyTrainingRecipientRuntime(ctx, s.Pool, publicationRuntimeCapabilities())
+	if err != nil {
 		return publicationSourceEnvelope{}, err
 	}
 	q := s.queries()
+	if !state.PartialV2Enabled {
+		if _, err = q.TrainingScheduleGuardPlanV1(ctx, dbgen.TrainingScheduleGuardPlanV1Params{ActorID: actor, PlanID: plan}); err != nil {
+			return publicationSourceEnvelope{}, trainingScheduleWriteError(err)
+		}
+	}
 	first, err := q.PublicationSourceBudget(ctx, dbgen.PublicationSourceBudgetParams{ActorID: actor, PlanID: plan})
 	if err != nil {
 		return publicationSourceEnvelope{}, err
@@ -39,7 +46,23 @@ func (s PostgresStructuredTrainingStore) ReadPublicationSource(ctx context.Conte
 	}
 	// Preview has READ COMMITTED statements: only this independently gated
 	// materialization's own header/source constitutes the new shown review.
-	return decodePublicationSource(row.Envelope, publicationSourceBudget{row.SourceBytes, row.RawTupleCount, row.LatestTupleCount, row.Overflow}, plan)
+	source, err := decodePublicationSource(row.Envelope, publicationSourceBudget{row.SourceBytes, row.RawTupleCount, row.LatestTupleCount, row.Overflow}, plan)
+	if err != nil {
+		return publicationSourceEnvelope{}, err
+	}
+	if err = validatePublicationScheduleWriteState(source, state); err != nil {
+		return publicationSourceEnvelope{}, err
+	}
+	material, materialErr := materializePublicationSource(source, lisbonLocation())
+	if materialErr != nil && !errors.Is(materialErr, errPublicationFirstEmpty) && !errors.Is(materialErr, errStructuredTrainingPublicationVariationConflict) {
+		return publicationSourceEnvelope{}, materialErr
+	}
+	if materialErr == nil {
+		if err = checkPublicationArtifactSizes(ctx, s.Pool, material.Prescriptions); err != nil {
+			return publicationSourceEnvelope{}, err
+		}
+	}
+	return source, nil
 }
 func (s PostgresStructuredTrainingStore) ConfirmPublication(ctx context.Context, input publicationConfirmInput) (publicationSaveResult, error) {
 	var result publicationSaveResult
@@ -84,6 +107,28 @@ type publicationPostgresQueries struct {
 	queries  *dbgen.Queries
 }
 
+func (q publicationPostgresQueries) AdmitScheduleWrites(ctx context.Context) (bool, error) {
+	state, err := db.TrainingScheduleStatus(ctx, q.commands)
+	if err != nil {
+		return false, err
+	}
+	if state.PartialV2Enabled {
+		if _, err = q.commands.Exec(ctx, `SELECT public.training_schedule_admit_partial($1,$2)`, state.DatabaseIncarnation, state.StateEpoch); err != nil {
+			return false, trainingScheduleWriteError(err)
+		}
+	}
+	actual, err := db.VerifyTrainingRecipientRuntime(ctx, q.commands, publicationRuntimeCapabilities())
+	if err != nil {
+		return false, err
+	}
+	if actual.DatabaseIncarnation != state.DatabaseIncarnation || actual.StateEpoch != state.StateEpoch || actual.SchemaContract != state.SchemaContract || actual.PartialV2Enabled != state.PartialV2Enabled {
+		return false, errStructuredTrainingPublicationConflict
+	}
+	return actual.PartialV2Enabled, nil
+}
+func (q publicationPostgresQueries) CheckArtifactSizes(ctx context.Context, inputs []StructuredPrescriptionInput) error {
+	return checkPublicationArtifactSizes(ctx, q.commands, inputs)
+}
 func (q publicationPostgresQueries) VerifyRuntime(ctx context.Context) error {
 	_, err := db.VerifyTrainingRecipientRuntime(ctx, q.commands, publicationRuntimeCapabilities())
 	return err

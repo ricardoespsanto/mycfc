@@ -47,6 +47,7 @@ type publicationConfirmInput struct {
 // This interface has no transaction/connection/pool lifecycle methods. It also
 // keeps the canonical builder independent from the SQL transport encoding.
 type publicationTransactionQueries interface {
+	AdmitScheduleWrites(context.Context) (bool, error)
 	VerifyRuntime(context.Context) error
 	LockActor(context.Context, uuid.UUID) error
 	GuardPlanV1(context.Context, uuid.UUID, uuid.UUID) error
@@ -57,6 +58,7 @@ type publicationTransactionQueries interface {
 	LockEvents(context.Context, uuid.UUID, uuid.UUID) ([]publicationEvent, error)
 	LockUsers(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error)
 	RawSource(context.Context, uuid.UUID, uuid.UUID) ([]byte, publicationSourceBudget, error)
+	CheckArtifactSizes(context.Context, []StructuredPrescriptionInput) error
 	InsertPublication(context.Context, uuid.UUID, publicationPlanHeader, string) (dbgen.TrainingPlanPublication, error)
 	InsertPrescription(context.Context, uuid.UUID, uuid.UUID, StructuredPrescriptionInput) error
 	FinalFacts(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (publicationFinalFacts, error)
@@ -69,14 +71,20 @@ func savePublicationInTransaction(ctx context.Context, q publicationTransactionQ
 	}
 	// The request may have queued before an exclusive migration/floor change.
 	// This check is INSIDE the new post-admission transaction, before actor rows.
+	partialEnabled, err := q.AdmitScheduleWrites(ctx)
+	if err != nil {
+		return result, err
+	}
 	if err := q.VerifyRuntime(ctx); err != nil {
 		return result, err
 	}
 	if err := q.LockActor(ctx, input.ActorID); err != nil {
 		return result, trainingScopeWriteError(err)
 	}
-	if err := q.GuardPlanV1(ctx, input.ActorID, input.PlanID); err != nil {
-		return result, err
+	if !partialEnabled {
+		if err := q.GuardPlanV1(ctx, input.ActorID, input.PlanID); err != nil {
+			return result, err
+		}
 	}
 	header, err := q.LockPlan(ctx, input.ActorID, input.PlanID)
 	if err != nil {
@@ -136,6 +144,9 @@ func savePublicationInTransaction(ctx context.Context, q publicationTransactionQ
 	}
 	materialized, err := materializePublicationSource(source, location)
 	if err != nil {
+		return result, err
+	}
+	if err := q.CheckArtifactSizes(ctx, materialized.Prescriptions); err != nil {
 		return result, err
 	}
 	current := publicationCurrentReviewInput(input, source.Header, materialized.Prescriptions)
