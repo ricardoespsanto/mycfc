@@ -54,9 +54,13 @@ func (s *publicationHTTPStoreFake) ConfirmPublication(_ context.Context, input p
 	}
 	return publicationSaveResult{PublicationID: uuid.New(), Revision: 1, PrescriptionCount: len(material.Prescriptions)}, nil
 }
+
+const publicationHTTPAthleteName = "Ana Example Recipient"
+
 func publicationHTTPFixture(t *testing.T) (*publicationHTTPStoreFake, http.Handler, string) {
 	t.Helper()
 	store := &publicationHTTPStoreFake{source: publicationSourceFixture(), actor: uuid.New()}
+	store.source.EligibleRecipients[0].AthleteName = publicationHTTPAthleteName
 	h := StructuredTraining{Publications: store, HTTPWriteTimeout: 30 * time.Second, Location: time.UTC}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /admin/treinos/estruturados/semanas/{id}/publicar", h.PublishPlan)
@@ -157,11 +161,14 @@ func TestPublicationHTTPRetainsSafeConflictAndUnknownWithoutAudience(t *testing.
 			preview := publicationPost(t, h, path, url.Values{"publication_intent": {"preview"}, "change_summary": {"Proposta conservada"}, "source_updated_at": {store.source.Header.SourceUpdatedAt.Time.Format(time.RFC3339Nano)}})
 			values := publicationConfirmForm(t, preview.Body.String())
 			original := values.Get("review_token")
+			if !strings.Contains(preview.Body.String(), publicationHTTPAthleteName) {
+				t.Fatal("review fixture did not render the recipient")
+			}
 			store.confirmErr = outcome.err
 			failed := publicationPost(t, h, path, values)
 			body := failed.Body.String()
-			if failed.Code != 409 || strings.Contains(body, "Ana") || strings.Contains(body, "name=\"confirm\"") {
-				t.Fatal("failed confirmation exposed audience or retry")
+			if failed.Code != 409 || strings.Contains(body, publicationHTTPAthleteName) || strings.Contains(body, "name=\"confirm\"") {
+				t.Fatalf("failed confirmation status %d, recipient rendered %t, retry rendered %t", failed.Code, strings.Contains(body, publicationHTTPAthleteName), strings.Contains(body, `name="confirm"`))
 			}
 			if !outcome.unknown && (!strings.Contains(body, "Proposta conservada") || !strings.Contains(body, original)) {
 				t.Fatal("safe proposal/token rebased or discarded")
@@ -207,7 +214,7 @@ func TestPublicationHTTPRefusesInvalidReviewRequestsBeforeReadingRecipients(t *t
 		t.Run(tc.name, func(t *testing.T) {
 			store, handler, path := publicationHTTPFixture(t)
 			response := publicationPost(t, handler, path, tc.values)
-			if response.Code != 422 || store.readCalls != 0 || store.confirmCalls != 0 || strings.Contains(response.Body.String(), "Ana") {
+			if response.Code != 422 || store.readCalls != 0 || store.confirmCalls != 0 || strings.Contains(response.Body.String(), publicationHTTPAthleteName) {
 				t.Fatalf("invalid form reached a private review: status %d, reads %d, writes %d", response.Code, store.readCalls, store.confirmCalls)
 			}
 		})
@@ -239,7 +246,7 @@ func TestPublicationHTTPReviewRefusalsDoNotReturnPrivateAudience(t *testing.T) {
 				tc.change(&store.source, values)
 			}
 			response := publicationPost(t, handler, path, values)
-			if response.Code != tc.status || store.readCalls != 1 || store.confirmCalls != 0 || strings.Contains(response.Body.String(), "Ana") || strings.Contains(response.Body.String(), "private database error") {
+			if response.Code != tc.status || store.readCalls != 1 || store.confirmCalls != 0 || strings.Contains(response.Body.String(), publicationHTTPAthleteName) || strings.Contains(response.Body.String(), "private database error") {
 				t.Fatalf("review refusal exposed a private source or allowed confirmation: status %d", response.Code)
 			}
 		})
@@ -263,7 +270,7 @@ func TestPublicationHTTPExplainsRecoverableReviewRefusals(t *testing.T) {
 			store.readErr = tc.err
 			response := publicationPost(t, handler, path, url.Values{"change_summary": {"Resumo conservado"}})
 			body := response.Body.String()
-			if response.Code != tc.status || !strings.Contains(body, tc.message) || !strings.Contains(body, "Resumo conservado") || strings.Contains(body, "Ana") || store.confirmCalls != 0 {
+			if response.Code != tc.status || !strings.Contains(body, tc.message) || !strings.Contains(body, "Resumo conservado") || strings.Contains(body, publicationHTTPAthleteName) || store.confirmCalls != 0 {
 				t.Fatalf("wrong recovery at status %d", response.Code)
 			}
 		})
