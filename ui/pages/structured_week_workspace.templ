@@ -1,0 +1,306 @@
+package pages
+
+import (
+	"fmt"
+	"github.com/cfcoimbra/mycfc/ui/components"
+	"strconv"
+	"strings"
+)
+
+type StructuredWorkspaceWeekChoice struct {
+	ID, Title, StartsOn, EndsOn, URL string
+	Selected                         bool
+}
+type StructuredWorkspaceAppointment struct {
+	ID, Title, StartsOn, EndsOn, StartsAt, EndsAt, EntryKind, Status, URL string
+	Modalities                                                            []string
+	Selected                                                              bool
+}
+type StructuredWorkspaceDay struct {
+	Date, Label, ShortLabel, URL, AddSessionURL string
+	Selected                                    bool
+	Morning, Afternoon                          []StructuredWorkspaceAppointment
+}
+type StructuredWorkspacePublication struct {
+	State, Label, PublishedAt, PublishedBy, SourceUpdatedAt  string
+	Revision, AthleteCount, PrescriptionCount, ConflictCount int
+	Unavailable                                              bool
+}
+type StructuredWeekWorkspace struct {
+	Enabled, HasWeek                                                                                                 bool
+	GroupID, GroupName, Scope, CoachName, WeekID, WeekTitle, Season, StartsOn, EndsOn, DateRange, SelectedDay        string
+	MemberCount                                                                                                      int
+	GroupsURL, GroupURL, AddSessionURL, CreateWeekURL, PreviousURL, NextURL, PublicationURL, AdvancedURL, RefreshURL string
+	Weeks                                                                                                            []StructuredWorkspaceWeekChoice
+	Days                                                                                                             []StructuredWorkspaceDay
+	Publication                                                                                                      StructuredWorkspacePublication
+	Summary                                                                                                          StructuredTrainingWeekSummary
+}
+
+templ structuredWeekWorkspace(page StructuredTrainingPage) {
+	<div class="week-workspace">
+		<nav class="cluster" aria-label="Contexto do planeamento">
+			<a
+				href={ templ.SafeURL(page.Workspace.GroupsURL) }
+			>Grupos de treino</a><a
+	href={ templ.SafeURL(page.Workspace.GroupURL) }
+>Atletas e dados do grupo</a>
+		</nav>
+		@components.PageHeader("Coordenação · Planeamento semanal", page.Workspace.GroupName, page.Workspace.Scope, structuredWorkspaceActions(page.Workspace))
+		@components.StatusSummary("Contexto da semana", structuredWorkspaceMetadata(page.Workspace))
+		if page.Workspace.MemberCount == 0 {
+			<p class="status-message status-message--info">Sem destinatários. Pode preparar o rascunho e adicionar atletas ao grupo antes de rever a publicação.</p>
+		}
+		if page.Workspace.HasWeek {
+			<section class="week-workspace__navigation" aria-labelledby="week-workspace-title">
+				<div><p class="eyebrow">Semana selecionada</p><h2 id="week-workspace-title">{ page.Workspace.DateRange }</h2><p>{ page.Workspace.WeekTitle }</p></div>
+				<nav class="cluster" aria-label="Semanas registadas neste grupo">
+					if page.Workspace.PreviousURL != "" {
+						<a
+							class="action action--secondary"
+							href={ templ.SafeURL(page.Workspace.PreviousURL) }
+						>Semana anterior</a>
+					}
+					if page.Workspace.NextURL != "" {
+						<a
+							class="action action--secondary"
+							href={ templ.SafeURL(page.Workspace.NextURL) }
+						>Semana seguinte</a>
+					}
+				</nav>
+				<form class="week-workspace__selector" method="get" action="/admin/treinos/estruturados">
+					<input type="hidden" name="group_id" value={ page.Workspace.GroupID }/>
+     if page.SelectedDay != "" {
+      <input type="hidden" name="day" value={ page.SelectedDay }/>
+     }
+					<div class="field-group">
+						@components.FieldLabel("workspace-week", "Semana", true)
+						<select id="workspace-week" name="week_id" required>
+							for _, week := range page.Workspace.Weeks {
+								<option value={ week.ID } selected?={ week.Selected }>{ week.Title } · { week.StartsOn } a { week.EndsOn }</option>
+							}
+						</select>
+					</div>
+					<button class="action action--secondary" type="submit">Abrir semana</button>
+				</form>
+			</section>
+			@structuredWorkspacePublication(page.Workspace)
+			<nav class="week-workspace__days" aria-label="Dias da semana">
+				for _, day := range page.Workspace.Days {
+					if day.Selected {
+						<a
+							class="action action--secondary"
+							href={ templ.SafeURL(day.URL) }
+							aria-current="date"
+						><span>{ day.ShortLabel }</span><span>{ day.Date }</span></a>
+					} else {
+						<a
+							class="action action--quiet"
+							href={ templ.SafeURL(day.URL) }
+						><span>{ day.ShortLabel }</span><span>{ day.Date }</span></a>
+					}
+				}
+			</nav>
+			<div class="week-workspace__calendar" role="region" aria-label="Planeamento dos sete dias">
+				for _, day := range page.Workspace.Days {
+					<section
+						id={ "week-day-" + day.Date }
+						class="week-day"
+						data-selected={ strconv.FormatBool(day.Selected) }
+						aria-labelledby={ "week-day-title-" + day.Date }
+					>
+						<header><h3 id={ "week-day-title-" + day.Date }>{ day.Label }</h3><p>{ day.Date }</p></header>
+						@structuredWorkspaceBand("Manhã", day.Morning)
+						@structuredWorkspaceBand("Tarde", day.Afternoon)
+						<a
+							class="action action--quiet week-day__add"
+							href={ templ.SafeURL(day.AddSessionURL) }
+							aria-label={ "Adicionar sessão · " + day.Label + ", " + day.Date }
+						>Adicionar sessão</a>
+					</section>
+				}
+			</div>
+			@structuredWorkspaceSummary(page.Workspace.Summary)
+		} else {
+			@components.EmptyState("Ainda sem semanas neste grupo", "Crie a primeira semana com uma data explícita. Os horários das sessões são introduzidos depois.")
+		}
+		<nav class="cluster" aria-label="Outras tarefas da semana">
+			<a
+				class="action action--quiet"
+				href={ templ.SafeURL(page.Workspace.AdvancedURL) }
+			>Mais opções de planeamento</a>
+		</nav>
+	</div>
+}
+
+templ structuredWorkspaceBand(label string, appointments []StructuredWorkspaceAppointment) {
+	<section class="week-day__band" aria-label={ label }>
+		<h4>{ label }</h4>
+		if len(appointments) == 0 {
+			<p class="week-day__empty">Ainda sem planeamento</p>
+		} else {
+			<ul class="week-day__appointments">
+				for _, appointment := range appointments {
+					<li>
+						<a
+							class="week-appointment"
+							href={ templ.SafeURL(appointment.URL) }
+							aria-current={ structuredWorkspaceCurrent(appointment.Selected) }
+						>
+							<span class="week-appointment__time">
+								{ structuredWorkspaceTime(appointment) }
+							</span><strong>{ appointment.Title }</strong>
+							<span>
+								{ structuredEntryKindLabel(appointment.EntryKind) }
+							</span>
+							if len(appointment.Modalities) > 0 {
+								<span class="record-meta">
+									{ structuredModalitiesLabel(appointment.Modalities) }
+								</span>
+							}
+							if appointment.Status == "CANCELLED" {
+								<span class="badge badge--error">Cancelada</span>
+							}
+						</a>
+					</li>
+				}
+			</ul>
+		}
+	</section>
+}
+
+templ structuredWorkspacePublication(workspace StructuredWeekWorkspace) {
+	<section class="week-publication" aria-labelledby="week-publication-title">
+		<h2 id="week-publication-title">
+			{ structuredWorkspacePublicationLabel(workspace.Publication) }
+		</h2>
+		if structuredWorkspacePublicationUnavailable(workspace.Publication) {
+			<p>Atualize a página para voltar a confirmar a publicação e os destinatários.</p><a
+	class="action action--secondary"
+	href={ templ.SafeURL(workspace.RefreshURL) }
+>Voltar a confirmar o estado</a>
+		} else {
+			if workspace.Publication.PublishedAt != "" {
+				<p class="record-meta">
+					Publicação: { workspace.Publication.PublishedAt }
+					if workspace.Publication.PublishedBy != "" {
+						<span>· { workspace.Publication.PublishedBy }</span>
+					}
+				</p>
+			}
+			if workspace.Publication.State == "changes" {
+				<p>Os atletas continuam a ver a versão publicada até ser confirmada uma nova publicação.</p>
+			}
+			<p class="record-meta">
+				{ fmt.Sprintf("%d destinatários · %d prescrições previstas", workspace.Publication.AthleteCount, workspace.Publication.PrescriptionCount) }
+			</p>
+			if workspace.Publication.ConflictCount > 0 {
+				<p class="status-message status-message--error">
+					{ fmt.Sprintf("%d conflitos de variação impedem a publicação.", workspace.Publication.ConflictCount) }
+				</p>
+			}
+			<a
+				class="action action--secondary"
+				href={ templ.SafeURL(workspace.PublicationURL) }
+			>Rever publicação</a>
+		}
+	</section>
+}
+
+templ structuredWorkspaceSummary(summary StructuredTrainingWeekSummary) {
+	<section class="module week-summary" aria-labelledby="workspace-summary-title">
+		<h2 id="workspace-summary-title">Resumo semanal</h2>
+		if len(summary.PlannedWater) == 0 && len(summary.SupportingWork) == 0 && len(summary.Actual) == 0 {
+			<p class="record-meta">Ainda sem totais disponíveis.</p>
+		}
+		@structuredWorkspaceTotals("Água planeada", summary.PlannedWater)
+		@structuredWorkspaceTotals("Trabalho complementar planeado", summary.SupportingWork)
+		@structuredWorkspaceTotals("Registo real do atleta", summary.Actual)
+	</section>
+}
+
+templ structuredWorkspaceTotals(label string, totals []StructuredTrainingSummaryItem) {
+	if len(totals) > 0 {
+		<section>
+			<h3>{ label }</h3>
+			<dl class="training-totals">
+				for _, total := range totals {
+					<div><dt>{ total.Label }</dt><dd>{ total.Value } <span class="record-meta">{ total.Certainty }</span></dd></div>
+				}
+			</dl>
+		</section>
+	}
+}
+
+func structuredWorkspaceCurrent(selected bool) string {
+	if selected {
+		return "page"
+	}
+	return "false"
+}
+func structuredWorkspaceTime(appointment StructuredWorkspaceAppointment) string {
+	if appointment.StartsAt == "" {
+		return "Hora por definir"
+	}
+	start := appointment.StartsAt
+	if appointment.EndsAt == "" {
+		return start + " · Fim por definir"
+	}
+	end := appointment.EndsAt
+	if appointment.EndsOn != "" && appointment.EndsOn != appointment.StartsOn {
+		end = appointment.EndsOn + " " + end
+	}
+	return start + "–" + end
+}
+func structuredWorkspacePublicationLabel(p StructuredWorkspacePublication) string {
+	if structuredWorkspacePublicationUnavailable(p) {
+		return "Não foi possível confirmar o estado de publicação"
+	}
+	switch p.State {
+	case "never":
+		return "Rascunho · nunca publicado"
+	case "current":
+		return fmt.Sprintf("Publicado · revisão %d", p.Revision)
+	case "changes":
+		return fmt.Sprintf("Alterações por publicar · última revisão %d", p.Revision)
+	default:
+		return "Não foi possível confirmar o estado de publicação"
+	}
+}
+func structuredWorkspaceActions(w StructuredWeekWorkspace) []components.PageAction {
+	if w.HasWeek {
+		return []components.PageAction{{Label: "Adicionar sessão", Href: w.AddSessionURL, Variant: "primary"}}
+	}
+	return []components.PageAction{{Label: "Criar semana", Href: w.CreateWeekURL, Variant: "primary"}}
+}
+func structuredWorkspaceMetadata(w StructuredWeekWorkspace) []components.StatusItem {
+	items := []components.StatusItem{{Label: "Participação", Value: w.Scope}, {Label: "Atletas", Value: fmt.Sprint(w.MemberCount)}}
+	if w.Season != "" {
+		items = append(items, components.StatusItem{Label: "Época", Value: w.Season})
+	}
+	if strings.TrimSpace(w.CoachName) != "" {
+		items = append(items, components.StatusItem{Label: "Treinador", Value: w.CoachName})
+	}
+	return items
+}
+
+func structuredWorkspacePublicationUnavailable(p StructuredWorkspacePublication) bool {
+	return p.Unavailable || (p.State != "never" && p.State != "current" && p.State != "changes")
+}
+
+func structuredWorkspaceAdvancedOpen(page StructuredTrainingPage) bool {
+	return page.SelectedSessionID != "" || (page.OpenForm != "" && page.OpenForm != "week" && page.OpenForm != "session" && page.OpenForm != "group")
+}
+
+func structuredWorkspacePublications(page StructuredTrainingPage) []StructuredPublicationState {
+	if !page.Workspace.Enabled {
+		return page.Publications
+	}
+	publications := []StructuredPublicationState{}
+	for _, publication := range page.Publications {
+		if page.SelectedWeekID != "" && publication.PlanID == page.SelectedWeekID {
+			publications = append(publications, publication)
+		}
+	}
+	return publications
+}

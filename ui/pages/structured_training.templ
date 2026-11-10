@@ -29,6 +29,7 @@ type StructuredVariationPreview struct {
 	Rules []StructuredVariationRule
 }
 type StructuredPublicationState struct {
+	Current, Unavailable bool `json:"-"`
 	PlanID, Plan, SourceUpdatedAt, Status, PublishedAt, PublishedBy string
 	Revision, AthleteCount, PrescriptionCount, ConflictCount, AddedCount, ChangedCount, RemovedCount, UnchangedCount int
 }
@@ -68,6 +69,7 @@ type StructuredTrainingSegment struct {
 	Blocks                                                                []StructuredTrainingBlock
 }
 type StructuredTrainingSession struct {
+	StartsOn, EndsOn, StartsAt, EndsAt, Status string `json:"-"`
 	ID, PrescriptionID, Title, Description, When, EntryKind string
 	Outcome, ActualDuration, ActualDistance, PerceivedEffort, RecoveryFeeling, PerceptionNote, FeedbackUpdatedAt string `json:"-"`
 	Modalities                              []string
@@ -76,6 +78,7 @@ type StructuredTrainingSession struct {
 	Changes                                 []StructuredPrescriptionChange
 }
 type StructuredTrainingWeek struct {
+	StartsOn, EndsOn string `json:"-"`
 	ID, Title, Description, Season, DateRange, PlannedLoad string
 	Sessions                                               []StructuredTrainingSession
 	Summary                                                StructuredTrainingWeekSummary
@@ -135,6 +138,9 @@ type StructuredTrainingBlockForm struct {
 }
 
 type StructuredTrainingPage struct {
+	Workspace StructuredWeekWorkspace
+	SelectedDay string
+	PublicationUnavailable bool
 	Meta                                                        components.PageMeta
 	CSRFField                                                   templ.Component
 	Management                                                  bool
@@ -173,7 +179,9 @@ templ StructuredTraining(page StructuredTrainingPage) {
 }
 
 templ structuredTrainingContent(page StructuredTrainingPage) {
-	if page.Management {
+	if page.Management && page.Workspace.Enabled {
+		@structuredWeekWorkspace(page)
+	} else if page.Management {
 		@components.PageHeader("Coordenação · Treinos", "Planeamento semanal", "Organize grupos, semanas e sessões híbridas a partir de um só lugar.", structuredTrainingActions())
 	} else {
 		@components.PageHeader("Atividade · Treinos", "Planeamento semanal", "Consulte as semanas e sessões destinadas a si ou aos menores pelos quais é responsável.", []components.PageAction{{Label: "Voltar aos treinos", Href: "/treinos", Variant: "quiet"}})
@@ -197,22 +205,32 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 			}
 		</nav>
 	}
-	<div class="training-workspace" data-tab-scope>
-		if page.Management {
-			<nav class="collection-tabs training-workspace__tabs" aria-label="Áreas do planeamento" data-collection-tabs>
-				<a href="#training-plan">Plano semanal</a>
-				<a href="#training-cycles">Ciclos</a>
-				<a href="#training-variations">Variações</a>
-				<a href="#training-publication">Publicar</a>
-				<a href="#training-routines">Rotinas</a>
-				<a href="#training-copy-tools">Copiar conteúdo</a>
-				if page.CanManageWaterProfiles {
-					<a href="#training-intensity-profiles">Perfis de intensidade</a>
-				}
-			</nav>
-		}
-		<section id="training-plan" class="module training-plan" data-tab-panel>
+	<div class="training-workspace">
+		if page.Management && page.Workspace.Enabled {
+			<details id="workspace-details" class="week-advanced" open?={ structuredWorkspaceAdvancedOpen(page) }>
+				<summary>Detalhe e mais opções de planeamento</summary>
+				@structuredTrainingPlan(page)
+				@structuredTrainingAdvanced(page)
+			</details>
+		} else {
+			@structuredTrainingPlan(page)
 			if page.Management {
+				@structuredTrainingAdvanced(page)
+			}
+		}
+	</div>
+	if page.Management {
+		if !page.Workspace.Enabled || page.OpenForm == "group" || len(page.GroupForm.Errors) > 0 {
+			@structuredGroupForm(page)
+		}
+		@structuredWeekForm(page)
+		@structuredSessionForm(page)
+	}
+}
+
+templ structuredTrainingPlan(page StructuredTrainingPage) {
+		<section id="training-plan" class="module training-plan" data-tab-panel>
+			if page.Management && !page.Workspace.Enabled {
 				@structuredPlannerContext(page)
 			}
 			@components.SectionHeading("", "Semanas de treino", "Os horários são exatos; manhã e tarde são apenas agrupamentos visuais.")
@@ -520,7 +538,10 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 				</article>
 			}
 		</section>
-		if page.Management {
+}
+
+templ structuredTrainingAdvanced(page StructuredTrainingPage) {
+
 			@structuredCycleManagement(page)
 			@structuredVariationManagement(page)
 			@structuredPublicationManagement(page)
@@ -529,13 +550,6 @@ templ structuredTrainingContent(page StructuredTrainingPage) {
 			if page.CanManageWaterProfiles {
 				@structuredWaterProfileManagement(page)
 			}
-		}
-	</div>
-	if page.Management {
-		@structuredGroupForm(page)
-		@structuredWeekForm(page)
-		@structuredSessionForm(page)
-	}
 }
 
 templ structuredPlannerContext(page StructuredTrainingPage) {
@@ -546,7 +560,6 @@ templ structuredPlannerContext(page StructuredTrainingPage) {
 				<h2 id="structured-planner-title">Plano selecionado</h2>
 				<p>Escolha o grupo, a semana e a sessão antes de editar. Esta seleção fica no endereço para poder retomar o trabalho.</p>
 			</div>
-			<span class="badge">Rascunho</span>
 		</div>
 		<form class="structured-planner__selector" method="get" action="/admin/treinos/estruturados">
 			<div>
@@ -625,21 +638,33 @@ templ structuredPublicationManagement(page StructuredTrainingPage) {
 	<section id="training-publication" class="module" aria-labelledby="training-publication-title" data-tab-panel>
 		@components.SectionHeading("", "Publicar prescrições privadas", "Confirme os destinatários e crie uma revisão imutável por atleta. Alterações posteriores ficam em rascunho até nova publicação.")
 		<div class="notice notice--info" role="note"><p>A publicação não envia dados de colegas, subgrupos ou tripulações. Cada atleta recebe apenas a sua sessão resolvida; tutores veem apenas menores atualmente a seu cargo.</p></div>
-		if len(page.Publications) == 0 {
+		if page.PublicationUnavailable {
+@components.Callout("Não foi possível confirmar o estado de publicação", "Atualize a página antes de rever a publicação e os destinatários.", "info")
+} else if len(structuredWorkspacePublications(page)) == 0 {
 			@components.EmptyState("Ainda sem semanas publicáveis", "Crie uma semana estruturada com sessões e destinatários válidos.")
 		}
 		<div class="record-list">
-			for _, publication := range page.Publications {
+			for _, publication := range structuredWorkspacePublications(page) {
 				<article class="record-item record-item--stacked"><div class="record-item__copy">
-					<p class="eyebrow">{ publication.Status }</p>
+					if publication.Unavailable || page.PublicationUnavailable {
+<p>Não foi possível confirmar o estado de publicação</p>
+} else {
+<p class="eyebrow">{ publication.Status }</p>
+}
 					<h3>{ publication.Plan }</h3>
-					<p class="record-meta">{ fmt.Sprintf("%d atletas · %d prescrições", publication.AthleteCount, publication.PrescriptionCount) }
+					if !publication.Unavailable && !page.PublicationUnavailable {
+<p class="record-meta">{ fmt.Sprintf("%d atletas · %d prescrições previstas", publication.AthleteCount, publication.PrescriptionCount) }
 						if publication.Revision > 0 {
 							<span> · revisão { fmt.Sprintf("%d", publication.Revision) } · { publication.PublishedAt } · { publication.PublishedBy }</span>
 						}
 					</p>
-					<p class="record-meta">{ fmt.Sprintf("Pré-visualização: %d novas · %d alteradas · %d removidas · %d sem alterações", publication.AddedCount, publication.ChangedCount, publication.RemovedCount, publication.UnchangedCount) }</p>
-					if publication.ConflictCount > 0 {
+					if publication.ConflictCount == 0 {
+ <p class="record-meta">{ fmt.Sprintf("Pré-visualização: %d novas · %d alteradas · %d removidas · %d sem alterações", publication.AddedCount, publication.ChangedCount, publication.RemovedCount, publication.UnchangedCount) }</p>
+ }
+}
+					if publication.Unavailable || page.PublicationUnavailable {
+<p>Atualize a página antes de rever a publicação.</p>
+} else if publication.ConflictCount > 0 {
 						<div class="notice notice--error" role="alert"><p>{ fmt.Sprintf("%d conflitos de variação impedem a publicação.", publication.ConflictCount) }</p></div>
 					} else if publication.PrescriptionCount == 0 && publication.RemovedCount == 0 {
 						<p class="record-meta">Não existem sessões com destinatários válidos nesta semana.</p>
@@ -647,6 +672,8 @@ templ structuredPublicationManagement(page StructuredTrainingPage) {
 						<p class="record-meta">Não há alterações materiais para publicar.</p>
 					} else {
 						<form class="form-layout form-layout--compact" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/semanas/" + publication.PlanID + "/publicar") }>
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+
 							@page.CSRFField
 							<input type="hidden" name="source_updated_at" value={ publication.SourceUpdatedAt }/>
 							@components.FieldLabel("publication-summary-" + publication.PlanID, "Resumo desta revisão", true)
@@ -788,7 +815,9 @@ templ structuredCycleCreateDialog(page StructuredTrainingPage) {
 	<dialog id="create-training-cycle" class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "cycle" } aria-labelledby="create-training-cycle-title" open?={ page.OpenForm == "cycle" }>
 		<div class="task-dialog__header"><div><p class="eyebrow">Planeamento opcional</p><h3 id="create-training-cycle-title">Criar ciclo</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.CycleForm.Errors), []components.FieldErrorRef{{Key: "group_id", Field: "create-cycle-group"}, {Key: "name", Field: "create-cycle-name"}, {Key: "week_id", Field: "create-cycle-weeks"}, {Key: "child_cycle_id", Field: "create-cycle-children"}}))
-		<form class="form-layout" method="post" action="/admin/treinos/estruturados/ciclos">@page.CSRFField
+		<form class="form-layout" method="post" action="/admin/treinos/estruturados/ciclos">
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+@page.CSRFField
 			@structuredCycleFields(page, page.CycleForm, "create-cycle", false)
 			<button type="submit">Criar ciclo</button>
 		</form>
@@ -799,7 +828,9 @@ templ structuredCycleEditDialog(page StructuredTrainingPage, cycle StructuredTra
 	<dialog id={ "edit-training-cycle-" + cycle.ID } class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "cycle-" + cycle.ID } aria-labelledby={ "edit-training-cycle-title-" + cycle.ID } open?={ page.OpenForm == "cycle-" + cycle.ID }>
 		<div class="task-dialog__header"><div><p class="eyebrow">{ cycle.GroupName } · { cycle.Season }</p><h3 id={ "edit-training-cycle-title-" + cycle.ID }>Editar { cycle.Name }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 		@components.FieldErrorMessage("form", structuredCycleEditForm(page, cycle).Errors["form"])
-		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/ciclos/" + cycle.ID) }>@page.CSRFField<input type="hidden" name="version" value={ structuredCycleEditForm(page, cycle).Version }/>
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/ciclos/" + cycle.ID) }>
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+@page.CSRFField<input type="hidden" name="version" value={ structuredCycleEditForm(page, cycle).Version }/>
 			@structuredCycleFields(page, structuredCycleEditForm(page, cycle), "edit-cycle-"+cycle.ID, true)
 			<button type="submit">Guardar ciclo</button>
 		</form>
@@ -809,7 +840,9 @@ templ structuredCycleEditDialog(page StructuredTrainingPage, cycle StructuredTra
 templ structuredCycleCopyDialog(page StructuredTrainingPage, cycle StructuredTrainingCycle) {
 	<dialog id={ "copy-training-cycle-" + cycle.ID } class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "cycle-copy-" + cycle.ID } aria-labelledby={ "copy-training-cycle-title-" + cycle.ID } open?={ page.OpenForm == "cycle-copy-" + cycle.ID }>
 		<div class="task-dialog__header"><div><p class="eyebrow">Cópia independente</p><h3 id={ "copy-training-cycle-title-" + cycle.ID }>Copiar { cycle.Name }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
-		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/ciclos/" + cycle.ID + "/copiar") }>@page.CSRFField
+		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/ciclos/" + cycle.ID + "/copiar") }>
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+@page.CSRFField
 			<p class="field-help">Cria semanas e sessões editáveis com novos identificadores. Publicações, respostas de atletas e competições-alvo não são copiadas.</p>
 			@components.FieldErrorMessage("form", structuredCycleCopyForm(page, cycle).Errors["form"])
 			@components.FieldLabel("copy-cycle-name-"+cycle.ID, "Nome do novo ciclo", true)<input id={ "copy-cycle-name-"+cycle.ID } name="name" value={ structuredCycleCopyForm(page, cycle).Name } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("name", structuredCycleCopyForm(page, cycle).Errors["name"])
@@ -846,6 +879,8 @@ templ structuredVariationManagement(page StructuredTrainingPage) {
 		<dialog id="add-variation-group" class="task-dialog" data-task-dialog aria-labelledby="add-variation-group-title">
 			<div class="task-dialog__header"><h3 id="add-variation-group-title">Novo alvo de variação</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 			<form class="form-layout" method="post" action="/admin/treinos/estruturados/variacoes/grupos">
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+
 				@page.CSRFField
 				@components.FieldLabel("variation-group-base", "Grupo de treino", true)
 				<select id="variation-group-base" name="training_group_id" required><option value="">Selecione</option>
@@ -880,6 +915,8 @@ templ structuredVariationManagement(page StructuredTrainingPage) {
 		<dialog id="add-training-variation" class="task-dialog" data-task-dialog aria-labelledby="add-training-variation-title">
 			<div class="task-dialog__header"><h3 id="add-training-variation-title">Adicionar variação</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 			<form class="form-layout" method="post" action="/admin/treinos/estruturados/variacoes">
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+
 				@page.CSRFField
 				@components.FieldLabel("variation-plan", "Semana", true)
 				<select id="variation-plan" name="plan_id" required><option value="">Selecione</option>
@@ -947,7 +984,9 @@ templ structuredVariationManagement(page StructuredTrainingPage) {
 							if rule.Patch != "" {
 								<span class="record-meta"> · { rule.Patch }</span>
 							}
-							<form class="inline-form" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/variacoes/" + rule.ID + "/retirar") }>@page.CSRFField<input type="hidden" name="version" value={ fmt.Sprintf("%d", rule.Version) }/><button class="action action--quiet" type="submit">Retirar</button></form>
+							<form class="inline-form" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/variacoes/" + rule.ID + "/retirar") }>
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+@page.CSRFField<input type="hidden" name="version" value={ fmt.Sprintf("%d", rule.Version) }/><button class="action action--quiet" type="submit">Retirar</button></form>
 						</li>
 					}
 				</ul></div></article>
@@ -959,7 +998,7 @@ templ structuredVariationManagement(page StructuredTrainingPage) {
 templ structuredRoutineLibrary(page StructuredTrainingPage) {
 	<section id="training-routines" class="module" aria-labelledby="routine-library-title" data-tab-panel>
 		@components.SectionHeading("", "Biblioteca de rotinas", "Pesquise, pré-visualize e insira uma cópia independente no plano de destino.")
-		<form class="filter-bar" method="get" action="/admin/treinos/estruturados">
+		<form class="filter-bar" method="get" action="/admin/treinos/estruturados#training-routines">
 			if page.SelectedGroupID != "" {
 				<input type="hidden" name="group_id" value={ page.SelectedGroupID }/>
 			}
@@ -969,6 +1008,10 @@ templ structuredRoutineLibrary(page StructuredTrainingPage) {
 			if page.SelectedSessionID != "" {
 				<input type="hidden" name="session_id" value={ page.SelectedSessionID }/>
 			}
+   if page.SelectedDay != "" {
+    <input type="hidden" name="day" value={ page.SelectedDay }/>
+   }
+
 			@components.FieldLabel("routine-query", "Pesquisar", false)
 			<input id="routine-query" name="routine_query" value={ page.RoutineQuery } maxlength="180"/>
 			@components.FieldLabel("routine-modality", "Modalidade", false)
@@ -1091,6 +1134,8 @@ templ structuredCopyBlockForm(page StructuredTrainingPage, blockID string) {
 	<dialog id={ "copy-block-" + blockID } class="task-dialog" data-task-dialog aria-labelledby={ "copy-block-title-" + blockID }>
 		<div class="task-dialog__header"><h3 id={ "copy-block-title-" + blockID }>Copiar bloco</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/blocos/" + blockID + "/copiar") }>
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+
 			@page.CSRFField
 			@components.FieldLabel("copy-block-target-"+blockID, "Segmento de destino", true)
 			<select id={ "copy-block-target-" + blockID } name="target_id" required>
@@ -1108,6 +1153,8 @@ templ structuredCopySessionForm(page StructuredTrainingPage, sessionID string) {
 	<dialog id={ "copy-session-" + sessionID } class="task-dialog" data-task-dialog aria-labelledby={ "copy-session-title-" + sessionID }>
 		<div class="task-dialog__header"><h3 id={ "copy-session-title-" + sessionID }>Copiar sessão</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/sessoes/" + sessionID + "/copiar") }>
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+
 			@page.CSRFField
 			@components.FieldLabel("copy-session-week-"+sessionID, "Semana de destino", true)
 			<select id={ "copy-session-week-" + sessionID } name="target_id" required>
@@ -1148,6 +1195,8 @@ templ structuredCopyDayForm(page StructuredTrainingPage) {
 	<section id="training-copy-tools" class="module" data-tab-panel>
 		@components.SectionHeading("", "Copiar conteúdo", "Repita um dia completo entre semanas. Para copiar uma semana, sessão ou bloco, use o menu de ações junto ao respetivo conteúdo.")
 		<form class="form-layout form-layout--compact" method="post" action="/admin/treinos/estruturados/dias/copiar">
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+
 			@page.CSRFField
 			@components.FieldLabel("copy-day-source-plan", "Semana de origem", true)
 			<select id="copy-day-source-plan" name="source_plan_id" required>
@@ -1171,6 +1220,8 @@ templ structuredGroupForm(page StructuredTrainingPage) {
 		<div class="task-form">
 			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.GroupForm.Errors), []components.FieldErrorRef{{Key: "name", Field: "structured-group-name"}, {Key: "scope", Field: "structured-group-team"}, {Key: "members", Field: "structured-group-members"}}))
 			<form class="form-layout" method="post" action="/admin/treinos/estruturados/grupos" data-task-form>
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+
 				@page.CSRFField
 				@components.RequiredNote()
 				@components.FieldLabel("structured-group-name", "Nome", true)
@@ -1206,7 +1257,19 @@ templ structuredGroupForm(page StructuredTrainingPage) {
 }
 
 templ structuredWeekForm(page StructuredTrainingPage) {
+ if page.Workspace.Enabled {
+  <details id="criar-semana-treino" class="week-native-task" open?={ page.OpenForm == "week" || len(page.WeekForm.Errors) > 0 }>
+   <summary>Criar semana</summary>
+   @structuredWeekFormBody(page)
+  </details>
+ } else {
 	@components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-semana-treino", TitleID: "structured-week-title", Eyebrow: "Planeamento estruturado", Title: "Criar semana", Description: "Associe uma semana datada a um grupo.", Variant: "sheet", URL: structuredPlannerReturnURL(page), ReturnURL: structuredPlannerReturnURL(page), Open: page.OpenForm == "week"}) {
+   @structuredWeekFormBody(page)
+  }
+ }
+}
+
+templ structuredWeekFormBody(page StructuredTrainingPage) {
 		<div class="task-form">
             if page.SeasonSetupMessage != "" {
                 @components.Callout("Rever a configuração da época", page.SeasonSetupMessage, "info")
@@ -1220,16 +1283,16 @@ templ structuredWeekForm(page StructuredTrainingPage) {
 				<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 				@components.RequiredNote()
 				@components.FieldLabel("structured-week-group", "Grupo", true)
-				<select id="structured-week-group" name="group_id" required>
+				<select id="structured-week-group" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["group_id"] != "") } aria-describedby="group_id-error" name="group_id" required>
 					<option value="">Selecione</option>
 					for _, choice := range page.Groups {
 						<option value={ choice.ID } selected?={ choice.ID == page.WeekForm.GroupID }>{ choice.Name }</option>
 					}
 				</select>@components.FieldErrorMessage("group_id", page.WeekForm.Errors["group_id"])
 				@components.FieldLabel("structured-week-name", "Título", true)
-				<input id="structured-week-name" name="title" value={ page.WeekForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.WeekForm.Errors["title"])
+				<input id="structured-week-name" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["title"] != "") } aria-describedby="title-error" name="title" value={ page.WeekForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.WeekForm.Errors["title"])
 				@components.FieldLabel("structured-week-start", "Segunda-feira da semana", true)
-				<input id="structured-week-start" name="week_start" type="date" value={ page.WeekForm.WeekStart } required/>@components.FieldErrorMessage("week_start", page.WeekForm.Errors["week_start"])
+				<input id="structured-week-start" aria-invalid={ fmt.Sprintf("%t", page.WeekForm.Errors["week_start"] != "") } aria-describedby="week_start-error" name="week_start" type="date" value={ page.WeekForm.WeekStart } required/>@components.FieldErrorMessage("week_start", page.WeekForm.Errors["week_start"])
 				@components.FieldLabel("structured-week-load", "Carga planeada (%)", false)
 				<input id="structured-week-load" name="planned_load_percentage" type="number" min="0" max="100" value={ page.WeekForm.PlannedLoad } aria-describedby="structured-week-load-help"/>@components.FieldErrorMessage("planned_load_percentage", page.WeekForm.Errors["planned_load_percentage"])
 				<small id="structured-week-load-help">Distribuição de carga definida pelo treinador. Não é %1RM, esforço percebido nem uma recomendação automática.</small>
@@ -1240,36 +1303,52 @@ templ structuredWeekForm(page StructuredTrainingPage) {
 				}
 			</form>
 		</div>
-	}
 }
 
 templ structuredSessionForm(page StructuredTrainingPage) {
+ if page.Workspace.Enabled {
+  <details id="criar-sessao-estruturada" class="week-native-task" open?={ page.OpenForm == "session" || len(page.SessionForm.Errors) > 0 }>
+   <summary>Adicionar sessão</summary>
+   @structuredSessionFormBody(page)
+  </details>
+ } else {
 	@components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-sessao-estruturada", TitleID: "structured-session-title", Eyebrow: "Planeamento estruturado", Title: "Criar sessão", Description: "Adicione um horário exato à semana.", Variant: "sheet", URL: structuredPlannerReturnURL(page), ReturnURL: structuredPlannerReturnURL(page), Open: page.OpenForm == "session"}) {
+   @structuredSessionFormBody(page)
+  }
+ }
+}
+
+templ structuredSessionFormBody(page StructuredTrainingPage) {
 		<div class="task-form">
+if page.Workspace.Enabled && page.SelectedDay != "" {
+<p>Dia selecionado: { page.SelectedDay }. Introduza as horas de início e fim; não são preenchidas automaticamente.</p>
+}
 			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SessionForm.Errors), []components.FieldErrorRef{{Key: "plan_id", Field: "structured-session-week"}, {Key: "title", Field: "structured-session-name"}, {Key: "starts_at", Field: "structured-session-start"}, {Key: "ends_at", Field: "structured-session-end"}, {Key: "entry_kind", Field: "structured-session-kind"}}))
 			<form class="form-layout" method="post" action="/admin/treinos/estruturados/sessoes" data-task-form>
 				@page.CSRFField
 				<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 				@components.RequiredNote()
 				@components.FieldLabel("structured-session-week", "Semana", true)
-				<select id="structured-session-week" name="plan_id" required>
+				<select id="structured-session-week" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["plan_id"] != "") } aria-describedby="plan_id-error" name="plan_id" required>
 					<option value="">Selecione</option>
 					for _, choice := range page.Weeks {
-						<option value={ choice.ID } selected?={ choice.ID == page.SessionForm.PlanID }>{ choice.Name }</option>
-					}
+      if !page.Workspace.Enabled || choice.ID == page.SelectedWeekID {
+       <option value={ choice.ID } selected?={ choice.ID == page.SessionForm.PlanID }>{ choice.Name }</option>
+      }
+     }
 				</select>@components.FieldErrorMessage("plan_id", page.SessionForm.Errors["plan_id"])
 				@components.FieldLabel("structured-session-name", "Título", true)
-				<input id="structured-session-name" name="title" value={ page.SessionForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.SessionForm.Errors["title"])
+				<input id="structured-session-name" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["title"] != "") } aria-describedby="title-error" name="title" value={ page.SessionForm.Title } required minlength="2" maxlength="180"/>@components.FieldErrorMessage("title", page.SessionForm.Errors["title"])
 				@components.FieldLabel("structured-session-kind", "Tipo", true)
-				<select id="structured-session-kind" name="entry_kind" required>
+				<select id="structured-session-kind" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["entry_kind"] != "") } aria-describedby="entry_kind-error" name="entry_kind" required>
 					for _, value := range []string{"TRAINING", "REST", "COMPETITION", "LOGISTICS"} {
 						<option value={ value } selected?={ value == page.SessionForm.EntryKind }>{ structuredEntryKindLabel(value) }</option>
 					}
 				</select>@components.FieldErrorMessage("entry_kind", page.SessionForm.Errors["entry_kind"])
 				@components.FieldLabel("structured-session-start", "Início", true)
-				<input id="structured-session-start" name="starts_at" type="datetime-local" value={ page.SessionForm.StartsAt } required/>@components.FieldErrorMessage("starts_at", page.SessionForm.Errors["starts_at"])
+				<input id="structured-session-start" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["starts_at"] != "") } aria-describedby="starts_at-error" name="starts_at" type="datetime-local" value={ page.SessionForm.StartsAt } required/>@components.FieldErrorMessage("starts_at", page.SessionForm.Errors["starts_at"])
 				@components.FieldLabel("structured-session-end", "Fim", true)
-				<input id="structured-session-end" name="ends_at" type="datetime-local" value={ page.SessionForm.EndsAt } required/>@components.FieldErrorMessage("ends_at", page.SessionForm.Errors["ends_at"])
+				<input id="structured-session-end" aria-invalid={ fmt.Sprintf("%t", page.SessionForm.Errors["ends_at"] != "") } aria-describedby="ends_at-error" name="ends_at" type="datetime-local" value={ page.SessionForm.EndsAt } required/>@components.FieldErrorMessage("ends_at", page.SessionForm.Errors["ends_at"])
 				@components.FieldLabel("structured-session-description", "Instruções gerais (opcional)", false)
 				<textarea id="structured-session-description" name="description" maxlength="4000">{ page.SessionForm.Description }</textarea>
 				@components.FormActions(structuredPlannerReturnURL(page)) {
@@ -1277,7 +1356,6 @@ templ structuredSessionForm(page StructuredTrainingPage) {
 				}
 			</form>
 		</div>
-	}
 }
 
 templ structuredSegmentForm(page StructuredTrainingPage, sessionID string) {
@@ -1349,6 +1427,8 @@ templ structuredGymBlockForm(page StructuredTrainingPage, segmentID string) {
 	<dialog id={ "add-gym-block-" + segmentID } class="task-dialog" data-task-dialog aria-labelledby={ "add-gym-block-title-" + segmentID }>
 		<div class="task-dialog__header"><div><p class="eyebrow">Ginásio</p><h3 id={ "add-gym-block-title-" + segmentID }>Adicionar bloco estruturado</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/" + segmentID + "/ginasio") }>
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+
 			@page.CSRFField
 			@components.FieldLabel("gym-purpose-"+segmentID, "Fase do treino", true)
 			<select id={ "gym-purpose-" + segmentID } name="purpose" required>@gymPurposeOptions()
@@ -1431,6 +1511,8 @@ templ structuredWaterProfileManagement(page StructuredTrainingPage) {
 		<dialog id="add-water-profile" class="task-dialog" data-task-dialog aria-labelledby="add-water-profile-title">
 			<div class="task-dialog__header"><h3 id="add-water-profile-title">Criar perfil de intensidade</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 			<form class="form-layout" method="post" action="/admin/treinos/estruturados/agua/perfis">
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+
 				@page.CSRFField
 				@components.FieldLabel("water-profile-name", "Nome", true)<input id="water-profile-name" name="name" required minlength="2" maxlength="120"/>
 				@components.FieldHelp("water-profile-name-help", "Para rever um perfil, use exatamente o mesmo nome e a mesma embarcação.")
@@ -1461,6 +1543,8 @@ templ structuredWaterProfileManagement(page StructuredTrainingPage) {
 				<dialog id={ "add-water-zone-" + profile.ID } class="task-dialog" data-task-dialog aria-labelledby={ "add-water-zone-title-" + profile.ID }>
 					<div class="task-dialog__header"><h3 id={ "add-water-zone-title-" + profile.ID }>Adicionar ou atualizar zona de { profile.Name }</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
 					<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/agua/perfis/" + profile.ID + "/zonas") }>
+<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+
 						@page.CSRFField
 						@components.FieldLabel("water-zone-code-"+profile.ID, "Código curto", true)<input id={ "water-zone-code-" + profile.ID } name="code" required maxlength="20" placeholder="Ex.: R7"/>
 						@components.FieldHelp("water-zone-code-help-"+profile.ID, "Se este código já existir na revisão ativa, os restantes campos substituem a definição dessa revisão.")

@@ -846,3 +846,47 @@ body.task-surface-open { overflow: hidden; }
     min-inline-size: 0;
   }
 }
+
+/* The same seven day sections serve the desktop overview and native mobile day view. */
+.week-workspace { display: grid; gap: var(--space-5); min-inline-size: 0; }
+.week-workspace .page-header { margin-block-end: 0; }
+.week-workspace__navigation { display: grid; gap: var(--space-3); }
+.week-workspace__navigation :is(h2,p) { margin: 0; }
+.week-workspace__selector { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-3); min-inline-size: 0; }
+.week-workspace__selector > .field-group { flex: 1 1 18rem; }
+.week-workspace__selector select { max-inline-size: 100%; }
+.week-publication { padding: var(--space-4); border-inline-start: .3rem solid var(--c-river-600); background: var(--c-raised); }
+.week-publication h2 { margin-block-start: 0; font-size: var(--text-lg); }
+.week-workspace__days { display: grid; grid-template-columns: repeat(auto-fit,minmax(7rem,1fr)); gap: var(--space-2); }
+.week-workspace__days > a { display: grid; gap: var(--space-1); text-align: center; }
+.week-workspace__days > a > span:last-child { font-size: var(--text-sm); }
+.week-workspace__calendar { display: grid; gap: var(--space-2); min-inline-size: 0; }
+.week-day { min-inline-size: 0; padding: var(--space-3); border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-raised); overflow-wrap: anywhere; }
+.week-day[data-selected="true"] { border-color: var(--c-river-600); }
+.week-day > header { padding-block-end: var(--space-3); border-block-end: 1px solid var(--c-border); }
+.week-day > header :is(h3,p) { margin: 0; }
+.week-day > header h3 { font-size: var(--text-base); }
+.week-day > header p,.week-day__empty { color: var(--c-muted); font-size: var(--text-sm); }
+.week-day__band { margin-block-start: var(--space-4); }
+.week-day__band h4 { margin: 0 0 var(--space-2); font-size: var(--text-sm); }
+.week-day__appointments { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.week-appointment { display: grid; gap: var(--space-1); min-block-size: var(--control-min-block-size); padding: var(--space-2); border: 1px solid var(--c-border); border-radius: var(--radius-sm); color: var(--c-text); background: var(--c-page); text-decoration: none; }
+.week-appointment:hover,.week-appointment:focus-visible { border-color: var(--c-river-600); background: var(--c-interactive); }
+.week-appointment[aria-current="page"] { border-inline-start: .3rem solid var(--c-river-600); }
+.week-appointment__time { font-size: var(--text-sm); }
+.week-day__add { margin-block-start: var(--space-3); max-inline-size: 100%; text-align: start; white-space: normal; }
+.week-summary h2 { margin-block-start: 0; }
+.week-advanced,.week-native-task { margin-block-start: var(--space-5); border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-raised); }
+.week-advanced > summary,.week-native-task > summary { min-block-size: var(--control-min-block-size); padding: var(--space-4); cursor: pointer; font-weight: 700; overflow-wrap: anywhere; }
+.week-advanced > .module { margin-inline: var(--space-3); }
+.week-native-task .form-actions { display: flex; flex-wrap: wrap; }
+.week-native-task .form-actions > .action,.week-native-task .form-actions > button { max-inline-size: 100%; white-space: normal; }
+@media (max-width: 63.99rem) {
+  .week-day[data-selected="false"] { display: none; }
+}
+@media (min-width: 64rem) {
+  .week-workspace__days { display: none; }
+  .week-workspace__calendar { grid-template-columns: repeat(7,minmax(0,1fr)); align-items: start; }
+  .week-day { padding: var(--space-2); }
+}
+.week-native-task .form-layout > label { display: block; }

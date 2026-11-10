@@ -2406,7 +2406,7 @@ SELECT group_row.id AS group_id, group_row.name AS group_name,
        (SELECT count(*)::integer FROM training_group_members member WHERE member.group_id = group_row.id) AS member_count,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
-       session.starts_at, session.ends_at, session.entry_kind,
+       session.starts_at, session.ends_at, session.entry_kind, session.status AS session_status,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
        segment.title AS segment_title, segment.location AS segment_location,
        segment.planned_duration_minutes, segment.planned_start_offset_minutes,
@@ -2490,6 +2490,7 @@ type ListStructuredTrainingOverviewForManagerRow struct {
 	StartsAt                     pgtype.Timestamptz        `json:"starts_at"`
 	EndsAt                       pgtype.Timestamptz        `json:"ends_at"`
 	EntryKind                    *TrainingEntryKind        `json:"entry_kind"`
+	SessionStatus                *string                   `json:"session_status"`
 	SegmentID                    *uuid.UUID                `json:"segment_id"`
 	SegmentPosition              *int32                    `json:"segment_position"`
 	SegmentModality              *TrainingSegmentModality  `json:"segment_modality"`
@@ -2579,6 +2580,7 @@ func (q *Queries) ListStructuredTrainingOverviewForManager(ctx context.Context, 
 			&i.StartsAt,
 			&i.EndsAt,
 			&i.EntryKind,
+			&i.SessionStatus,
 			&i.SegmentID,
 			&i.SegmentPosition,
 			&i.SegmentModality,

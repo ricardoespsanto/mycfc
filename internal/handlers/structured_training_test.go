@@ -88,6 +88,7 @@ type structuredTrainingStoreStub struct {
 	weekCopy                StructuredWeekCopyInput
 	createGroupErr          error
 	createWeekErr           error
+	createdSessionID        uuid.UUID
 	createSessionErr        error
 	updateWeekLoadErr       error
 	getSessionPlanErr       error
@@ -452,7 +453,11 @@ func (s *structuredTrainingStoreStub) CopyStructuredTrainingCycle(_ context.Cont
 
 func (s *structuredTrainingStoreStub) CreateStructuredTrainingSession(_ context.Context, params dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error) {
 	s.sessions = append(s.sessions, params)
-	return dbgen.TrainingSession{ID: uuid.New(), PlanID: params.PlanID, Title: params.Title}, s.createSessionErr
+	id := s.createdSessionID
+	if id == uuid.Nil {
+		id = uuid.New()
+	}
+	return dbgen.TrainingSession{ID: id, PlanID: params.PlanID, Title: params.Title}, s.createSessionErr
 }
 
 func (s *structuredTrainingStoreStub) GetStructuredSessionPlanID(context.Context, uuid.UUID) (uuid.UUID, error) {
@@ -992,7 +997,6 @@ func TestStructuredTrainingManagerIndexFailsClosedForEveryRequiredRead(t *testin
 		{"competition events", structuredTrainingStoreStub{competitionEventsErr: errors.New("database unavailable")}},
 		{"variation groups", structuredTrainingStoreStub{variationGroupsErr: errors.New("database unavailable")}},
 		{"variation matches", structuredTrainingStoreStub{variationMatchesErr: errors.New("database unavailable")}},
-		{"publication states", structuredTrainingStoreStub{publicationStatesErr: errors.New("database unavailable")}},
 		{"training cycles", structuredTrainingStoreStub{cycleRowsErr: errors.New("database unavailable")}},
 		{"training cycle weeks", structuredTrainingStoreStub{cycleWeekRowsErr: errors.New("database unavailable")}},
 		{"training cycle targets", structuredTrainingStoreStub{cycleTargetRowsErr: errors.New("database unavailable")}},
@@ -2041,7 +2045,7 @@ func int16Pointer(value int16) *int16 { return &value }
 func TestStructuredTrainingAuthoringHandlersPersistValidHierarchy(t *testing.T) {
 	userID, programmeID, membershipID, groupID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	planID, sessionID, segmentID, blockID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	store := &structuredTrainingStoreStub{manageable: true, weekOK: true, planID: planID}
+	store := &structuredTrainingStoreStub{manageable: true, weekOK: true, planID: planID, overviewRows: []dbgen.ListStructuredTrainingOverviewForManagerRow{{GroupID: groupID, PlanID: &planID}}}
 	handler := StructuredTraining{Store: store, Location: time.UTC, System: System{}}
 	user := CurrentUser{ID: userID, CoachProgrammeIDs: map[uuid.UUID]bool{programmeID: true}}
 
@@ -2611,10 +2615,10 @@ func TestStructuredPlannerSelectionKeepsAValidDeepLinkedContext(t *testing.T) {
 	if groupID, weekID, sessionID := structuredPlannerSelection(audiences, "group-b", "week-b", "session-c"); groupID != "group-b" || weekID != "week-b" || sessionID != "session-c" {
 		t.Fatalf("deep-linked selection = %q, %q, %q", groupID, weekID, sessionID)
 	}
-	if groupID, weekID, sessionID := structuredPlannerSelection(audiences, "group-b", "week-a", "session-a"); groupID != "group-b" || weekID != "week-b" || sessionID != "session-b" {
+	if groupID, weekID, sessionID := structuredPlannerSelection(audiences, "group-b", "week-a", "session-a"); groupID != "group-b" || weekID != "week-b" || sessionID != "" {
 		t.Fatalf("cross-group selection should fall back within its selected group, got %q, %q, %q", groupID, weekID, sessionID)
 	}
-	if groupID, weekID, sessionID := structuredPlannerSelection(audiences, "unknown", "unknown", "unknown"); groupID != "group-a" || weekID != "week-a" || sessionID != "session-a" {
+	if groupID, weekID, sessionID := structuredPlannerSelection(audiences, "unknown", "unknown", "unknown"); groupID != "group-a" || weekID != "week-a" || sessionID != "" {
 		t.Fatalf("invalid selection should fall back to the first available context, got %q, %q, %q", groupID, weekID, sessionID)
 	}
 }
@@ -2763,7 +2767,7 @@ func TestStructuredPublicationStatesDistinguishesAddedChangedRemovedAndUnchanged
 	}}
 	stateCurrent := true
 	states := (StructuredTraining{Store: store, Location: time.UTC}).structuredPublicationStates(context.Background(), []pages.StructuredTrainingAudience{{GroupName: "Competição", Weeks: []pages.StructuredTrainingWeek{week}}}, []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, Title: "Semana 1", SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}, PublishedRevision: 2, PublicationCurrent: &stateCurrent, PublishedAt: pgtype.Timestamptz{Time: updated.Add(-time.Hour), Valid: true}}}, nil)
-	if len(states) != 1 || states[0].Status != "Publicado · sem alterações pendentes" || states[0].AthleteCount != 3 || states[0].PrescriptionCount != 3 || states[0].AddedCount != 1 || states[0].ChangedCount != 1 || states[0].RemovedCount != 1 || states[0].UnchangedCount != 1 || states[0].PublishedAt == "" {
+	if len(states) != 1 || states[0].Status != "Rascunho alterado desde a última publicação" || states[0].Current || states[0].Unavailable || states[0].AthleteCount != 3 || states[0].PrescriptionCount != 3 || states[0].AddedCount != 1 || states[0].ChangedCount != 1 || states[0].RemovedCount != 1 || states[0].UnchangedCount != 1 || states[0].PublishedAt == "" {
 		t.Fatalf("states=%#v", states)
 	}
 }
