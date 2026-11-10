@@ -56,7 +56,8 @@ func TestTrainingGroupScopeErrorDoesNotInvalidateRetainedName(t *testing.T) {
 func TestTrainingGroupAddUsesNecessaryNamesAndPreservesConflictReview(t *testing.T) {
 	page := TrainingGroupsPage{Mode: "add", ActionURL: "/admin/treinos/estruturados/grupos/g/atletas", ReturnURL: "/admin/treinos/estruturados/grupos/g?week_id=w", ReviewURL: "/admin/treinos/estruturados/grupos/g/atletas?q=Ana&week_id=w", WeekID: "w", SearchPerformed: true,
 		Conflict: "Reveja o grupo antes de guardar.", SearchPage: 2, Group: TrainingGroupRow{Name: "Iniciados", ScopeName: "Competição", Version: "new-version"},
-		Form:    TrainingGroupForm{Query: "Ana", Version: "submitted-version", SelectedIDs: map[string]bool{"membership-selected": true}},
+		Seasons: []TrainingPlacementSeason{{ID: "synthetic-season", Name: "Época sintética"}},
+		Form:    TrainingGroupForm{Query: "Ana", SeasonID: "synthetic-season", EffectiveOn: "2027-01-11", Version: "submitted-version", SelectedIDs: map[string]bool{"membership-selected": true}},
 		Results: []TrainingGroupAthleteChoice{{MembershipID: "membership-selected", Name: "Ana elegível"}, {MembershipID: "membership-present", Name: "Ana presente", AlreadyMember: true}, {MembershipID: "membership-unavailable", Name: "Ana indisponível", Unavailable: true}}}
 	body := renderTrainingGroups(t, page)
 	for _, want := range []string{`name="q"`, `name="version" value="submitted-version"`, `name="week_id" value="w"`, `name="page" value="2"`, `value="membership-selected" checked`, "Já pertence ao grupo", "Não está disponível para adição", "As escolhas aplicam-se apenas a esta página", `href="#training-group-members"`, `q=Ana&amp;week_id=w`} {
@@ -172,7 +173,7 @@ func TestTrainingGroupSetupCategoryOnlyForApplicableParticipation(t *testing.T) 
 	}
 }
 func TestTrainingGroupSearchEmptyResultDoesNotClaimHiddenPeopleAbsent(t *testing.T) {
-	body := renderTrainingGroups(t, TrainingGroupsPage{Mode: "add", SearchPerformed: true, Form: TrainingGroupForm{Query: "Nome"}})
+	body := renderTrainingGroups(t, TrainingGroupsPage{Mode: "add", SearchPerformed: true, Seasons: []TrainingPlacementSeason{{ID: "synthetic-season", Name: "Época sintética"}}, Form: TrainingGroupForm{Query: "Nome", SeasonID: "synthetic-season", EffectiveOn: "2027-01-11"}})
 	if !strings.Contains(body, "Não foram encontradas pessoas disponíveis para este grupo com esta pesquisa.") || strings.Contains(body, "Não foram encontradas pessoas elegíveis neste grupo.") {
 		t.Fatal("search absence overstates scope")
 	}

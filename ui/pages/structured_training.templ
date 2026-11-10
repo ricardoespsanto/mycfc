@@ -1302,45 +1302,27 @@ templ structuredCopyDayForm(page StructuredTrainingPage) {
 	</section>
 }
 
-templ structuredGroupForm(page StructuredTrainingPage) {
-	@components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-grupo-treino", TitleID: "structured-group-title", Eyebrow: "Planeamento estruturado", Title: "Criar grupo de treino", Description: "Selecione um âmbito e os atletas atuais.", Variant: "sheet", URL: structuredPlannerReturnURL(page), ReturnURL: structuredPlannerReturnURL(page), Open: page.OpenForm == "group"}) {
-		<div class="task-form">
-			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.GroupForm.Errors), []components.FieldErrorRef{{Key: "name", Field: "structured-group-name"}, {Key: "scope", Field: "structured-group-team"}, {Key: "members", Field: "structured-group-members"}}))
-			<form class="form-layout" method="post" action="/admin/treinos/estruturados/grupos" data-task-form>
-<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+// Empty-group creation is independent of dated athlete placement. Only the
+// already supplied planner week/day context is carried into the native task.
+func structuredNativeGroupCreateURL(page StructuredTrainingPage) string {
+ const destination = "/admin/treinos/estruturados/grupos/criar"
+ current, err := url.Parse(structuredPlannerReturnURL(page))
+ if err != nil { return destination }
+ context := url.Values{}
+ for _, key := range []string{"week_id", "day"} {
+  if value := current.Query().Get(key); value != "" { context.Set(key,value) }
+ }
+ if len(context) == 0 { return destination }
+ return destination + "?" + context.Encode()
+}
 
-				@page.CSRFField
-				@components.RequiredNote()
-				@components.FieldLabel("structured-group-name", "Nome", true)
-				<input id="structured-group-name" name="name" value={ page.GroupForm.Name } required minlength="2" maxlength="120"/>@components.FieldErrorMessage("name", page.GroupForm.Errors["name"])
-				@components.FieldLabel("structured-group-team", "Equipa", false)
-				<select id="structured-group-team" name="team_id">
-					<option value="">Sem equipa</option>
-					for _, choice := range page.Teams {
-						<option value={ choice.ID } selected?={ choice.ID == page.GroupForm.TeamID }>{ choice.Name }</option>
-					}
-				</select>
-				@components.FieldLabel("structured-group-programme", "Programa", false)
-				<select id="structured-group-programme" name="programme_id">
-					<option value="">Sem programa</option>
-					for _, choice := range page.Programmes {
-						<option value={ choice.ID } selected?={ choice.ID == page.GroupForm.ProgrammeID }>{ choice.Name }</option>
-					}
-				</select>
-				@components.FieldHelp("structured-group-scope-help", "Escolha exatamente uma equipa ou um programa. A autorização do treinador continua a ser verificada separadamente.")
-				@components.FieldErrorMessage("scope", page.GroupForm.Errors["scope"])
-				<fieldset id="structured-group-members">
-					<legend>Atletas</legend>
-					for _, member := range page.Memberships {
-						<label><input type="checkbox" name="membership_id" value={ member.ID } checked?={ page.GroupForm.MembershipIDs[member.ID] }/> <strong>{ member.Athlete }</strong> — { member.Scope }</label>
-					}
-				</fieldset>@components.FieldErrorMessage("members", page.GroupForm.Errors["members"])
-				@components.FormActions("/admin/treinos/estruturados") {
-					<button type="submit">Criar grupo</button>
-				}
-			</form>
-		</div>
-	}
+templ structuredGroupForm(page StructuredTrainingPage) {
+ @components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-grupo-treino", TitleID: "structured-group-title", Eyebrow: "Planeamento estruturado", Title: "Criar grupo de treino", Description: "Crie primeiro o grupo. Adicione atletas depois, com uma época e data explícitas.", Variant: "sheet", URL: structuredPlannerReturnURL(page), ReturnURL: structuredPlannerReturnURL(page), Open: page.OpenForm == "group"}) {
+  <div class="task-form">
+   <p>A tarefa de criação permite escolher o nome e a participação do grupo, sem adicionar atletas. Depois, pode preparar as colocações com as datas aplicáveis.</p>
+   <p><a class="action action--primary" href={ templ.SafeURL(structuredNativeGroupCreateURL(page)) }>Abrir criação do grupo</a></p>
+  </div>
+ }
 }
 
 templ structuredWeekForm(page StructuredTrainingPage) {
