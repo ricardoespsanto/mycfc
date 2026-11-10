@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Keep the generated read interface, while exact-only serving writes acquire
+// PostgresTrainingScheduleStore keeps the generated read interface, while exact-only writes acquire
 // fresh authority and stable target locks before touching a recorded schedule.
 type PostgresTrainingScheduleStore struct {
 	dbgen.Querier

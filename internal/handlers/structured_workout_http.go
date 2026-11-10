@@ -390,11 +390,12 @@ func (h StructuredWorkout) unusableReview(w http.ResponseWriter, r *http.Request
 	h.render(w, r, http.StatusUnprocessableEntity, page)
 }
 
-func (h StructuredWorkout) failure(w http.ResponseWriter, r *http.Request, status int, page pages.StructuredWorkoutTaskPage, err error) {
+func (h StructuredWorkout) failure(w http.ResponseWriter, r *http.Request, _ int, page pages.StructuredWorkoutTaskPage, err error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		h.System.NotFound(w, r)
 		return
 	}
+	var status int // Every rendered status is derived from the current error.
 	switch {
 	case errors.Is(err, errFocusedWorkoutConflict) || errors.Is(err, errStructuredTrainingPublicationConflict):
 		status = 409
@@ -430,42 +431,6 @@ func focusedPostedContextValid(input url.Values, c FocusedWorkoutContext) bool {
 	}
 	return input.Get("expected_plan_updated_at") == c.PlanUpdatedAt.Format(time.RFC3339Nano) && input.Get("source_digest") == c.Digest() && input.Get("database_incarnation") == c.DatabaseIncarnation.String() && input.Get("state_epoch") == strconv.FormatInt(c.StateEpoch, 10)
 }
-func retainFocusedWorkoutDraft(input url.Values, day string) focusedWorkoutDraft {
-	d := newFocusedWorkoutDraft(day)
-	for k := range d.Values {
-		delete(d.Values, k)
-	}
-	d.Keys = nil
-	d.Removed = nil
-	keys := input["activities[a_1].phase_order"]
-	seen := map[string]bool{}
-	for _, key := range keys {
-		if len(d.Keys) >= focusedWorkoutMaxPhases {
-			break
-		}
-		if focusedWorkoutKey.MatchString(key) && !seen[key] {
-			d.Keys = append(d.Keys, key)
-			seen[key] = true
-		}
-	}
-	d.Values.Set("activity_order", "a_1")
-	d.Values["activities[a_1].phase_order"] = append([]string(nil), d.Keys...)
-	for k, v := range input {
-		keep := focusedWorkoutOrdinary[k] || strings.HasPrefix(k, "activities[a_1].") && !strings.Contains(k, ".phases[")
-		for _, key := range d.Keys {
-			for _, f := range []string{"purpose", "title", "instructions", "detail_mode"} {
-				if k == focusedPhasePrefix(key)+"."+f {
-					keep = true
-				}
-			}
-		}
-		if keep && len(v) > 0 && len(v[0]) < focusedWorkoutMaxRequestBytes && k != "activities[a_1].id" {
-			d.Values[k] = []string{v[0]}
-		}
-	}
-	return d
-}
-
 func focusedSameCreateIdentity(a, b FocusedWorkoutContext) bool {
 	return a.ActorID == b.ActorID && a.PlanID == b.PlanID && a.GroupID == b.GroupID && a.SeasonID == b.SeasonID && a.Day == b.Day && a.WeekStart.Equal(b.WeekStart) && a.DatabaseIncarnation == b.DatabaseIncarnation && a.SchemaContract == b.SchemaContract
 }

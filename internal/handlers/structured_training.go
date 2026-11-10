@@ -534,7 +534,7 @@ func (h StructuredTraining) PrescriptionForSession(w http.ResponseWriter, r *htt
 	_ = pages.TrainingPrescriptionChoices(page).Render(r.Context(), w)
 }
 
-// The native group task creates an empty group; additions require the explicit
+// CreateGroup redirects to the native empty-group task; additions require the explicit
 // configured date/season and signed selection proof on the group's roster task.
 func (h StructuredTraining) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")

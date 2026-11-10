@@ -43,6 +43,29 @@ async function emulateBrowserZoom(page, zoom, viewport = { width: 1280, height: 
 // Exercise the supported staff classification task, never the retired membership form.
 async function assignCurrentParticipation(page, programme, beforeConfirmation = async () => {}) {
   const memberURL = page.url();
+  await page.waitForLoadState('networkidle');
+  if (await page.getByRole('link', { name: 'Configurar épocas', exact: true }).count()) {
+    // A new fixture explicitly configures its own dates; member reads never invent a club season.
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Lisbon' }).format(new Date());
+    const offset = days => new Date(Date.parse(`${today}T12:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
+    async function seasonPost(button, suffix, expectedStatus) {
+      const pending = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith(suffix));
+      await button.click();
+      expect((await pending).status()).toBe(expectedStatus);
+      await page.waitForLoadState('networkidle');
+    }
+    await page.getByRole('link', { name: 'Configurar épocas', exact: true }).click();
+    await page.getByRole('link', { name: 'Criar época', exact: true }).click();
+    await page.locator('#season-code').fill(`SYNE2E${Date.now()}`);
+    await page.locator('#season-name').fill('Época sintética E2E — datas apenas do teste');
+    await page.locator('#season-start').fill(offset(-30));
+    await page.locator('#season-end').fill(offset(30));
+    await seasonPost(page.getByRole('button', { name: 'Criar época', exact: true }), '/admin/epocas/criar', 303);
+    await seasonPost(page.getByRole('button', { name: 'Pré-visualizar alteração', exact: true }), '/selecionar', 200);
+    await seasonPost(page.getByRole('button', { name: 'Confirmar época atual', exact: true }), '/selecionar', 303);
+    await page.goto(memberURL);
+    await expect(page.getByRole('link', { name: 'Configurar épocas', exact: true })).toHaveCount(0);
+  }
   await page.getByRole('link', { name: 'Alterar participação e consultar histórico' }).click();
   const classificationURL = page.url();
   if (programme === 'Competição') {
@@ -52,6 +75,8 @@ async function assignCurrentParticipation(page, programme, beforeConfirmation = 
     await page.locator('#scope').selectOption(await page.locator('#scope option').filter({ hasText: programme }).getAttribute('value'));
     await page.getByLabel('Código único nesta época e programa', { exact: true }).fill(code);
     await page.getByLabel('Nome do escalão', { exact: true }).fill(categoryName);
+    await page.locator('#birth_date_from').fill('1980-01-01');
+    await page.locator('#birth_date_to').fill('2015-12-31');
     await page.getByRole('button', { name: 'Criar escalão', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Definições acessíveis' })).toContainText(`${categoryName} (${code})`);
     await page.goto(classificationURL);
@@ -83,7 +108,7 @@ async function assignCurrentParticipation(page, programme, beforeConfirmation = 
   } else {
     expect(confirmation.status()).toBe(200);
   }
-  await expect(page.getByRole('status')).toContainText('Guardada:');
+  await expect(page.getByRole('status').filter({ hasText: 'Guardada:' })).toContainText('Guardada:');
   await expect(page.getByRole('region', { name: 'Histórico de participação' })).toContainText(programme);
   await page.goto(memberURL);
 }
@@ -424,42 +449,67 @@ test.describe('authentication', () => {
   test('requests and verifies authority before dependent profile access', async ({ page, browser }) => {
     test.setTimeout(300_000);
 
+    async function fillReadyPassword(actorPage, field) {
+      // pageshow clears sensitive fields after all navigation resources finish.
+      await actorPage.waitForLoadState('networkidle');
+      await field.fill(password);
+      await expect(field).toHaveValue(password);
+      expect(await field.evaluate(input => input.checkValidity())).toBe(true);
+    }
+
+    async function submitReadyForm(button) {
+      expect(await button.evaluate(control => control.form.checkValidity())).toBe(true);
+      expect(await button.evaluate(control => [...control.form.querySelectorAll('input[type="password"]')].every(input => input.value.length > 0))).toBe(true);
+      await button.click();
+    }
+
     await page.goto('/login');
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
-    await page.getByLabel('Palavra-passe').fill(password);
-    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(page, page.getByLabel('Palavra-passe'));
+    await submitReadyForm(page.getByRole('button', { name: 'Iniciar sessão' }));
     const invitationTokens = [];
     for (let index = 0; index < 2; index += 1) {
       await page.goto('/admin/representacoes/convites');
       const createInvitation = page.locator('section[aria-labelledby="guardian-invitation-create-title"]');
       await createInvitation.getByLabel('Email do adulto').fill(guardianEmail);
-      await createInvitation.getByLabel('Palavra-passe atual').fill(password);
-      await createInvitation.getByRole('button', { name: 'Criar convite' }).click();
+      await fillReadyPassword(page, createInvitation.getByLabel('Palavra-passe atual'));
+      await submitReadyForm(createInvitation.getByRole('button', { name: 'Criar convite' }));
       invitationTokens.push(await page.locator('code').textContent());
     }
-    await page.context().clearCookies();
+    // An isolated guest context cannot inherit late Set-Cookie responses from the admin page.
+    const registrationContext = await browser.newContext({ baseURL });
+    const registrationPage = await registrationContext.newPage();
 
-    await page.goto('/registo');
-    await page.getByLabel('Nome').fill('Guardião de teste');
-    await page.getByLabel('Correio eletrónico').fill(guardianEmail);
-    await page.getByLabel('Data de nascimento').fill('1980-01-01');
-    await page.locator('#password').fill(password);
-    await page.getByLabel('Confirmar palavra-passe').fill(password);
-    await page.getByLabel(/Aceito os termos gerais/).check();
-    await page.waitForTimeout(2100);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
-    await expect(page).toHaveURL('/today');
-    await expectNoSeriousAxeViolations(page);
-    await page.goto(await verificationLinkFor(guardianEmail));
-    await expect(page).toHaveURL(/\/perfil$/);
-    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await registrationPage.goto('/registo');
+    await registrationPage.getByLabel('Nome').fill('Guardião de teste');
+    await registrationPage.getByLabel('Correio eletrónico').fill(guardianEmail);
+    await registrationPage.getByLabel('Data de nascimento').fill('1980-01-01');
+    await fillReadyPassword(registrationPage, registrationPage.locator('#password'));
+    await fillReadyPassword(registrationPage, registrationPage.getByLabel('Confirmar palavra-passe'));
+    await registrationPage.getByLabel(/Aceito os termos gerais/).check();
+    await registrationPage.waitForTimeout(2100);
+    await submitReadyForm(registrationPage.getByRole('button', { name: 'Criar conta' }));
+    await expect(registrationPage).toHaveURL('/today');
+    await expectNoSeriousAxeViolations(registrationPage);
+    await registrationPage.goto(await verificationLinkFor(guardianEmail));
+    await expect(registrationPage).toHaveURL(/\/perfil$/);
+    await registrationPage.getByRole('button', { name: 'Terminar sessão' }).click();
 
-    const context = await browser.newContext({ baseURL });
-    const interactivePage = await context.newPage();
+    await registrationPage.waitForLoadState('networkidle');
+    await registrationContext.close();
+
+    let context = await browser.newContext({ baseURL });
+    let interactivePage = await context.newPage();
+    async function startFreshActorContext() {
+      const viewport = interactivePage.viewportSize();
+      await context.close();
+      context = await browser.newContext({ baseURL, viewport });
+      interactivePage = await context.newPage();
+    }
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill(guardianEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.goto('/dashboard/guardian');
     await expect(interactivePage).toHaveURL('/dashboard/guardian');
     await interactivePage.getByRole('link', { name: 'Pedir associação' }).click();
@@ -467,18 +517,18 @@ test.describe('authentication', () => {
     await interactivePage.getByLabel('Nome').fill('X');
     await interactivePage.getByLabel('Data de nascimento').fill('2014-01-01');
     await interactivePage.getByLabel('Código de convite do clube').fill(invitationTokens[0]);
-    await interactivePage.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe atual'));
     await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
-    await interactivePage.getByRole('button', { name: 'Enviar pedido' }).click();
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Enviar pedido' }));
     await expect(interactivePage.locator('.error-summary')).toBeVisible();
     await expect(interactivePage.getByLabel('Nome')).toHaveValue('X');
 
     await interactivePage.getByLabel('Nome').fill('Menor de teste');
     await interactivePage.getByLabel('Data de nascimento').fill('2014-01-01');
     await interactivePage.getByLabel('Código de convite do clube').fill(invitationTokens[0]);
-    await interactivePage.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe atual'));
     await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
-    await interactivePage.getByRole('button', { name: 'Enviar pedido' }).click();
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Enviar pedido' }));
 
     await expect(interactivePage).toHaveURL('/dashboard/guardian');
     await expect(interactivePage.getByRole('status')).toContainText('Pedido recebido');
@@ -492,8 +542,8 @@ test.describe('authentication', () => {
     const noJSPage = await noJSContext.newPage();
     await noJSPage.goto('/login');
     await noJSPage.getByLabel('Correio eletrónico').fill(adminEmail);
-    await noJSPage.getByLabel('Palavra-passe').fill(password);
-    await noJSPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(noJSPage, noJSPage.getByLabel('Palavra-passe'));
+    await submitReadyForm(noJSPage.getByRole('button', { name: 'Iniciar sessão' }));
     await noJSPage.goto('/admin/representacoes');
     await noJSPage.getByRole('listitem').filter({ hasText: 'Menor de teste' }).getByRole('link').click();
 	    const noJSApprove = noJSPage.locator('details').filter({ hasText: 'Aprovar representação' });
@@ -504,11 +554,11 @@ test.describe('authentication', () => {
 	    await noJSContext.close();
 
     // Change actors without depending on a particular navigation layout.
-    await context.clearCookies();
+    await startFreshActorContext();
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill(adminEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.getByRole('link', { name: 'Verificar representações' }).click();
     const queueItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
     await expect(queueItem).toContainText('A aguardar verificação');
@@ -517,18 +567,18 @@ test.describe('authentication', () => {
     await approve.locator('summary').click();
     await approve.getByLabel('Categoria de verificação').selectOption('IN_PERSON_ID_AND_CIVIL_RECORD');
     await approve.getByLabel('Motivo').selectOption('RELATIONSHIP_CONFIRMED');
-    await approve.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, approve.getByLabel('Palavra-passe atual'));
     await approve.getByLabel(/Confirmo que observei/).check();
-    await approve.getByRole('button', { name: 'Aprovar representação' }).click();
+    await submitReadyForm(approve.getByRole('button', { name: 'Aprovar representação' }));
     await expect(interactivePage).toHaveURL('/admin/representacoes');
     await expect(interactivePage.getByRole('status')).toHaveText('Decisão de representação registada.');
 
     // Change actors without depending on a particular navigation layout.
-    await context.clearCookies();
+    await startFreshActorContext();
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill(guardianEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.goto('/dashboard/guardian');
     const dependentLink = interactivePage.getByRole('link', { name: 'Menor de teste' });
     await expect(dependentLink).toBeVisible();
@@ -547,11 +597,11 @@ test.describe('authentication', () => {
     await interactivePage.setViewportSize({ width: 1280, height: 800 });
     // Reset the actor explicitly. Waiting on the responsive logout control here
     // can leave this long journey on the guardian page until the test timeout.
-    await context.clearCookies();
+    await startFreshActorContext();
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill(adminEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.getByRole('link', { name: 'Verificar representações' }).click();
     const verifiedItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
     await expect(verifiedItem).toContainText('Representação verificada');
@@ -563,10 +613,10 @@ test.describe('authentication', () => {
     await suspend.locator('summary').click();
     await suspend.getByLabel('Categoria de verificação').selectOption('CLUB_REGISTRATION_RECORD');
     await suspend.getByLabel('Motivo').selectOption('CONFLICT');
-    await suspend.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, suspend.getByLabel('Palavra-passe atual'));
     await suspend.getByLabel(/Confirmo que observei/).check();
     await suspend.getByLabel(/termina imediatamente o acesso/).check();
-    await suspend.getByRole('button', { name: 'Suspender acesso' }).click();
+    await submitReadyForm(suspend.getByRole('button', { name: 'Suspender acesso' }));
     const suspendedItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
     await expect(suspendedItem).toContainText('Em revisão pelo clube');
     await suspendedItem.getByRole('link').click();
@@ -577,11 +627,11 @@ test.describe('authentication', () => {
 
     // A conflicted verifier sees a focused, read-only task surface without the
     // global shell, so reset the session before continuing as the guardian.
-    await context.clearCookies();
+    await startFreshActorContext();
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill(guardianEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.goto('/dashboard/guardian');
     await expect(interactivePage.getByRole('link', { name: 'Menor de teste' })).toHaveCount(0);
     await expect(interactivePage.getByText('Em revisão pelo clube')).toBeVisible();
@@ -594,13 +644,13 @@ test.describe('authentication', () => {
     await interactivePage.getByLabel('Nome').fill('Menor rejeitado');
     await interactivePage.getByLabel('Data de nascimento').fill('2013-02-02');
     await interactivePage.getByLabel('Código de convite do clube').fill(invitationTokens[1]);
-    await interactivePage.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe atual'));
     await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
-    await interactivePage.getByRole('button', { name: 'Enviar pedido' }).click();
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Enviar pedido' }));
     await interactivePage.getByRole('button', { name: 'Terminar sessão' }).click();
     await interactivePage.getByLabel('Correio eletrónico').fill(adminEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.getByRole('link', { name: 'Verificar representações' }).click();
     const rejectionItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor rejeitado' });
     const rejectionURL = await rejectionItem.getByRole('link').getAttribute('href');
@@ -609,9 +659,9 @@ test.describe('authentication', () => {
     await reject.locator('summary').click();
     await reject.getByLabel('Categoria de verificação').selectOption('IN_PERSON_ID_AND_CIVIL_RECORD');
     await reject.getByLabel('Motivo').selectOption('AUTHORITY_NOT_ESTABLISHED');
-    await reject.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, reject.getByLabel('Palavra-passe atual'));
     await reject.getByLabel(/Confirmo que observei/).check();
-    await reject.getByRole('button', { name: 'Rejeitar pedido' }).click();
+    await submitReadyForm(reject.getByRole('button', { name: 'Rejeitar pedido' }));
     await interactivePage.goto(rejectionURL);
     await expect(interactivePage.getByText(/Este pedido terminou sem aprovação/)).toBeVisible();
     await expect(interactivePage.locator('#guardian-authority-decisions')).toHaveCount(0);
@@ -619,11 +669,11 @@ test.describe('authentication', () => {
     await expectNoHorizontalOverflow(interactivePage);
     await expectNoSeriousAxeViolations(interactivePage);
 
-    await context.clearCookies();
+    await startFreshActorContext();
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill('e2e-guardian-admin-two@example.test');
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.goto('/admin/representacoes');
     const conflictedItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
     await conflictedItem.getByRole('link').click();
@@ -631,16 +681,16 @@ test.describe('authentication', () => {
     await resolve.locator('summary').click();
     await resolve.getByLabel('Categoria de verificação').selectOption('COURT_OR_LEGAL_AUTHORITY');
     await resolve.getByLabel('Motivo').selectOption('RELATIONSHIP_CONFIRMED');
-    await resolve.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, resolve.getByLabel('Palavra-passe atual'));
     await resolve.getByLabel(/Confirmo que observei/).check();
-    await resolve.getByRole('button', { name: 'Aprovar representação' }).click();
+    await submitReadyForm(resolve.getByRole('button', { name: 'Aprovar representação' }));
 
 	    const resolvedGuardianContext = await browser.newContext({ baseURL });
 	    const resolvedGuardianPage = await resolvedGuardianContext.newPage();
 	    await resolvedGuardianPage.goto('/login');
 	    await resolvedGuardianPage.getByLabel('Correio eletrónico').fill(guardianEmail);
-	    await resolvedGuardianPage.getByLabel('Palavra-passe').fill(password);
-	    await resolvedGuardianPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+	    await fillReadyPassword(resolvedGuardianPage, resolvedGuardianPage.getByLabel('Palavra-passe'));
+	    await submitReadyForm(resolvedGuardianPage.getByRole('button', { name: 'Iniciar sessão' }));
 	    await expect(resolvedGuardianPage).toHaveURL('/today');
 	    await resolvedGuardianPage.goto('/dashboard/guardian');
 	    await expect(resolvedGuardianPage.getByRole('link', { name: 'Menor de teste' })).toBeVisible();
@@ -836,11 +886,15 @@ test.describe('authentication', () => {
     await page.getByRole('link', { name: 'Membros', exact: true }).click();
     await expect(page).toHaveURL('/admin/membros');
     await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
+    // Let initial pageshow finish clearing sensitive fields before entering credentials.
+    await page.waitForLoadState('networkidle');
     await page.locator('#member-name').fill(athleteName);
     await page.locator('#member-email').fill(athleteEmail);
     await page.locator('#member-birth').fill('2000-01-01');
     await page.locator('#member-password').fill(password);
     await page.locator('#member-password-confirmation').fill(password);
+    await expect(page.locator('#member-password')).toHaveValue(password);
+    await expect(page.locator('#member-password-confirmation')).toHaveValue(password);
     await page.getByRole('button', { name: 'Criar conta' }).click();
     await page.getByLabel('Pesquisar membros').fill(athleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();

@@ -38,7 +38,7 @@ func (s PostgresTrainingSetupStore) ResolveContext(ctx context.Context, actor uu
 	if err != nil || id == uuid.Nil {
 		return TrainingSetupContext{}, "", pgx.ErrNoRows
 	}
-	if _, err = (PostgresTrainingGroupStore{Pool: s.Pool}).GetGroup(ctx, actor, id); err != nil {
+	if _, err = PostgresTrainingGroupStore(s).GetGroup(ctx, actor, id); err != nil {
 		return TrainingSetupContext{}, "", err
 	}
 	out := TrainingSetupContext{GroupID: id.String()}
@@ -59,7 +59,7 @@ func (s PostgresTrainingSetupStore) ResolveContext(ctx context.Context, actor uu
 		} else {
 			// Missing/mismatched week and newly revoked group authority both produce
 			// no rows. Recheck before retaining an otherwise stale group destination.
-			if _, e = (PostgresTrainingGroupStore{Pool: s.Pool}).GetGroup(ctx, actor, id); e != nil {
+			if _, e = PostgresTrainingGroupStore(s).GetGroup(ctx, actor, id); e != nil {
 				return TrainingSetupContext{}, "", e
 			}
 		}

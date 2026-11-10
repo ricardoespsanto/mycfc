@@ -84,7 +84,7 @@ func decodeReuseRoutine(row dbgen.GetReuseRoutineRow) (reuseSourceItem, error) {
 	namespace := hex.EncodeToString(sum[:])
 	id := func(path string) uuid.UUID { return uuid.NewSHA1(row.ID, []byte(namespace+"/"+path)) }
 	graph := focusedWorkoutGraph{SessionID: id("session"), Kind: "TRAINING", Title: row.Name, Description: row.Description, Activities: []focusedGraphActivityInput{}}
-	segments := []reuseRoutineSegment{}
+	var segments []reuseRoutineSegment
 	switch row.Kind {
 	case "SESSION":
 		var session reuseRoutineSession

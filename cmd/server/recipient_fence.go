@@ -8,11 +8,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-type recipientFenceInput struct {
-	OID   uint32
-	Login bool
-}
-
 func requireRecipientBootstrapIdentity(ctx context.Context, c *pgx.Conn, expected string) error {
 	var valid bool
 	if err := c.QueryRow(ctx, `SELECT session_user::pg_catalog.text OPERATOR(pg_catalog.=) $1 AND current_user::pg_catalog.text OPERATOR(pg_catalog.=) $1 AND EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname OPERATOR(pg_catalog.=) session_user AND rolsuper)`, expected).Scan(&valid); err != nil || !valid {

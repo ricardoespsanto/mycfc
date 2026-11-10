@@ -1,6 +1,6 @@
 package pages
 
-// A single canonical, resolved instruction is shown at a time. These fields
+// TrainingPublicationInstructionChoice identifies the single resolved instruction shown at a time. Its fields
 // are presentation only; selection never changes the signed publication review.
 type TrainingPublicationInstructionChoice struct {
 	Key, Label string

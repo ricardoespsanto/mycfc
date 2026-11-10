@@ -237,15 +237,6 @@ func trainingScheduleFunctionMatches(ctx context.Context, q TrainingScheduleQuer
 	return valid, err
 }
 
-func trainingScheduleFunctionBody(name string) (string, error) {
-	header, err := trainingScheduleFunctionHeader(name)
-	if err != nil {
-		return "", err
-	}
-	index := strings.Index(header, "AS $$")
-	return header[index+5 : len(header)-3], nil
-}
-
 func trainingScheduleFunctionHeader(name string) (string, error) {
 	sql, err := migrationFiles.ReadFile("migrations/" + TrainingScheduleCompatibilityMigration + ".sql")
 	if err != nil {

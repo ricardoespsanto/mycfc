@@ -222,7 +222,7 @@ func (h StructuredTraining) publicationReviewPage(r *http.Request, actor Current
 
 	return page
 }
-func (h StructuredTraining) publicationFailure(w http.ResponseWriter, r *http.Request, status int, page pages.TrainingPublicationReviewPage, err error) {
+func (h StructuredTraining) publicationFailure(w http.ResponseWriter, r *http.Request, _ int, page pages.TrainingPublicationReviewPage, err error) {
 	if publicationScopeDenied(err) {
 		h.System.NotFound(w, r)
 		return
@@ -236,6 +236,7 @@ func (h StructuredTraining) publicationFailure(w http.ResponseWriter, r *http.Re
 	page.ChangedCount = 0
 	page.RemovedCount = 0
 	page.UnchangedCount = 0
+	var status int // Every rendered status is derived from the current error.
 	switch {
 	case errors.Is(err, db.ErrCommitOutcomeUnknown):
 		page.Mode = "unknown"

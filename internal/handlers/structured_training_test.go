@@ -376,35 +376,6 @@ func (row structuredRoutineReadRowFake) Scan(dest ...any) error {
 	return nil
 }
 
-type structuredTrainingPublicationTransactionFake struct {
-	structuredTrainingSuccessTransactionFake
-	updated time.Time
-}
-
-func (tx *structuredTrainingPublicationTransactionFake) QueryRow(context.Context, string, ...any) pgx.Row {
-	return structuredTrainingPublicationRowFake{updated: tx.updated}
-}
-
-type structuredTrainingPublicationRowFake struct{ updated time.Time }
-
-func (row structuredTrainingPublicationRowFake) Scan(dest ...any) error {
-	for _, target := range dest {
-		switch value := target.(type) {
-		case *bool:
-			*value = true
-		case *uuid.UUID:
-			*value = uuid.New()
-		case *int32:
-			*value = 1
-		case *pgtype.Timestamptz:
-			*value = pgtype.Timestamptz{Time: row.updated, Valid: true}
-		case *string:
-			*value = "publication"
-		}
-	}
-	return nil
-}
-
 type structuredTrainingEmptyRowsFake struct{ pgx.Rows }
 
 func (structuredTrainingEmptyRowsFake) Close()                                       {}

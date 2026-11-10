@@ -271,7 +271,7 @@ func (h Definitions) render(w http.ResponseWriter, r *http.Request, status int, 
 	}
 	setupMessage, setupURL, err := seasonMissingGuidance(r.Context(), h.Store, actor.ID, setupSeasonContext("definitions", "", origin))
 	if err != nil {
-		http.Error(w, "Serviço indisponível", 503)
+		http.Error(w, "Serviço indisponível", http.StatusServiceUnavailable)
 		return
 	}
 	if len(scopes) == 0 && setupMessage == "" {

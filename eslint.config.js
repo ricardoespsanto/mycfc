@@ -13,6 +13,7 @@ export default [
       globals: {
         Buffer: "readonly",
         URL: "readonly",
+        URLSearchParams: "readonly",
         clearTimeout: "readonly",
         console: "readonly",
         document: "readonly",
@@ -20,6 +21,8 @@ export default [
         FormData: "readonly",
         getComputedStyle: "readonly",
         history: "readonly",
+        innerWidth: "readonly",
+        location: "readonly",
         HTMLElement: "readonly",
         HTMLAnchorElement: "readonly",
         HTMLButtonElement: "readonly",

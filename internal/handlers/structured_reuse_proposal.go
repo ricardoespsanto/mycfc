@@ -56,7 +56,7 @@ func buildReuseProposal(actor uuid.UUID, read reuseRead, values url.Values, prio
 	}
 	target := read.Target
 	newWeek := target.Configuration.ExistingPlanID == nil
-	planID := uuid.Nil
+	var planID uuid.UUID
 	if newWeek {
 		if prior != nil && prior.Proposal.NewWeek {
 			planID = prior.Proposal.TargetPlanID

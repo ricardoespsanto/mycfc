@@ -179,11 +179,6 @@ test('real-plan clean target setup creates groups season eligibility and all app
   } finally { await context.close(); }
 });
 
-async function mainPhase(page) {
-  const fields = await editor(page).locator('textarea[name$=".instructions"]').evaluateAll(nodes => nodes.map(node => ({ name: node.name, value: node.value })));
-  const phase = fields.find(field => /^activities\[[^\]]+\]\.phases\[[^\]]+\]\.instructions$/.test(field.name) && field.value !== '');
-  expect(phase).toBeDefined(); return phase.name.replace(/\.instructions$/, '');
-}
 async function addEffort(page, prefix, entry) {
   const activity = prefix.match(/^activities\[([^\]]+)\]/)[1], phase = prefix.match(/\.phases\[([^\]]+)\]/)[1];
   await command(page, `water_effort_add:${activity}:${phase}:_root`);
@@ -299,7 +294,7 @@ test('all33 literal reference entries are saved reviewed for explicit K and C gu
   test.setTimeout(1_200_000); const started = Date.now(), value = state();
   const context = await browser.newContext({ viewport: { width: 320, height: 1000 } }), page = await login(context);
   try {
-    const initial = await facts('real-plans-before-authoring');
+    await facts('real-plans-before-authoring');
     for (const [index, plan] of input.plans.entries()) {
       const unpublishedBaseline = await facts(`real-plan-${index + 1}-draft-baseline`);
       for (const entry of plan.entries) {
@@ -473,7 +468,7 @@ test('genuine browser zoom via temporary Chromium extension keeps the real publi
     const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
     const target = page.url(), originalCSSWidth = await page.evaluate(() => innerWidth);
     const observed = await worker.evaluate(async target => {
-      const tabs = await chrome.tabs.query({}); const tab = tabs.find(t => t.url === target); if (!tab) throw new Error('actual app tab not found');
+      const { chrome } = globalThis; const tabs = await chrome.tabs.query({}); const tab = tabs.find(t => t.url === target); if (!tab) throw new Error('actual app tab not found');
       const before = await chrome.tabs.getZoom(tab.id); await chrome.tabs.setZoom(tab.id, 2); const after = await chrome.tabs.getZoom(tab.id); return { before, after, tabURL: tab.url, tabID: tab.id };
     }, target);
     expect(observed.after).toBe(2); expect(observed.before).toBe(1);

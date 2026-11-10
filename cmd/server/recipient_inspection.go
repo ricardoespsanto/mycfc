@@ -76,13 +76,6 @@ func loadRecipientCommandTarget(ctx context.Context, identity string) (recipient
 	return target, nil
 }
 
-func requireRecipientCompiledTarget(target recipientCommandTarget) error {
-	if !releasecontract.Matches(target.Version, target.Candidate, target.Database) {
-		return errors.New("recipient command compiled/runtime identity mismatch")
-	}
-	return nil
-}
-
 type recipientScheduleStatus struct {
 	Contract             string  `json:"contract"`
 	DatabaseIncarnation  string  `json:"database_incarnation"`

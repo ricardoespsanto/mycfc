@@ -282,13 +282,14 @@ success_case="$work_dir/success"
 disposable_case="$work_dir/disposable-approved"
 setup_case "$disposable_case"
 # This simulated v1.25.0 direct cutover is an immutable 77-marker release,
-# not the current 78-marker candidate. Preserve the pinned digest and reject a
+# independently of later candidate markers. Preserve the pinned digest and reject a
 # candidate inventory mislabeled as the historical signed release.
 current_inventory=$(go run ./cmd/server schema-inventory)
-disposable_inventory=$(printf '%s' "$current_inventory" | jq -c '[.[] | select(. != "202610010003_privacy_attachment_trigger_runtime")]')
+disposable_inventory=$(printf '%s' "$current_inventory" | jq -c '[.[] | select(. == "reset-baseline-v1" or . < "202610010003_privacy_attachment_trigger_runtime")]')
 current_count=$(printf '%s' "$current_inventory" | jq 'length')
 previous_count=$(printf '%s' "$disposable_inventory" | jq 'length')
-test "$((current_count - previous_count))" -eq 1
+test "$previous_count" -eq 77
+test "$current_count" -gt "$previous_count"
 test "$(printf '%s' "$disposable_inventory" | jq -rj 'join("\n")' | sha256sum | cut -d' ' -f1)" = '41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7'
 mismatched_inventory_case="$work_dir/disposable-inventory-mismatch"
 setup_case "$mismatched_inventory_case"

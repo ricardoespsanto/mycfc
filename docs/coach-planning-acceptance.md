@@ -113,23 +113,35 @@ follow-up coverage. This is an accepted coverage gap, not a test pass.
 This resolves the pending question for those two checks; do not request their
 acceptance again.
 
-## Natural midnight return: separate, not waived
+## Remaining tests: owner-skipped; production delivery authorized
 
-Ricardo explicitly did **not** waive this check. Its setup attempts have not yet reached the boundary: one exposed a test
-navigation race, and another incorrectly treated the expected future scheduled
-return as current membership. Both failures were retained; the harness now
-distinguishes scheduled and effective roster states. The fresh fixture's
-**before-boundary phase passed**: B is effective now and exact previous group A
-is scheduled for 11 November, on ordinary roster URLs without date overrides.
-The live application is waiting for the actual **11 November 2026, 00:00
-Europe/Lisbon (00:00 UTC)** boundary, with unchanged PID/start identity and binary
-checks every 30 seconds. Its separate binary SHA256 is
-`378edab20a9e0d21e22d6ac74868f9068da003641ed52702038e11ad4468265a`;
-product source matches the same 197-file runtime above. The **natural boundary
-result remains PENDING**, not PASS.
-Current-day withdrawal and future session-date return evidence above remain
-separate from this natural-clock check. The live state and eventual result are
-tracked independently; no missing clock evidence is implied accepted.
+Ricardo subsequently instructed: **“let’s skip those tests and deliver this to
+prod.”** This explicitly skips the remaining natural-midnight check and the
+incomplete local full-browser rerun. Neither is relabelled PASS.
 
-Acceptance of the two follow-up gaps does not authorize GitHub publication,
-merge, production deployment, database reset or unrelated live operations.
+The natural return test's before-boundary phase passed on the unchanged
+197-file runtime. Its supervised run was then deliberately stopped before
+midnight at the owner's request; there is **no after-boundary result**. The app,
+runner and all three exact owned Docker resources were independently confirmed
+stopped/absent. Status: **OWNER-SKIPPED BEFORE BOUNDARY — NOT COMPLETED**. The
+previous interrupted wait and setup failures remain retained as evidence.
+
+The final combined local source gate passed its pre-browser stages: deployment
+mocks, formatting/assets, generation, Terraform, Go vet and units. Its browser
+phase was owner-stopped with **9 passed, 1 interrupted, 159 not run**; this is not
+a full `make verify` pass. The two repaired ordinary auth/admission journeys
+passed separately. Pinned Go 1.26.5 staticcheck/vet/units and Node 24 lint passed.
+The original four-case/33-entry acceptance above remains the actual evidence.
+
+The final candidate also includes nonsemantic Go lint maintenance (dead
+declarations, comments, equivalent initialization/conversion and unchanged
+error/status handling) and test-only readiness/fixture corrections. No
+authentication, eligibility, privacy, admission, data or permission guard was
+weakened. The accepted implementation identity above is retained separately
+from these follow-on release refinements.
+
+The latest instruction authorizes the normal GitHub/merge/release/production
+delivery of #391. It does not authorize a database wipe/reset, backup removal or
+unrelated live operations. Protected CI and production-environment gates remain
+in force. Necessary feature schema and release wiring are handled through the
+reviewed normal path; existing-record conversion/backfill remains out of scope.

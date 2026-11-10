@@ -153,3 +153,15 @@ result separately. This decision supplies no authority for new GitHub
 publication, merge, production deployment, database reset or unrelated live
 operations. Other confirmed decisions, including exact previous-group return
 and configurable unknown season dates, remain in force.
+
+## Remaining tests skipped; normal production delivery requested
+
+Ricardo subsequently said **“let’s skip those tests and deliver this to prod.”**
+Record the remaining natural-midnight check and incomplete local browser rerun
+as owner-skipped, not passed. The prior two follow-ups remain NOT RUN. This
+latest instruction authorizes the normal publication/merge/production release
+for #391, superseding the earlier absence of release authority. It does not
+authorize database reset/wipe, removal of backups or unrelated live operations.
+No existing-record conversion/backfill is required; necessary feature schema
+and enforced protections remain. See `../coach-planning-acceptance.md` for exact
+evidence and candidate identities.

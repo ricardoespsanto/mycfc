@@ -198,7 +198,7 @@ func uniqueJSON(d *json.Decoder, depth int) error {
 	return nil
 }
 
-// The file is an external operator-fenced admission decision. Matching copied
+// Verify checks the external operator-fenced admission decision. Matching copied
 // database facts alone does not demonstrate that an unknown restore never ran.
 func (p Admission) Verify(state RuntimeState, compiled Capabilities) error {
 	if p.Admission != "admitted" || p.RestoreGeneration != p.ReconciledRestoreGeneration || p.DatabaseIncarnation != state.DatabaseIncarnation || state.StateEpoch < p.MinimumStateEpoch || state.RequiredReader < p.MinimumReader || state.RequiredReader > compiled.ReaderGeneration || !slices.Contains(compiled.SchemaRead, state.SchemaContract) || !equalStringPointer(p.FloorCommitID, state.FloorCommitID) || !equalStringPointer(p.FloorManifestSHA256, state.FloorManifestSHA256) {
@@ -218,7 +218,7 @@ func equalStringPointer(a, b *string) bool {
 	return *a == *b
 }
 
-// Open each path component relative to the previous descriptor with NOFOLLOW.
+// ReadAdmission opens each path component relative to the previous descriptor with NOFOLLOW.
 // This avoids a check/open race and rejects writable ancestors and symlinks.
 func ReadAdmission(path string) (Admission, error) {
 	var empty Admission

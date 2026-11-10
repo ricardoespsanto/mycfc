@@ -2,7 +2,8 @@
 
 Status: implemented locally; the complete automated two-plan browser replay passes.
 Human coach/screen-reader checks remain NOT RUN, accepted as follow-up coverage by Ricardo.
-Natural midnight return remains separate and unwaived; see the acceptance record.
+Natural midnight return was subsequently owner-skipped before the boundary;
+no after-boundary result is claimed. See the acceptance record.
 No GitHub publication, merge, deployment or live database action is established.
 
 ## Delivered behavior
