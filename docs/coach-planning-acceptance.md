@@ -118,9 +118,15 @@ acceptance again.
 Ricardo explicitly did **not** waive this check. Its setup attempts have not yet reached the boundary: one exposed a test
 navigation race, and another incorrectly treated the expected future scheduled
 return as current membership. Both failures were retained; the harness now
-distinguishes scheduled and effective roster states. A fresh owned fixture is being prepared to
-observe the actual **11 November 2026, 00:00 Europe/Lisbon (00:00 UTC)** boundary
-with the same unrestarted application. The result is **PENDING**, not PASS.
+distinguishes scheduled and effective roster states. The fresh fixture's
+**before-boundary phase passed**: B is effective now and exact previous group A
+is scheduled for 11 November, on ordinary roster URLs without date overrides.
+The live application is waiting for the actual **11 November 2026, 00:00
+Europe/Lisbon (00:00 UTC)** boundary, with unchanged PID/start identity and binary
+checks every 30 seconds. Its separate binary SHA256 is
+`378edab20a9e0d21e22d6ac74868f9068da003641ed52702038e11ad4468265a`;
+product source matches the same 197-file runtime above. The **natural boundary
+result remains PENDING**, not PASS.
 Current-day withdrawal and future session-date return evidence above remain
 separate from this natural-clock check. The live state and eventual result are
 tracked independently; no missing clock evidence is implied accepted.
