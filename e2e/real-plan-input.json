@@ -1,0 +1,4 @@
+{
+  "private_fixture": true,
+  "instructions": "Full coach references stay outside this public repository. Supply --real-plan-input /private/path/approved-input.json to the opt-in runner. This placeholder supports ordinary test discovery only."
+}

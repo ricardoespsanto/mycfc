@@ -94,10 +94,17 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /equipa/classificacao", auth.RequireAuthenticated(http.HandlerFunc(members.Classification.Search)))
 	mux.Handle("GET /equipa/classificacao/{id}", auth.RequireAuthenticated(http.HandlerFunc(members.Classification.Get)))
 	mux.Handle("GET /equipa/classificacao.css", http.HandlerFunc(handlers.ClassificationStylesheet))
+	mux.Handle("GET /equipa/escaloes.css", http.HandlerFunc(handlers.DefinitionsStylesheet))
 	mux.Handle("GET /equipa/escaloes", auth.RequireAuthenticated(http.HandlerFunc(members.Definitions.Get)))
 	mux.Handle("POST /equipa/escaloes", auth.RequireAuthenticated(http.HandlerFunc(members.Definitions.Post)))
 	mux.Handle("POST /equipa/classificacao/{id}", auth.RequireAuthenticated(http.HandlerFunc(members.Classification.Post)))
 	mux.Handle("POST /equipa/classificacao/{id}/selecoes", auth.RequireAuthenticated(http.HandlerFunc(members.Classification.ReplaceSelections)))
+	// Seasons also support membership/classification when training planning is disabled.
+	mux.Handle("GET /admin/epocas", auth.RequireAdmin(http.HandlerFunc(members.Seasons.Index)))
+	mux.Handle("GET /admin/epocas/criar", auth.RequireAdmin(http.HandlerFunc(members.Seasons.CreatePage)))
+	mux.Handle("POST /admin/epocas/criar", auth.RequireAdmin(http.HandlerFunc(members.Seasons.Create)))
+	mux.Handle("GET /admin/epocas/{id}/selecionar", auth.RequireAdmin(http.HandlerFunc(members.Seasons.Selection)))
+	mux.Handle("POST /admin/epocas/{id}/selecionar", auth.RequireAdmin(http.HandlerFunc(members.Seasons.Select)))
 	mux.Handle("GET /admin/membros", auth.RequireAdmin(http.HandlerFunc(members.Index)))
 	mux.Handle("POST /admin/membros", auth.RequireAdmin(http.HandlerFunc(members.Create)))
 	mux.Handle("GET /admin/membros/criar", auth.RequireAdmin(http.HandlerFunc(members.CreatePage)))
@@ -173,12 +180,74 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /treinos/prescricoes/sessoes/{id}", auth.RequireFeature(featureflags.StructuredTrainingPlanning, http.HandlerFunc(structuredTraining.PrescriptionForSession)))
 	mux.Handle("GET /treinos/prescricoes/{id}", auth.RequireFeature(featureflags.StructuredTrainingPlanning, http.HandlerFunc(structuredTraining.PrescriptionDetail)))
 	mux.Handle("GET /admin/treinos/estruturados", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.Index))))
+	trainingGroups := handlers.TrainingGroups{Setup: structuredTraining.Setup, Store: structuredTraining.Groups, System: system, PageMeta: structuredTraining.PageMeta, Sessions: sessions}
+	for _, route := range []struct {
+		pattern string
+		handler http.HandlerFunc
+	}{
+		{"GET /admin/treinos/estruturados/grupos", trainingGroups.Index},
+		{"GET /admin/treinos/estruturados/grupos/criar", trainingGroups.CreatePage},
+		{"POST /admin/treinos/estruturados/grupos/criar", trainingGroups.Create},
+		{"GET /admin/treinos/estruturados/grupos/{id}", trainingGroups.Detail},
+		{"GET /admin/treinos/estruturados/grupos/{id}/atletas", trainingGroups.Athletes},
+		{"POST /admin/treinos/estruturados/grupos/{id}/atletas", trainingGroups.AddAthletes},
+		{"GET /admin/treinos/estruturados/grupos/{id}/nome", trainingGroups.RenamePage},
+		{"POST /admin/treinos/estruturados/grupos/{id}/nome", trainingGroups.Rename},
+	} {
+		mux.Handle(route.pattern, auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(route.handler)))
+	}
 	mux.Handle("POST /admin/treinos/estruturados/grupos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateGroup))))
 	mux.Handle("POST /admin/treinos/estruturados/semanas", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateWeek))))
 	mux.Handle("POST /admin/treinos/estruturados/semanas/{id}/carga", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.UpdateWeekLoad))))
 	mux.Handle("POST /admin/treinos/estruturados/ciclos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateCycle))))
 	mux.Handle("POST /admin/treinos/estruturados/ciclos/{id}", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.UpdateCycle))))
 	mux.Handle("POST /admin/treinos/estruturados/ciclos/{id}/copiar", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CopyCycle))))
+	if structuredTraining.Placements != nil {
+		task := *structuredTraining.Placements
+		for _, route := range []struct {
+			pattern string
+			handler http.HandlerFunc
+		}{
+			{"GET /admin/treinos/estruturados/colocacoes", task.Index},
+			{"POST /admin/treinos/estruturados/colocacoes", task.Editor},
+			{"POST /admin/treinos/estruturados/colocacoes/prever", task.Preview},
+			{"POST /admin/treinos/estruturados/colocacoes/confirmar", task.Confirm},
+			{"POST /admin/treinos/estruturados/colocacoes/cancelar/prever", task.CancelPreview},
+			{"POST /admin/treinos/estruturados/colocacoes/cancelar/confirmar", task.CancelConfirm},
+		} {
+			mux.Handle(route.pattern, auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(route.handler)))
+		}
+	}
+	if structuredTraining.Workouts != nil {
+		task := *structuredTraining.Workouts
+		protect := func(handler http.HandlerFunc) http.Handler {
+			return auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(handler))
+		}
+		base := "/admin/treinos/estruturados/semanas/{id}/treinos/criar"
+		mux.Handle("GET "+base, protect(task.Create))
+		mux.Handle("POST "+base+"/rascunho", protect(task.Draft))
+		mux.Handle("POST "+base+"/prever", protect(task.Preview))
+		mux.Handle("POST "+base+"/confirmar", protect(task.Confirm))
+		edit := "/admin/treinos/estruturados/semanas/{plan}/treinos/{id}/editar"
+		mux.Handle("GET "+edit, protect(task.Edit))
+		mux.Handle("POST "+edit+"/rascunho", protect(task.EditDraft))
+		mux.Handle("POST "+edit+"/prever", protect(task.EditPreview))
+		mux.Handle("POST "+edit+"/confirmar", protect(task.EditConfirm))
+		cancellation := "/admin/treinos/estruturados/semanas/{plan}/treinos/{id}/cancelar"
+		mux.Handle("GET "+cancellation, protect(task.CancelEdit))
+		mux.Handle("POST "+cancellation, protect(task.CancelEdit))
+	}
+	if structuredTraining.Reuse != nil {
+		task := *structuredTraining.Reuse
+		protect := func(handler http.HandlerFunc) http.Handler {
+			return auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(handler))
+		}
+		base := "/admin/treinos/estruturados/reutilizar"
+		mux.Handle("GET "+base, protect(task.Task))
+		mux.Handle("POST "+base+"/rascunho", protect(task.Draft))
+		mux.Handle("POST "+base+"/prever", protect(task.Preview))
+		mux.Handle("POST "+base+"/confirmar", protect(task.Confirm))
+	}
 	mux.Handle("POST /admin/treinos/estruturados/sessoes", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateSession))))
 	mux.Handle("POST /admin/treinos/estruturados/sessoes/{id}/segmentos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateSegment))))
 	mux.Handle("GET /admin/treinos/estruturados/sessoes/{session_id}/segmentos/{segment_id}/agua", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.WaterBlockTask))))

@@ -208,6 +208,7 @@ func TestRunDatabaseCommandWrapsDatabaseConnectionFailure(t *testing.T) {
 }
 
 func TestRunDatabaseCommandBootstrapsUsingExplicitEnvironmentConnection(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("DATABASE_URL", "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("DB_NAME", "mycfc")
 	t.Setenv("APP_DB_USER", "mycfc_app")
@@ -270,6 +271,7 @@ func TestRunServerCommandPrintsEmbeddedSchemaInventoryWithoutDatabaseConfigurati
 }
 
 func TestGuardianReleaseStatusUsesNarrowReleaseIdentity(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_guardian_release_bind:independent@postgres:5432/mycfc?sslmode=disable")
 	t.Setenv("GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE", "mycfc")
 	t.Setenv("GUARDIAN_RUNTIME_IMAGE_DIGEST", "sha256:"+strings.Repeat("a", 64))
@@ -312,6 +314,7 @@ func TestGuardianReleaseStatusRejectsInvalidCredential(t *testing.T) {
 }
 
 func TestGuardianReleaseStatusRedactsConnectionFailure(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_guardian_release_bind:independent@postgres:5432/mycfc?sslmode=disable")
 	t.Setenv("GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE", "mycfc")
 	t.Setenv("GUARDIAN_RUNTIME_IMAGE_DIGEST", "sha256:"+strings.Repeat("a", 64))
@@ -328,6 +331,7 @@ func TestGuardianReleaseStatusRedactsConnectionFailure(t *testing.T) {
 }
 
 func TestGuardianReleaseStatusReturnsStatusQueryFailure(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_guardian_release_bind:independent@postgres:5432/mycfc?sslmode=disable")
 	t.Setenv("GUARDIAN_RELEASE_BIND_EXPECTED_DATABASE", "mycfc")
 	t.Setenv("GUARDIAN_RUNTIME_IMAGE_DIGEST", "sha256:"+strings.Repeat("a", 64))
@@ -344,6 +348,7 @@ func TestGuardianReleaseStatusReturnsStatusQueryFailure(t *testing.T) {
 }
 
 func TestRunDatabaseCommandExplicitlyProvisionsGuardianActivationRole(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("DATABASE_URL", "postgres://postgres:admin@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("GUARDIAN_ACTIVATION_DATABASE_URL", "postgres://mycfc_guardian_activation_operator:independent@postgres:5432/mycfc?sslmode=disable")
 	original := connectDatabaseCommand
@@ -366,6 +371,7 @@ func TestRunDatabaseCommandExplicitlyProvisionsGuardianActivationRole(t *testing
 }
 
 func TestRunDatabaseCommandBindsGuardianReleaseThroughDisableOnlyAPI(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	releaseURL := "postgres://mycfc_guardian_release_bind:independent@postgres:5432/mycfc?sslmode=disable"
 	t.Setenv("DATABASE_URL", "postgres://mycfc_migrator:forbidden@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", releaseURL)
@@ -399,6 +405,7 @@ func TestRunDatabaseCommandBindsGuardianReleaseThroughDisableOnlyAPI(t *testing.
 }
 
 func TestRunDatabaseCommandExplicitlyProvisionsGuardianReleaseBindRole(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("DATABASE_URL", "postgres://postgres:admin@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_guardian_release_bind:independent@postgres:5432/mycfc?sslmode=disable")
 	original := connectDatabaseCommand
@@ -422,6 +429,7 @@ func TestRunDatabaseCommandExplicitlyProvisionsGuardianReleaseBindRole(t *testin
 }
 
 func TestProvisionGuardianReleaseBindEmitsSuccessOnlyAfterCommit(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("DATABASE_URL", "postgres://postgres:bootstrap-secret@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("GUARDIAN_RELEASE_BIND_DATABASE_URL", "postgres://mycfc_guardian_release_bind:independent-secret@postgres:5432/mycfc?sslmode=disable")
 	originalConnect := connectDatabaseCommand
@@ -469,6 +477,7 @@ func TestProvisionGuardianReleaseBindEmitsSuccessOnlyAfterCommit(t *testing.T) {
 }
 
 func TestRunDatabaseCommandHardensUsingNarrowMaintenanceCredentials(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("DATABASE_URL", "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("DB_NAME", "mycfc")
 	t.Setenv("APP_DB_USER", "mycfc_app")
@@ -495,6 +504,7 @@ func TestRunDatabaseCommandHardensUsingNarrowMaintenanceCredentials(t *testing.T
 }
 
 func TestRunDatabaseCommandMigratesUsingExplicitEnvironmentConnection(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("DATABASE_URL", "postgres://mycfc:secret@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("DB_NAME", "mycfc")
 	t.Setenv("APP_DB_USER", "mycfc_app")
@@ -510,7 +520,8 @@ func TestRunDatabaseCommandMigratesUsingExplicitEnvironmentConnection(t *testing
 	}
 }
 
-func TestRunDatabaseCommandUsesLegacyRoleContractWhenMigrationConnectionHasNoRoles(t *testing.T) {
+func TestRunDatabaseCommandRejectsUnconfiguredURLRoleInference(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("DATABASE_URL", "postgres://mycfc_migrate:connection-secret@localhost:5432/mycfc?sslmode=disable")
 	t.Setenv("APP_DB_USER", "")
 	t.Setenv("APP_DB_PASSWORD", "")
@@ -521,7 +532,7 @@ func TestRunDatabaseCommandUsesLegacyRoleContractWhenMigrationConnectionHasNoRol
 		connectDatabaseCommand, loadDatabaseCommandConfig = originalConnect, originalLoad
 	})
 	loadDatabaseCommandConfig = func(context.Context) (config.Config, error) {
-		t.Fatal("legacy migration compatibility must not require AWS configuration")
+		t.Fatal("unconfigured local migration must not infer AWS role configuration")
 		return config.Config{}, nil
 	}
 	connection := &databaseCommandConnectionFake{tx: databaseMigrationTransactionFake{}}
@@ -531,12 +542,13 @@ func TestRunDatabaseCommandUsesLegacyRoleContractWhenMigrationConnectionHasNoRol
 		}
 		return connection, nil
 	}
-	if err := runDatabaseCommand(t.Context(), "migrate"); err != nil {
-		t.Fatal(err)
+	if err := runDatabaseCommand(t.Context(), "migrate"); err == nil || !strings.Contains(err.Error(), "configured application and migration identities") {
+		t.Fatal("URL identity became configured role", err)
 	}
 }
 
 func TestRunDatabaseCommandFallsBackToValidatedConfiguration(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("DB_HOST", "")
 	originalConnect, originalLoad := connectDatabaseCommand, loadDatabaseCommandConfig
@@ -572,6 +584,7 @@ func TestRunDatabaseCommandReturnsFallbackConfigurationFailure(t *testing.T) {
 }
 
 func TestRunDatabaseCommandBootstrapsUsingFallbackConfiguration(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("DB_HOST", "")
 	originalConnect, originalLoad := connectDatabaseCommand, loadDatabaseCommandConfig

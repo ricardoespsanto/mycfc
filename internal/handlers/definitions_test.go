@@ -81,3 +81,49 @@ func TestDefinitionsRejectForgedScopeAndActor(t *testing.T) {
 		t.Fatalf("creation count=%d actor=%s", f.created, f.actor)
 	}
 }
+
+func TestDefinitionsInitialPageHasNoValidationErrorTarget(t *testing.T) {
+	actor, season, programme := uuid.New(), uuid.New(), uuid.New()
+	h := Definitions{Store: &definitionFake{scopes: []DefinitionScope{{SeasonID: season, ProgrammeID: programme, Season: "Configured season", Programme: "Competição"}}}}
+	r := httptest.NewRequest("GET", "/equipa/escaloes", nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor}))
+	w := httptest.NewRecorder()
+	h.Get(w, r)
+	if w.Code != 200 || strings.Contains(w.Body.String(), `aria-invalid="true"`) || strings.Contains(w.Body.String(), `id="errors"`) {
+		t.Fatalf("initial page presents validation failure: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if definitionErrorTarget(422, "Escolha a época e o programa.") != "scope" || definitionErrorTarget(409, "Já existe um escalão.") != "code" {
+		t.Fatal("real errors lost their field target")
+	}
+}
+
+type definitionSeasonStatus struct {
+	definitionFake
+	seasonGuidanceStatus
+}
+
+func TestDefinitionsMissingSeasonOffersSetupOnlyToAdministrators(t *testing.T) {
+	for _, admin := range []bool{false, true} {
+		f := &definitionSeasonStatus{seasonGuidanceStatus: seasonGuidanceStatus{missing: true, administrator: admin}}
+		h := Definitions{Store: f}
+		r := httptest.NewRequest("GET", "/equipa/escaloes", nil)
+		r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: uuid.New()}))
+		w := httptest.NewRecorder()
+		h.Get(w, r)
+		body := w.Body.String()
+		if w.Code != 200 || !strings.Contains(body, `id="season-setup"`) || strings.Contains(body, "Criar escalão") || strings.Contains(body, "Configurar épocas") != admin {
+			t.Fatalf("missing season exposed an invalid action for administrator=%t: status %d", admin, w.Code)
+		}
+	}
+}
+
+func TestDefinitionsUnavailableSetupOriginReturnsPrivateNotFound(t *testing.T) {
+	r := httptest.NewRequest("GET", "/equipa/escaloes?origin_group="+uuid.NewString(), nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: uuid.New()}))
+	w := httptest.NewRecorder()
+	h := Definitions{Store: &definitionFake{scopes: []DefinitionScope{{Season: "Private season"}}}}
+	h.Get(w, r)
+	if w.Code != 404 || strings.Contains(w.Body.String(), "Private season") || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unavailable group leaked category scope: status %d", w.Code)
+	}
+}

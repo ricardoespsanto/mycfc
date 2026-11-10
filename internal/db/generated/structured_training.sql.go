@@ -107,28 +107,32 @@ func (q *Queries) AddTrainingCycleTarget(ctx context.Context, arg AddTrainingCyc
 }
 
 const addTrainingVariationGroupMember = `-- name: AddTrainingVariationGroupMember :execrows
-INSERT INTO training_variation_group_members (variation_group_id, membership_id, added_by_id)
-SELECT variation_group.id, group_member.membership_id, $1
-FROM training_variation_groups variation_group
-JOIN training_group_members group_member ON group_member.group_id = variation_group.training_group_id
-JOIN user_memberships membership ON membership.id = group_member.membership_id
-WHERE variation_group.id = $2
-  AND group_member.membership_id = $3
-  AND membership.starts_on <= variation_group.effective_from
-  AND (membership.ends_on IS NULL OR membership.ends_on >= COALESCE(variation_group.effective_until, (SELECT (event_row.starts_at AT TIME ZONE 'Europe/Lisbon')::date FROM events event_row WHERE event_row.id = variation_group.competition_event_id), variation_group.effective_from))
-  AND (SELECT group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id FROM training_groups group_row WHERE group_row.id = variation_group.training_group_id)
-  AND (SELECT group_row.team_id IS NULL OR group_row.team_id = membership.team_id FROM training_groups group_row WHERE group_row.id = variation_group.training_group_id)
-ON CONFLICT (variation_group_id, membership_id) DO NOTHING
+INSERT INTO training_variation_group_members(variation_group_id,membership_id,added_by_id)
+SELECT variation_group.id,membership.id,$1
+FROM public.training_variation_groups variation_group
+JOIN public.user_memberships membership ON membership.id=$2::uuid
+JOIN public.users subject ON subject.id=membership.user_id AND subject.is_active AND subject.erased_at IS NULL
+JOIN public.seasons season ON season.id=membership.season_id
+CROSS JOIN LATERAL public.training_placement_resolve(subject.id,variation_group.training_group_id,membership.season_id,variation_group.effective_from) resolved
+JOIN public.training_group_placements placement ON placement.id=resolved.placement_id AND resolved.membership_id=membership.id
+CROSS JOIN LATERAL(SELECT COALESCE(variation_group.effective_until,(SELECT(event_row.starts_at AT TIME ZONE 'Europe/Lisbon')::date FROM public.events event_row WHERE event_row.id=variation_group.competition_event_id),variation_group.effective_from) AS required_until) period
+WHERE variation_group.id=$3::uuid
+ AND public.training_placement_actor_scope($1::uuid,variation_group.training_group_id)
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ AND membership.starts_on<=variation_group.effective_from AND(membership.ends_on IS NULL OR membership.ends_on>=period.required_until)
+ AND placement.starts_on<=variation_group.effective_from AND(placement.ends_on IS NULL OR placement.ends_on>=period.required_until)
+ AND period.required_until<=season.ends_on
+ON CONFLICT(variation_group_id,membership_id) DO NOTHING
 `
 
 type AddTrainingVariationGroupMemberParams struct {
 	AddedByID        uuid.UUID `json:"added_by_id"`
-	VariationGroupID uuid.UUID `json:"variation_group_id"`
 	MembershipID     uuid.UUID `json:"membership_id"`
+	VariationGroupID uuid.UUID `json:"variation_group_id"`
 }
 
 func (q *Queries) AddTrainingVariationGroupMember(ctx context.Context, arg AddTrainingVariationGroupMemberParams) (int64, error) {
-	result, err := q.db.Exec(ctx, addTrainingVariationGroupMember, arg.AddedByID, arg.VariationGroupID, arg.MembershipID)
+	result, err := q.db.Exec(ctx, addTrainingVariationGroupMember, arg.AddedByID, arg.MembershipID, arg.VariationGroupID)
 	if err != nil {
 		return 0, err
 	}
@@ -464,7 +468,7 @@ WHERE plan.id = $7
   AND plan.training_group_id IS NOT NULL
   AND $3 >= (plan.week_start::timestamp AT TIME ZONE 'Europe/Lisbon')
   AND $4 <= ((plan.week_start + 7)::timestamp AT TIME ZONE 'Europe/Lisbon')
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at,schedule_precision,scheduled_on,day_band
 `
 
 type CreateStructuredTrainingSessionParams struct {
@@ -504,6 +508,9 @@ func (q *Queries) CreateStructuredTrainingSession(ctx context.Context, arg Creat
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SchedulePrecision,
+		&i.ScheduledOn,
+		&i.DayBand,
 	)
 	return i, err
 }
@@ -690,23 +697,22 @@ func (q *Queries) CreateTrainingPlanPublication(ctx context.Context, arg CreateT
 
 const createTrainingPrescription = `-- name: CreateTrainingPrescription :one
 INSERT INTO training_prescriptions (
- publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256
-) SELECT $1, session.id, membership.id, athlete.id,
+ publication_id, session_id, membership_id, athlete_user_id, placement_id, snapshot, snapshot_sha256
+) SELECT $1, session.id, membership.id, athlete.id, resolved.placement_id,
          $2, $3
 FROM training_plan_publications publication
 JOIN training_plans plan ON plan.id = publication.plan_id
 JOIN training_groups group_row ON group_row.id = plan.training_group_id
 JOIN training_sessions session ON session.id = $4 AND session.plan_id = plan.id
 JOIN user_memberships membership ON membership.id = $5 AND membership.user_id = $6
-JOIN users athlete ON athlete.id = membership.user_id AND athlete.is_active
-JOIN training_group_members group_member ON group_member.group_id = group_row.id AND group_member.membership_id = membership.id
+JOIN users athlete ON athlete.id = membership.user_id AND athlete.is_active AND athlete.erased_at IS NULL AND (NOT athlete.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=athlete.id AND guardian_authority_current(relationship.guardian_user_id,athlete.id)))
+JOIN LATERAL public.training_placement_resolve(athlete.id,group_row.id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.membership_id=membership.id AND resolved.placement_id=$7::uuid
 WHERE publication.id = $1
   AND (group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id)
   AND (group_row.team_id IS NULL OR group_row.team_id = membership.team_id)
   AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
   AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
-  AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
-  AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
+  AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 RETURNING id, publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256, created_at
 `
 
@@ -717,9 +723,21 @@ type CreateTrainingPrescriptionParams struct {
 	SessionID      uuid.UUID  `json:"session_id"`
 	MembershipID   uuid.UUID  `json:"membership_id"`
 	AthleteUserID  *uuid.UUID `json:"athlete_user_id"`
+	PlacementID    uuid.UUID  `json:"placement_id"`
 }
 
-func (q *Queries) CreateTrainingPrescription(ctx context.Context, arg CreateTrainingPrescriptionParams) (TrainingPrescription, error) {
+type CreateTrainingPrescriptionRow struct {
+	ID             uuid.UUID          `json:"id"`
+	PublicationID  uuid.UUID          `json:"publication_id"`
+	SessionID      uuid.UUID          `json:"session_id"`
+	MembershipID   uuid.UUID          `json:"membership_id"`
+	AthleteUserID  uuid.UUID          `json:"athlete_user_id"`
+	Snapshot       []byte             `json:"snapshot"`
+	SnapshotSha256 string             `json:"snapshot_sha256"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreateTrainingPrescription(ctx context.Context, arg CreateTrainingPrescriptionParams) (CreateTrainingPrescriptionRow, error) {
 	row := q.db.QueryRow(ctx, createTrainingPrescription,
 		arg.PublicationID,
 		arg.Snapshot,
@@ -727,8 +745,9 @@ func (q *Queries) CreateTrainingPrescription(ctx context.Context, arg CreateTrai
 		arg.SessionID,
 		arg.MembershipID,
 		arg.AthleteUserID,
+		arg.PlacementID,
 	)
-	var i TrainingPrescription
+	var i CreateTrainingPrescriptionRow
 	err := row.Scan(
 		&i.ID,
 		&i.PublicationID,
@@ -885,25 +904,25 @@ func (q *Queries) CreateTrainingSessionSegment(ctx context.Context, arg CreateTr
 const createTrainingVariation = `-- name: CreateTrainingVariation :one
 WITH subject_plan AS (
     SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date AS session_date
+           public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_date
     FROM training_session_segments segment
     JOIN training_sessions session ON session.id = segment.session_id
     UNION ALL
     SELECT block.id, 'BLOCK'::training_variation_subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+           public.training_session_local_date(session.scheduled_on,session.starts_at)
     FROM training_segment_blocks block
     JOIN training_session_segments segment ON segment.id = block.segment_id
     JOIN training_sessions session ON session.id = segment.session_id
     UNION ALL
     SELECT step.id, 'WATER_STEP'::training_variation_subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+           public.training_session_local_date(session.scheduled_on,session.starts_at)
     FROM water_work_steps step
     JOIN training_segment_blocks block ON block.id = step.block_id
     JOIN training_session_segments segment ON segment.id = block.segment_id
     JOIN training_sessions session ON session.id = segment.session_id
     UNION ALL
     SELECT exercise.id, 'GYM_EXERCISE'::training_variation_subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+           public.training_session_local_date(session.scheduled_on,session.starts_at)
     FROM gym_exercises exercise
     JOIN training_segment_blocks block ON block.id = exercise.block_id
     JOIN training_session_segments segment ON segment.id = block.segment_id
@@ -921,14 +940,15 @@ JOIN subject_plan subject ON subject.plan_id = plan.id
                          AND subject.subject_kind = $3::training_variation_subject_kind
 WHERE plan.id = $9
   AND plan.training_group_id IS NOT NULL
+  AND public.training_placement_actor_scope($8::uuid,plan.training_group_id)
   AND (
       ($1::uuid IS NOT NULL AND EXISTS (
-          SELECT 1 FROM training_group_members group_member
-          JOIN user_memberships membership ON membership.id = group_member.membership_id
-          WHERE group_member.group_id = plan.training_group_id
-            AND group_member.membership_id = $1
-            AND membership.starts_on <= subject.session_date
-            AND (membership.ends_on IS NULL OR membership.ends_on >= subject.session_date)
+          SELECT 1 FROM public.user_memberships membership
+          JOIN public.users athlete ON athlete.id=membership.user_id AND athlete.is_active AND athlete.erased_at IS NULL
+          CROSS JOIN LATERAL public.training_placement_resolve(athlete.id,plan.training_group_id,plan.season_id,subject.session_date) resolved
+          WHERE membership.id=$1::uuid AND resolved.membership_id=membership.id
+            AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+            AND(NOT athlete.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=athlete.id AND public.guardian_authority_current(relationship.guardian_user_id,athlete.id)))
       ))
       OR
       ($2::uuid IS NOT NULL AND EXISTS (
@@ -1135,12 +1155,16 @@ func (q *Queries) CreateWaterIntensityProfile(ctx context.Context, arg CreateWat
 }
 
 const createWaterIntensityZone = `-- name: CreateWaterIntensityZone :one
+WITH selected_profile AS (
+ UPDATE ONLY water_intensity_profiles profile SET is_active=profile.is_active
+ WHERE profile.id=$6 AND profile.is_active RETURNING profile.id
+)
 INSERT INTO water_intensity_zones (profile_id, position, code, label, cadence_min, cadence_max, meaning)
 SELECT profile.id, COALESCE(max(zone.position), 0) + 1, $1, $2,
        $3, $4, $5
-FROM water_intensity_profiles profile
+FROM selected_profile profile
 LEFT JOIN water_intensity_zones zone ON zone.profile_id = profile.id
-WHERE profile.id = $6 AND profile.is_active
+WHERE profile.id = $6
 GROUP BY profile.id
 ON CONFLICT (profile_id, code) DO UPDATE SET
  label = EXCLUDED.label,
@@ -1324,21 +1348,31 @@ func (q *Queries) GetSegmentRoutineSource(ctx context.Context, sourceID uuid.UUI
 
 const getSessionRoutineSource = `-- name: GetSessionRoutineSource :one
 SELECT session.plan_id, session.updated_at AS source_updated_at, plan.programme_id, plan.team_id,
+ session.schedule_precision,session.scheduled_on,session.day_band,session.starts_at,session.ends_at,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on,
        NULL::training_segment_modality AS modality, NULL::training_objective AS objective,
-       training_session_snapshot(session.id) AS snapshot
+       training_session_snapshot_v2(session.id) AS schedule_snapshot,
+       CASE WHEN session.schedule_precision='INTERVAL' THEN training_session_snapshot(session.id) ELSE NULL::jsonb END AS snapshot
 FROM training_sessions session
 JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
 WHERE session.id = $1 AND session.status = 'ACTIVE'
 `
 
 type GetSessionRoutineSourceRow struct {
-	PlanID          uuid.UUID                `json:"plan_id"`
-	SourceUpdatedAt pgtype.Timestamptz       `json:"source_updated_at"`
-	ProgrammeID     *uuid.UUID               `json:"programme_id"`
-	TeamID          *uuid.UUID               `json:"team_id"`
-	Modality        *TrainingSegmentModality `json:"modality"`
-	Objective       *TrainingObjective       `json:"objective"`
-	Snapshot        []byte                   `json:"snapshot"`
+	PlanID            uuid.UUID                `json:"plan_id"`
+	SourceUpdatedAt   pgtype.Timestamptz       `json:"source_updated_at"`
+	ProgrammeID       *uuid.UUID               `json:"programme_id"`
+	TeamID            *uuid.UUID               `json:"team_id"`
+	SchedulePrecision string                   `json:"schedule_precision"`
+	ScheduledOn       pgtype.Date              `json:"scheduled_on"`
+	DayBand           *string                  `json:"day_band"`
+	StartsAt          pgtype.Timestamptz       `json:"starts_at"`
+	EndsAt            pgtype.Timestamptz       `json:"ends_at"`
+	SessionOn         pgtype.Date              `json:"session_on"`
+	Modality          *TrainingSegmentModality `json:"modality"`
+	Objective         *TrainingObjective       `json:"objective"`
+	ScheduleSnapshot  []byte                   `json:"schedule_snapshot"`
+	Snapshot          []byte                   `json:"snapshot"`
 }
 
 func (q *Queries) GetSessionRoutineSource(ctx context.Context, sourceID uuid.UUID) (GetSessionRoutineSourceRow, error) {
@@ -1349,8 +1383,15 @@ func (q *Queries) GetSessionRoutineSource(ctx context.Context, sourceID uuid.UUI
 		&i.SourceUpdatedAt,
 		&i.ProgrammeID,
 		&i.TeamID,
+		&i.SchedulePrecision,
+		&i.ScheduledOn,
+		&i.DayBand,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.SessionOn,
 		&i.Modality,
 		&i.Objective,
+		&i.ScheduleSnapshot,
 		&i.Snapshot,
 	)
 	return i, err
@@ -1518,8 +1559,8 @@ JOIN LATERAL (
 ) latest ON true
 WHERE prescription.id = $1
   AND (
-    athlete.id = $2
-    OR guardian_authority_current($2,athlete.id)
+    ((athlete.id = $2 OR guardian_authority_current($2,athlete.id))
+      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED' AND EXISTS(SELECT 1 FROM public.training_sessions historical_session WHERE historical_session.id=prescription.session_id AND public.training_session_local_date(historical_session.scheduled_on,historical_session.starts_at)<(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date))))
     OR $3::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -1767,7 +1808,7 @@ func (q *Queries) ListEligibleTrainingGroupMemberships(ctx context.Context, arg 
 }
 
 const listLatestTrainingPrescriptionHashesForPlan = `-- name: ListLatestTrainingPrescriptionHashesForPlan :many
-SELECT prescription.membership_id, prescription.session_id, prescription.snapshot_sha256
+SELECT prescription.membership_id, prescription.session_id, prescription.snapshot_sha256, prescription.placement_id
 FROM training_prescriptions prescription
 JOIN training_plan_publications publication ON publication.id = prescription.publication_id
 WHERE publication.plan_id = $1
@@ -1780,9 +1821,10 @@ ORDER BY prescription.membership_id, prescription.session_id
 `
 
 type ListLatestTrainingPrescriptionHashesForPlanRow struct {
-	MembershipID   uuid.UUID `json:"membership_id"`
-	SessionID      uuid.UUID `json:"session_id"`
-	SnapshotSha256 string    `json:"snapshot_sha256"`
+	MembershipID   uuid.UUID  `json:"membership_id"`
+	SessionID      uuid.UUID  `json:"session_id"`
+	SnapshotSha256 string     `json:"snapshot_sha256"`
+	PlacementID    *uuid.UUID `json:"placement_id"`
 }
 
 func (q *Queries) ListLatestTrainingPrescriptionHashesForPlan(ctx context.Context, planID uuid.UUID) ([]ListLatestTrainingPrescriptionHashesForPlanRow, error) {
@@ -1794,7 +1836,12 @@ func (q *Queries) ListLatestTrainingPrescriptionHashesForPlan(ctx context.Contex
 	items := []ListLatestTrainingPrescriptionHashesForPlanRow{}
 	for rows.Next() {
 		var i ListLatestTrainingPrescriptionHashesForPlanRow
-		if err := rows.Scan(&i.MembershipID, &i.SessionID, &i.SnapshotSha256); err != nil {
+		if err := rows.Scan(
+			&i.MembershipID,
+			&i.SessionID,
+			&i.SnapshotSha256,
+			&i.PlacementID,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2087,23 +2134,27 @@ func (q *Queries) ListManagedTrainingCycles(ctx context.Context, arg ListManaged
 }
 
 const listManagedTrainingGroupMembers = `-- name: ListManagedTrainingGroupMembers :many
-SELECT group_row.id AS training_group_id, group_row.name AS training_group_name,
-       membership.id AS membership_id, subject.name AS athlete_name
-FROM training_groups group_row
-JOIN training_group_members group_member ON group_member.group_id = group_row.id
-JOIN user_memberships membership ON membership.id = group_member.membership_id
-JOIN users subject ON subject.id = membership.user_id AND subject.is_active
-WHERE membership.starts_on <= CURRENT_DATE
-  AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
-  AND ($1::boolean
-   OR EXISTS (
-       SELECT 1 FROM staff_grants grant_row
-       WHERE grant_row.user_id = $2
-         AND grant_row.capability = 'COACH'
-         AND grant_row.revoked_at IS NULL
-         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
-   ))
-ORDER BY group_row.name, subject.name, membership.id
+WITH actual_dates AS (
+ SELECT plan.training_group_id AS group_id,plan.season_id,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
+ FROM public.training_plans plan JOIN public.training_sessions session ON session.plan_id=plan.id
+ WHERE plan.training_group_id IS NOT NULL AND session.status='ACTIVE'
+ UNION
+ SELECT placement.group_id,membership.season_id,(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date
+ FROM public.training_group_placements placement JOIN public.user_memberships membership
+ ON membership.user_id=placement.subject_user_id AND membership.programme_id=placement.programme_id
+)
+SELECT DISTINCT group_row.id AS training_group_id,group_row.name AS training_group_name,
+ membership.id AS membership_id,subject.name AS athlete_name
+FROM actual_dates date_row JOIN public.training_groups group_row ON group_row.id=date_row.group_id
+JOIN public.training_group_placements placement ON placement.group_id=group_row.id
+JOIN public.users subject ON subject.id=placement.subject_user_id AND subject.is_active AND subject.erased_at IS NULL
+CROSS JOIN LATERAL public.training_placement_resolve(subject.id,group_row.id,date_row.season_id,date_row.session_on) resolved
+JOIN public.user_memberships membership ON membership.id=resolved.membership_id AND resolved.placement_id=placement.id
+WHERE $1::boolean IS NOT NULL
+ AND public.training_placement_actor_scope($2::uuid,group_row.id)
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ORDER BY group_row.name,subject.name,membership.id
 `
 
 type ListManagedTrainingGroupMembersParams struct {
@@ -2149,6 +2200,7 @@ SELECT plan.id, plan.title, plan.updated_at AS source_updated_at,
        latest.published_at, publisher.name AS published_by_name,
        (latest.source_updated_at IS NOT NULL AND latest.source_updated_at = plan.updated_at) AS publication_current
 FROM training_plans plan
+JOIN training_groups group_row ON group_row.id=plan.training_group_id
 LEFT JOIN LATERAL (
  SELECT publication.revision, publication.source_updated_at, publication.published_at, publication.published_by_id
  FROM training_plan_publications publication
@@ -2158,12 +2210,11 @@ LEFT JOIN LATERAL (
 ) latest ON true
 LEFT JOIN users publisher ON publisher.id = latest.published_by_id
 WHERE plan.training_group_id IS NOT NULL
-  AND ($1::boolean OR EXISTS (
-    SELECT 1 FROM staff_grants grant_row
-    WHERE grant_row.user_id = $2
-      AND grant_row.capability = 'COACH' AND grant_row.revoked_at IS NULL
-      AND (grant_row.programme_id = plan.programme_id OR grant_row.team_id = plan.team_id)
-  ))
+ -- Deprecated is_admin is retained only for source compatibility, never authority.
+ AND $1::boolean IS NOT NULL AND EXISTS(SELECT 1 FROM users actual_actor WHERE actual_actor.id=$2::uuid AND actual_actor.is_active AND actual_actor.erased_at IS NULL AND NOT actual_actor.is_dependent
+ AND actual_actor.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
+ AND (EXISTS(SELECT 1 FROM user_platform_roles assignment JOIN platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actual_actor.id AND role.code='ADMIN') OR EXISTS(SELECT 1 FROM staff_grants grant_row WHERE grant_row.user_id=actual_actor.id AND grant_row.capability='COACH' AND grant_row.revoked_at IS NULL
+ AND ((group_row.programme_id IS NOT NULL AND grant_row.programme_id=group_row.programme_id) OR (group_row.team_id IS NOT NULL AND grant_row.team_id=group_row.team_id)))))
 ORDER BY plan.week_start DESC, plan.id
 `
 
@@ -2222,21 +2273,23 @@ JOIN training_groups group_row ON group_row.id = variation_group.training_group_
 LEFT JOIN events event_row ON event_row.id = variation_group.competition_event_id
 JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
 JOIN user_memberships membership ON membership.id = variation_member.membership_id
-JOIN users subject ON subject.id = membership.user_id
-WHERE $1::boolean
+JOIN users subject ON subject.id = membership.user_id AND subject.is_active AND subject.erased_at IS NULL
+WHERE public.training_placement_actor_scope($1::uuid,group_row.id)
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ AND($2::boolean
    OR EXISTS (
        SELECT 1 FROM staff_grants grant_row
-       WHERE grant_row.user_id = $2
+       WHERE grant_row.user_id = $1
          AND grant_row.capability = 'COACH'
          AND grant_row.revoked_at IS NULL
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
-   )
+   ))
 ORDER BY group_row.name, variation_group.name, subject.name, membership.id
 `
 
 type ListManagedTrainingVariationGroupsParams struct {
-	IsAdmin bool      `json:"is_admin"`
 	UserID  uuid.UUID `json:"user_id"`
+	IsAdmin bool      `json:"is_admin"`
 }
 
 type ListManagedTrainingVariationGroupsRow struct {
@@ -2256,7 +2309,7 @@ type ListManagedTrainingVariationGroupsRow struct {
 }
 
 func (q *Queries) ListManagedTrainingVariationGroups(ctx context.Context, arg ListManagedTrainingVariationGroupsParams) ([]ListManagedTrainingVariationGroupsRow, error) {
-	rows, err := q.db.Query(ctx, listManagedTrainingVariationGroups, arg.IsAdmin, arg.UserID)
+	rows, err := q.db.Query(ctx, listManagedTrainingVariationGroups, arg.UserID, arg.IsAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -2317,11 +2370,13 @@ func (q *Queries) ListStructuredCrewModalities(ctx context.Context) ([]CanoeCraf
 }
 
 const listStructuredSessionSnapshotsForDay = `-- name: ListStructuredSessionSnapshotsForDay :many
-SELECT session.id, session.starts_at, session.updated_at, training_session_snapshot(session.id) AS snapshot
+SELECT session.id, session.starts_at,session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on, session.updated_at, training_session_snapshot_v2(session.id) AS schedule_snapshot,
+       CASE WHEN session.schedule_precision='INTERVAL' THEN training_session_snapshot(session.id) ELSE NULL::jsonb END AS snapshot
 FROM training_sessions session
 WHERE session.plan_id = $1 AND session.status = 'ACTIVE'
-  AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date = $2::date
-ORDER BY session.starts_at, session.id
+  AND public.training_session_local_date(session.scheduled_on,session.starts_at) = $2::date
+ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at),session.starts_at NULLS LAST, session.id
 `
 
 type ListStructuredSessionSnapshotsForDayParams struct {
@@ -2330,10 +2385,16 @@ type ListStructuredSessionSnapshotsForDayParams struct {
 }
 
 type ListStructuredSessionSnapshotsForDayRow struct {
-	ID        uuid.UUID          `json:"id"`
-	StartsAt  pgtype.Timestamptz `json:"starts_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-	Snapshot  []byte             `json:"snapshot"`
+	ID                uuid.UUID          `json:"id"`
+	StartsAt          pgtype.Timestamptz `json:"starts_at"`
+	EndsAt            pgtype.Timestamptz `json:"ends_at"`
+	SchedulePrecision string             `json:"schedule_precision"`
+	ScheduledOn       pgtype.Date        `json:"scheduled_on"`
+	DayBand           *string            `json:"day_band"`
+	SessionOn         pgtype.Date        `json:"session_on"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ScheduleSnapshot  []byte             `json:"schedule_snapshot"`
+	Snapshot          []byte             `json:"snapshot"`
 }
 
 func (q *Queries) ListStructuredSessionSnapshotsForDay(ctx context.Context, arg ListStructuredSessionSnapshotsForDayParams) ([]ListStructuredSessionSnapshotsForDayRow, error) {
@@ -2348,7 +2409,13 @@ func (q *Queries) ListStructuredSessionSnapshotsForDay(ctx context.Context, arg 
 		if err := rows.Scan(
 			&i.ID,
 			&i.StartsAt,
+			&i.EndsAt,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
 			&i.UpdatedAt,
+			&i.ScheduleSnapshot,
 			&i.Snapshot,
 		); err != nil {
 			return nil, err
@@ -2362,17 +2429,25 @@ func (q *Queries) ListStructuredSessionSnapshotsForDay(ctx context.Context, arg 
 }
 
 const listStructuredSessionSnapshotsForPlan = `-- name: ListStructuredSessionSnapshotsForPlan :many
-SELECT session.id, session.starts_at, session.updated_at, training_session_snapshot(session.id) AS snapshot
+SELECT session.id, session.starts_at,session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on, session.updated_at, training_session_snapshot_v2(session.id) AS schedule_snapshot,
+       CASE WHEN session.schedule_precision='INTERVAL' THEN training_session_snapshot(session.id) ELSE NULL::jsonb END AS snapshot
 FROM training_sessions session
 WHERE session.plan_id = $1 AND session.status = 'ACTIVE'
-ORDER BY session.starts_at, session.id
+ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at),session.starts_at NULLS LAST, session.id
 `
 
 type ListStructuredSessionSnapshotsForPlanRow struct {
-	ID        uuid.UUID          `json:"id"`
-	StartsAt  pgtype.Timestamptz `json:"starts_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-	Snapshot  []byte             `json:"snapshot"`
+	ID                uuid.UUID          `json:"id"`
+	StartsAt          pgtype.Timestamptz `json:"starts_at"`
+	EndsAt            pgtype.Timestamptz `json:"ends_at"`
+	SchedulePrecision string             `json:"schedule_precision"`
+	ScheduledOn       pgtype.Date        `json:"scheduled_on"`
+	DayBand           *string            `json:"day_band"`
+	SessionOn         pgtype.Date        `json:"session_on"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ScheduleSnapshot  []byte             `json:"schedule_snapshot"`
+	Snapshot          []byte             `json:"snapshot"`
 }
 
 func (q *Queries) ListStructuredSessionSnapshotsForPlan(ctx context.Context, planID uuid.UUID) ([]ListStructuredSessionSnapshotsForPlanRow, error) {
@@ -2387,7 +2462,13 @@ func (q *Queries) ListStructuredSessionSnapshotsForPlan(ctx context.Context, pla
 		if err := rows.Scan(
 			&i.ID,
 			&i.StartsAt,
+			&i.EndsAt,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
 			&i.UpdatedAt,
+			&i.ScheduleSnapshot,
 			&i.Snapshot,
 		); err != nil {
 			return nil, err
@@ -2401,12 +2482,15 @@ func (q *Queries) ListStructuredSessionSnapshotsForPlan(ctx context.Context, pla
 }
 
 const listStructuredTrainingOverviewForManager = `-- name: ListStructuredTrainingOverviewForManager :many
+WITH RECURSIVE scoped_overview AS (
 SELECT group_row.id AS group_id, group_row.name AS group_name,
        programme.name_pt AS programme_name, team.name AS team_name,
        (SELECT count(*)::integer FROM training_group_members member WHERE member.group_id = group_row.id) AS member_count,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
        session.starts_at, session.ends_at, session.entry_kind,
+       session.schedule_precision,session.scheduled_on,session.day_band,
+       public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on, session.status AS session_status,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
        segment.title AS segment_title, segment.location AS segment_location,
        segment.planned_duration_minutes, segment.planned_start_offset_minutes,
@@ -2462,9 +2546,15 @@ WHERE $1::boolean
          AND grant_row.revoked_at IS NULL
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
    )
-ORDER BY group_row.name, group_row.id, plan.week_start DESC NULLS LAST, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position,
-         water_step.created_at NULLS FIRST, exercise.position
+), water_nodes AS (
+ SELECT DISTINCT water_step_id AS id,water_parent_step_id AS parent_id,water_step_position AS position FROM scoped_overview WHERE water_step_id IS NOT NULL
+), water_tree(id,order_path,id_path) AS (
+ SELECT root.id,ARRAY[root.position]::integer[],ARRAY[root.id]::uuid[] FROM water_nodes root WHERE root.parent_id IS NULL
+ UNION ALL
+ SELECT child.id,water_tree.order_path||child.position,water_tree.id_path||child.id FROM water_nodes child JOIN water_tree ON child.parent_id=water_tree.id WHERE NOT child.id=ANY(water_tree.id_path)
+)
+SELECT source.group_id, source.group_name, source.programme_name, source.team_name, source.member_count, source.plan_id, source.plan_title, source.plan_description, source.season_name, source.week_start, source.planned_load_percentage, source.session_id, source.session_title, source.session_description, source.starts_at, source.ends_at, source.entry_kind, source.schedule_precision, source.scheduled_on, source.day_band, source.session_on, source.session_status, source.segment_id, source.segment_position, source.segment_modality, source.segment_title, source.segment_location, source.planned_duration_minutes, source.planned_start_offset_minutes, source.transition_duration_minutes, source.equipment_notes, source.block_id, source.block_position, source.block_purpose, source.block_title, source.block_instructions, source.gym_structure, source.gym_objective, source.gym_rounds, source.round_recovery_seconds, source.water_method, source.water_intensity_profile_id, source.water_profile_name, source.water_profile_revision, source.water_profile_craft, source.water_target_distance_metres, source.water_target_distance_certainty, source.water_step_id, source.water_parent_step_id, source.water_step_position, source.water_step_kind, source.water_step_name, source.water_step_repeats, source.water_step_duration_seconds, source.water_step_duration_certainty, source.water_step_distance_metres, source.water_step_distance_certainty, source.water_step_recovery_seconds, source.water_step_intensity_code, source.water_step_cadence_spm, source.water_zone_label, source.water_zone_cadence_min, source.water_zone_cadence_max, source.water_zone_meaning, source.water_step_drill_focus, source.water_step_drill_format, source.water_step_role_notes, source.water_step_instructions, source.exercise_id, source.exercise_position, source.exercise_name, source.exercise_sets, source.exercise_repetitions, source.exercise_duration_seconds, source.exercise_distance_metres, source.exercise_recovery_seconds, source.resistance_kind, source.resistance_value, source.resistance_text, source.execution_intent, source.tempo, source.exercise_notes FROM scoped_overview source LEFT JOIN water_tree ON water_tree.id=source.water_step_id
+ORDER BY source.group_name,source.group_id,source.week_start DESC NULLS LAST,source.plan_id,source.session_on NULLS LAST,source.starts_at NULLS LAST,source.session_id,source.segment_position,source.block_position,water_tree.order_path NULLS LAST,water_tree.id_path NULLS LAST,source.water_parent_step_id NULLS FIRST,source.water_step_position,source.water_step_id,source.exercise_position,source.exercise_id
 `
 
 type ListStructuredTrainingOverviewForManagerParams struct {
@@ -2490,6 +2580,11 @@ type ListStructuredTrainingOverviewForManagerRow struct {
 	StartsAt                     pgtype.Timestamptz        `json:"starts_at"`
 	EndsAt                       pgtype.Timestamptz        `json:"ends_at"`
 	EntryKind                    *TrainingEntryKind        `json:"entry_kind"`
+	SchedulePrecision            *string                   `json:"schedule_precision"`
+	ScheduledOn                  pgtype.Date               `json:"scheduled_on"`
+	DayBand                      *string                   `json:"day_band"`
+	SessionOn                    pgtype.Date               `json:"session_on"`
+	SessionStatus                *string                   `json:"session_status"`
 	SegmentID                    *uuid.UUID                `json:"segment_id"`
 	SegmentPosition              *int32                    `json:"segment_position"`
 	SegmentModality              *TrainingSegmentModality  `json:"segment_modality"`
@@ -2579,6 +2674,11 @@ func (q *Queries) ListStructuredTrainingOverviewForManager(ctx context.Context, 
 			&i.StartsAt,
 			&i.EndsAt,
 			&i.EntryKind,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
+			&i.SessionStatus,
 			&i.SegmentID,
 			&i.SegmentPosition,
 			&i.SegmentModality,
@@ -2651,11 +2751,14 @@ func (q *Queries) ListStructuredTrainingOverviewForManager(ctx context.Context, 
 }
 
 const listStructuredTrainingOverviewForSubject = `-- name: ListStructuredTrainingOverviewForSubject :many
+WITH RECURSIVE scoped_overview AS (
 SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        group_row.id AS group_id, group_row.name AS group_name,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
        session.starts_at, session.ends_at, session.entry_kind,
+       session.schedule_precision,session.scheduled_on,session.day_band,
+       public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
        segment.title AS segment_title, segment.location AS segment_location,
        segment.planned_duration_minutes, segment.planned_start_offset_minutes,
@@ -2709,9 +2812,15 @@ WHERE (subject.id = $1
   AND subject.is_active
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
-ORDER BY subject.name, subject.id, group_row.name, group_row.id, plan.week_start DESC, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position,
-         water_step.created_at NULLS FIRST, exercise.position
+), water_nodes AS (
+ SELECT DISTINCT water_step_id AS id,water_parent_step_id AS parent_id,water_step_position AS position FROM scoped_overview WHERE water_step_id IS NOT NULL
+), water_tree(id,order_path,id_path) AS (
+ SELECT root.id,ARRAY[root.position]::integer[],ARRAY[root.id]::uuid[] FROM water_nodes root WHERE root.parent_id IS NULL
+ UNION ALL
+ SELECT child.id,water_tree.order_path||child.position,water_tree.id_path||child.id FROM water_nodes child JOIN water_tree ON child.parent_id=water_tree.id WHERE NOT child.id=ANY(water_tree.id_path)
+)
+SELECT source.athlete_id, source.athlete_name, source.group_id, source.group_name, source.plan_id, source.plan_title, source.plan_description, source.season_name, source.week_start, source.planned_load_percentage, source.session_id, source.session_title, source.session_description, source.starts_at, source.ends_at, source.entry_kind, source.schedule_precision, source.scheduled_on, source.day_band, source.session_on, source.segment_id, source.segment_position, source.segment_modality, source.segment_title, source.segment_location, source.planned_duration_minutes, source.planned_start_offset_minutes, source.transition_duration_minutes, source.equipment_notes, source.block_id, source.block_position, source.block_purpose, source.block_title, source.block_instructions, source.gym_structure, source.gym_objective, source.gym_rounds, source.round_recovery_seconds, source.water_method, source.water_intensity_profile_id, source.water_profile_name, source.water_profile_revision, source.water_profile_craft, source.water_target_distance_metres, source.water_target_distance_certainty, source.water_step_id, source.water_parent_step_id, source.water_step_position, source.water_step_kind, source.water_step_name, source.water_step_repeats, source.water_step_duration_seconds, source.water_step_duration_certainty, source.water_step_distance_metres, source.water_step_distance_certainty, source.water_step_recovery_seconds, source.water_step_intensity_code, source.water_step_cadence_spm, source.water_zone_label, source.water_zone_cadence_min, source.water_zone_cadence_max, source.water_zone_meaning, source.water_step_drill_focus, source.water_step_drill_format, source.water_step_role_notes, source.water_step_instructions, source.exercise_id, source.exercise_position, source.exercise_name, source.exercise_sets, source.exercise_repetitions, source.exercise_duration_seconds, source.exercise_distance_metres, source.exercise_recovery_seconds, source.resistance_kind, source.resistance_value, source.resistance_text, source.execution_intent, source.tempo, source.exercise_notes FROM scoped_overview source LEFT JOIN water_tree ON water_tree.id=source.water_step_id
+ORDER BY source.athlete_name,source.athlete_id,source.group_name,source.group_id,source.week_start DESC,source.plan_id,source.session_on NULLS LAST,source.starts_at NULLS LAST,source.session_id,source.segment_position,source.block_position,water_tree.order_path NULLS LAST,water_tree.id_path NULLS LAST,source.water_parent_step_id NULLS FIRST,source.water_step_position,source.water_step_id,source.exercise_position,source.exercise_id
 `
 
 type ListStructuredTrainingOverviewForSubjectRow struct {
@@ -2731,6 +2840,10 @@ type ListStructuredTrainingOverviewForSubjectRow struct {
 	StartsAt                     pgtype.Timestamptz        `json:"starts_at"`
 	EndsAt                       pgtype.Timestamptz        `json:"ends_at"`
 	EntryKind                    *TrainingEntryKind        `json:"entry_kind"`
+	SchedulePrecision            *string                   `json:"schedule_precision"`
+	ScheduledOn                  pgtype.Date               `json:"scheduled_on"`
+	DayBand                      *string                   `json:"day_band"`
+	SessionOn                    pgtype.Date               `json:"session_on"`
 	SegmentID                    *uuid.UUID                `json:"segment_id"`
 	SegmentPosition              *int32                    `json:"segment_position"`
 	SegmentModality              *TrainingSegmentModality  `json:"segment_modality"`
@@ -2819,6 +2932,10 @@ func (q *Queries) ListStructuredTrainingOverviewForSubject(ctx context.Context, 
 			&i.StartsAt,
 			&i.EndsAt,
 			&i.EntryKind,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
 			&i.SegmentID,
 			&i.SegmentPosition,
 			&i.SegmentModality,
@@ -2891,30 +3008,26 @@ func (q *Queries) ListStructuredTrainingOverviewForSubject(ctx context.Context, 
 }
 
 const listStructuredTrainingPublicationMembers = `-- name: ListStructuredTrainingPublicationMembers :many
-SELECT DISTINCT membership.id AS membership_id, membership.user_id AS athlete_user_id,
+SELECT DISTINCT placement.id AS placement_id,membership.id AS membership_id, membership.user_id AS athlete_user_id,
        subject.name AS athlete_name, membership.starts_on, membership.ends_on, session.id AS session_id
 FROM training_plans plan
 JOIN training_groups group_row ON group_row.id = plan.training_group_id
-JOIN training_group_members group_member ON group_member.group_id = group_row.id
-JOIN user_memberships membership ON membership.id = group_member.membership_id
-JOIN users subject ON subject.id = membership.user_id AND subject.is_active
-JOIN training_sessions session ON session.plan_id = plan.id
+JOIN training_group_placements placement ON placement.group_id=group_row.id AND placement.superseded_by_change_id IS NULL AND placement.cancelled_by_change_id IS NULL
+JOIN training_sessions session ON session.plan_id=plan.id
+JOIN LATERAL public.training_placement_resolve(placement.subject_user_id,group_row.id,plan.season_id,public.training_session_local_date(session.scheduled_on,session.starts_at)) resolved ON resolved.placement_id=placement.id
+JOIN user_memberships membership ON membership.id=resolved.membership_id
+JOIN users subject ON subject.id = membership.user_id AND subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND guardian_authority_current(relationship.guardian_user_id,subject.id)))
 WHERE plan.id = $1
   AND (group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id)
   AND (group_row.team_id IS NULL OR group_row.team_id = membership.team_id)
   AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
   AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
-  AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
-  AND (session.starts_at AT TIME ZONE $2::text)::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
+  AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 ORDER BY subject.name, membership.id, session.id
 `
 
-type ListStructuredTrainingPublicationMembersParams struct {
-	PlanID   uuid.UUID `json:"plan_id"`
-	TimeZone string    `json:"time_zone"`
-}
-
 type ListStructuredTrainingPublicationMembersRow struct {
+	PlacementID   uuid.UUID   `json:"placement_id"`
 	MembershipID  uuid.UUID   `json:"membership_id"`
 	AthleteUserID *uuid.UUID  `json:"athlete_user_id"`
 	AthleteName   string      `json:"athlete_name"`
@@ -2923,8 +3036,8 @@ type ListStructuredTrainingPublicationMembersRow struct {
 	SessionID     uuid.UUID   `json:"session_id"`
 }
 
-func (q *Queries) ListStructuredTrainingPublicationMembers(ctx context.Context, arg ListStructuredTrainingPublicationMembersParams) ([]ListStructuredTrainingPublicationMembersRow, error) {
-	rows, err := q.db.Query(ctx, listStructuredTrainingPublicationMembers, arg.PlanID, arg.TimeZone)
+func (q *Queries) ListStructuredTrainingPublicationMembers(ctx context.Context, planID uuid.UUID) ([]ListStructuredTrainingPublicationMembersRow, error) {
+	rows, err := q.db.Query(ctx, listStructuredTrainingPublicationMembers, planID)
 	if err != nil {
 		return nil, err
 	}
@@ -2933,6 +3046,7 @@ func (q *Queries) ListStructuredTrainingPublicationMembers(ctx context.Context, 
 	for rows.Next() {
 		var i ListStructuredTrainingPublicationMembersRow
 		if err := rows.Scan(
+			&i.PlacementID,
 			&i.MembershipID,
 			&i.AthleteUserID,
 			&i.AthleteName,
@@ -3018,8 +3132,8 @@ WHERE prescription.session_id = $1
     ORDER BY current_publication.revision DESC LIMIT 1
   )
   AND (
-    athlete.id = $2
-    OR guardian_authority_current($2,athlete.id)
+    ((athlete.id = $2 OR guardian_authority_current($2,athlete.id))
+      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED' AND EXISTS(SELECT 1 FROM public.training_sessions historical_session WHERE historical_session.id=prescription.session_id AND public.training_session_local_date(historical_session.scheduled_on,historical_session.starts_at)<(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date))))
     OR $3::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -3098,8 +3212,8 @@ JOIN LATERAL (
  LIMIT 1
 ) latest ON true
 WHERE (
-    athlete.id = $1
-    OR guardian_authority_current($1,athlete.id)
+    ((athlete.id = $1 OR guardian_authority_current($1,athlete.id))
+      AND (public.training_prescription_current_delivery(prescription.id) OR EXISTS(SELECT 1 FROM training_session_outcomes completed WHERE completed.prescription_id=prescription.id AND completed.user_id=athlete.id AND completed.status='COMPLETED' AND EXISTS(SELECT 1 FROM public.training_sessions historical_session WHERE historical_session.id=prescription.session_id AND public.training_session_local_date(historical_session.scheduled_on,historical_session.starts_at)<(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date))))
     OR $2::boolean
     OR EXISTS (
       SELECT 1 FROM staff_grants grant_row
@@ -3188,6 +3302,8 @@ const listTrainingVariationMatchesForManager = `-- name: ListTrainingVariationMa
 WITH subject_details AS (
     SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind,
            session.plan_id, session.id AS session_id, session.title AS session_title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on,
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Segmento · ', segment.position, ' · ', segment.modality::text,
                   CASE WHEN segment.title = '' THEN '' ELSE ' · ' || segment.title END)::text AS subject_label
     FROM training_session_segments segment
@@ -3195,6 +3311,8 @@ WITH subject_details AS (
     UNION ALL
     SELECT block.id, 'BLOCK'::training_variation_subject_kind, session.plan_id, session.id,
            session.title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at),
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Bloco · ', block.position, ' · ', block.purpose::text,
                   CASE WHEN block.title = '' THEN '' ELSE ' · ' || block.title END)::text
     FROM training_segment_blocks block
@@ -3203,6 +3321,8 @@ WITH subject_details AS (
     UNION ALL
     SELECT step.id, 'WATER_STEP'::training_variation_subject_kind, session.plan_id, session.id,
            session.title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at),
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Passo de água · ', step.position, ' · ', step.name)::text
     FROM water_work_steps step
     JOIN training_segment_blocks block ON block.id = step.block_id
@@ -3211,6 +3331,8 @@ WITH subject_details AS (
     UNION ALL
     SELECT exercise.id, 'GYM_EXERCISE'::training_variation_subject_kind, session.plan_id, session.id,
            session.title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at),
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Exercício · ', exercise.position, ' · ', exercise.name)::text
     FROM gym_exercises exercise
     JOIN training_segment_blocks block ON block.id = exercise.block_id
@@ -3228,7 +3350,7 @@ WITH subject_details AS (
     SELECT variation.id, variation_member.membership_id, 1,
            CASE variation_group.kind WHEN 'CREW' THEN 'Tripulação' ELSE 'Subgrupo' END,
            variation_group.name, variation_group.effective_from,
-           COALESCE(variation_group.effective_until, (event_row.starts_at AT TIME ZONE $1::text)::date)
+           COALESCE(variation_group.effective_until, (event_row.starts_at AT TIME ZONE $3::text)::date)
     FROM training_variations variation
     JOIN training_variation_groups variation_group ON variation_group.id = variation.target_group_id
     JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
@@ -3236,7 +3358,8 @@ WITH subject_details AS (
     WHERE variation.target_group_id IS NOT NULL
 )
 SELECT variation.id AS variation_id, variation.plan_id, plan.title AS plan_title,
-       details.session_id, details.session_title, details.starts_at,
+       details.session_id, details.session_title, details.starts_at, details.session_on,
+       details.ends_at,details.schedule_precision,details.scheduled_on,details.day_band,
        variation.subject_kind, variation.subject_id, details.subject_label,
        variation.operation, variation.change_summary, variation.patch, variation.version,
        targets.membership_id, athlete.name AS athlete_name, targets.priority,
@@ -3249,61 +3372,61 @@ JOIN subject_details details ON details.plan_id = variation.plan_id
                             AND details.subject_kind = variation.subject_kind
 JOIN target_members targets ON targets.variation_id = variation.id
 JOIN user_memberships membership ON membership.id = targets.membership_id
-JOIN training_group_members current_group_member
-  ON current_group_member.group_id = plan.training_group_id
- AND current_group_member.membership_id = targets.membership_id
+CROSS JOIN LATERAL public.training_placement_resolve(membership.user_id,plan.training_group_id,plan.season_id,details.session_on) current_placement
 JOIN users athlete ON athlete.id = membership.user_id
 WHERE variation.is_active
-  AND athlete.is_active
-  AND membership.starts_on <= (details.starts_at AT TIME ZONE $1::text)::date
-  AND (membership.ends_on IS NULL OR membership.ends_on >= (details.starts_at AT TIME ZONE $1::text)::date)
-  AND (targets.effective_from IS NULL OR (details.starts_at AT TIME ZONE $1::text)::date >= targets.effective_from)
-  AND (targets.effective_until IS NULL OR (details.starts_at AT TIME ZONE $1::text)::date <= targets.effective_until)
-  AND (
-      $2::boolean
-      OR EXISTS (
-          SELECT 1 FROM staff_grants grant_row
-          WHERE grant_row.user_id = $3
-            AND grant_row.capability = 'COACH'
-            AND grant_row.revoked_at IS NULL
-            AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
-      )
-  )
-ORDER BY plan.week_start DESC, details.starts_at, athlete.name, details.subject_label,
+  AND current_placement.membership_id=membership.id
+  AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+  AND athlete.is_active AND athlete.erased_at IS NULL AND (NOT athlete.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=athlete.id AND guardian_authority_current(relationship.guardian_user_id,athlete.id)))
+  AND membership.starts_on <= details.session_on
+  AND (membership.ends_on IS NULL OR membership.ends_on >= details.session_on)
+  AND (targets.effective_from IS NULL OR details.session_on >= targets.effective_from)
+  AND (targets.effective_until IS NULL OR details.session_on <= targets.effective_until)
+  -- Deprecated is_admin is a non-authorizing compatibility parameter.
+ AND $1::boolean IS NOT NULL AND EXISTS(SELECT 1 FROM users actual_actor WHERE actual_actor.id=$2::uuid AND actual_actor.is_active AND actual_actor.erased_at IS NULL AND NOT actual_actor.is_dependent
+ AND actual_actor.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
+ AND (EXISTS(SELECT 1 FROM user_platform_roles assignment JOIN platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actual_actor.id AND role.code='ADMIN') OR EXISTS(SELECT 1 FROM staff_grants grant_row WHERE grant_row.user_id=actual_actor.id AND grant_row.capability='COACH' AND grant_row.revoked_at IS NULL
+ AND ((group_row.programme_id IS NOT NULL AND grant_row.programme_id=group_row.programme_id) OR (group_row.team_id IS NOT NULL AND grant_row.team_id=group_row.team_id)))))
+ORDER BY plan.week_start DESC,details.session_on, details.starts_at NULLS LAST, athlete.name, details.subject_label,
          targets.priority DESC, variation.created_at, variation.id
 `
 
 type ListTrainingVariationMatchesForManagerParams struct {
-	TimeZone string    `json:"time_zone"`
 	IsAdmin  bool      `json:"is_admin"`
 	UserID   uuid.UUID `json:"user_id"`
+	TimeZone string    `json:"time_zone"`
 }
 
 type ListTrainingVariationMatchesForManagerRow struct {
-	VariationID    uuid.UUID                    `json:"variation_id"`
-	PlanID         uuid.UUID                    `json:"plan_id"`
-	PlanTitle      string                       `json:"plan_title"`
-	SessionID      uuid.UUID                    `json:"session_id"`
-	SessionTitle   string                       `json:"session_title"`
-	StartsAt       pgtype.Timestamptz           `json:"starts_at"`
-	SubjectKind    TrainingVariationSubjectKind `json:"subject_kind"`
-	SubjectID      uuid.UUID                    `json:"subject_id"`
-	SubjectLabel   string                       `json:"subject_label"`
-	Operation      TrainingVariationOperation   `json:"operation"`
-	ChangeSummary  string                       `json:"change_summary"`
-	Patch          []byte                       `json:"patch"`
-	Version        int32                        `json:"version"`
-	MembershipID   *uuid.UUID                   `json:"membership_id"`
-	AthleteName    string                       `json:"athlete_name"`
-	Priority       int32                        `json:"priority"`
-	TargetKind     string                       `json:"target_kind"`
-	TargetName     string                       `json:"target_name"`
-	EffectiveFrom  pgtype.Date                  `json:"effective_from"`
-	EffectiveUntil pgtype.Date                  `json:"effective_until"`
+	VariationID       uuid.UUID                    `json:"variation_id"`
+	PlanID            uuid.UUID                    `json:"plan_id"`
+	PlanTitle         string                       `json:"plan_title"`
+	SessionID         uuid.UUID                    `json:"session_id"`
+	SessionTitle      string                       `json:"session_title"`
+	StartsAt          pgtype.Timestamptz           `json:"starts_at"`
+	SessionOn         pgtype.Date                  `json:"session_on"`
+	EndsAt            pgtype.Timestamptz           `json:"ends_at"`
+	SchedulePrecision string                       `json:"schedule_precision"`
+	ScheduledOn       pgtype.Date                  `json:"scheduled_on"`
+	DayBand           *string                      `json:"day_band"`
+	SubjectKind       TrainingVariationSubjectKind `json:"subject_kind"`
+	SubjectID         uuid.UUID                    `json:"subject_id"`
+	SubjectLabel      string                       `json:"subject_label"`
+	Operation         TrainingVariationOperation   `json:"operation"`
+	ChangeSummary     string                       `json:"change_summary"`
+	Patch             []byte                       `json:"patch"`
+	Version           int32                        `json:"version"`
+	MembershipID      *uuid.UUID                   `json:"membership_id"`
+	AthleteName       string                       `json:"athlete_name"`
+	Priority          int32                        `json:"priority"`
+	TargetKind        string                       `json:"target_kind"`
+	TargetName        string                       `json:"target_name"`
+	EffectiveFrom     pgtype.Date                  `json:"effective_from"`
+	EffectiveUntil    pgtype.Date                  `json:"effective_until"`
 }
 
 func (q *Queries) ListTrainingVariationMatchesForManager(ctx context.Context, arg ListTrainingVariationMatchesForManagerParams) ([]ListTrainingVariationMatchesForManagerRow, error) {
-	rows, err := q.db.Query(ctx, listTrainingVariationMatchesForManager, arg.TimeZone, arg.IsAdmin, arg.UserID)
+	rows, err := q.db.Query(ctx, listTrainingVariationMatchesForManager, arg.IsAdmin, arg.UserID, arg.TimeZone)
 	if err != nil {
 		return nil, err
 	}
@@ -3318,6 +3441,11 @@ func (q *Queries) ListTrainingVariationMatchesForManager(ctx context.Context, ar
 			&i.SessionID,
 			&i.SessionTitle,
 			&i.StartsAt,
+			&i.SessionOn,
+			&i.EndsAt,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
 			&i.SubjectKind,
 			&i.SubjectID,
 			&i.SubjectLabel,
@@ -3686,12 +3814,13 @@ SET planned_load_percentage = $1,
     updated_at = clock_timestamp()
 WHERE plan.id = $2
   AND plan.training_group_id IS NOT NULL
+  AND public.training_placement_actor_scope($3::uuid,plan.training_group_id)
   AND (
-      $3::boolean
+      $4::boolean
       OR EXISTS (
           SELECT 1 FROM staff_grants grant_row
           JOIN training_groups group_row ON group_row.id = plan.training_group_id
-          WHERE grant_row.user_id = $4
+          WHERE grant_row.user_id = $3
             AND grant_row.capability = 'COACH'
             AND grant_row.revoked_at IS NULL
             AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
@@ -3702,16 +3831,16 @@ WHERE plan.id = $2
 type UpdateStructuredTrainingWeekLoadParams struct {
 	PlannedLoadPercentage *int16    `json:"planned_load_percentage"`
 	PlanID                uuid.UUID `json:"plan_id"`
-	IsAdmin               bool      `json:"is_admin"`
 	UserID                uuid.UUID `json:"user_id"`
+	IsAdmin               bool      `json:"is_admin"`
 }
 
 func (q *Queries) UpdateStructuredTrainingWeekLoad(ctx context.Context, arg UpdateStructuredTrainingWeekLoadParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateStructuredTrainingWeekLoad,
 		arg.PlannedLoadPercentage,
 		arg.PlanID,
-		arg.IsAdmin,
 		arg.UserID,
+		arg.IsAdmin,
 	)
 	if err != nil {
 		return 0, err

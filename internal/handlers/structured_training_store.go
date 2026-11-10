@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sort"
@@ -102,19 +103,12 @@ type StructuredDayCopyInput struct {
 }
 
 type StructuredPrescriptionInput struct {
+	PlacementID    uuid.UUID
 	SessionID      uuid.UUID
 	MembershipID   uuid.UUID
 	AthleteUserID  uuid.UUID
 	Snapshot       []byte
 	SnapshotSHA256 string
-}
-
-type StructuredPublicationInput struct {
-	PlanID          uuid.UUID
-	SourceUpdatedAt pgtype.Timestamptz
-	ChangeSummary   string
-	PublishedByID   uuid.UUID
-	Prescriptions   []StructuredPrescriptionInput
 }
 
 type StructuredTrainingStore interface {
@@ -169,8 +163,7 @@ type StructuredTrainingStore interface {
 	GetTrainingVariationPlanID(context.Context, uuid.UUID) (uuid.UUID, error)
 	RetireTrainingVariation(context.Context, dbgen.RetireTrainingVariationParams) (int64, error)
 	ListManagedTrainingPublicationStates(context.Context, dbgen.ListManagedTrainingPublicationStatesParams) ([]dbgen.ListManagedTrainingPublicationStatesRow, error)
-	ListStructuredTrainingPublicationMembers(context.Context, dbgen.ListStructuredTrainingPublicationMembersParams) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error)
-	PublishStructuredTrainingPlan(context.Context, StructuredPublicationInput) (dbgen.TrainingPlanPublication, error)
+	ListStructuredTrainingPublicationMembers(context.Context, uuid.UUID) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error)
 	ListTrainingPrescriptionsForViewer(context.Context, dbgen.ListTrainingPrescriptionsForViewerParams) ([]dbgen.ListTrainingPrescriptionsForViewerRow, error)
 	ListLatestTrainingPrescriptionHashesForPlan(context.Context, uuid.UUID) ([]dbgen.ListLatestTrainingPrescriptionHashesForPlanRow, error)
 	GetTrainingPrescriptionForViewer(context.Context, dbgen.GetTrainingPrescriptionForViewerParams) (dbgen.GetTrainingPrescriptionForViewerRow, error)
@@ -188,6 +181,7 @@ type structuredTrainingCycleTx interface {
 }
 
 type structuredTrainingCycleQueries interface {
+	trainingSchedulePlanQueries
 	LockTrainingCycles(context.Context, []uuid.UUID) ([]dbgen.TrainingCycle, error)
 	GetTrainingCycleWeekScope(context.Context, uuid.UUID) (dbgen.GetTrainingCycleWeekScopeRow, error)
 	CreateTrainingCycle(context.Context, dbgen.CreateTrainingCycleParams) (dbgen.TrainingCycle, error)
@@ -211,12 +205,16 @@ type PostgresStructuredTrainingStore struct {
 	beginCycleTx func(context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error)
 }
 
-func (s PostgresStructuredTrainingStore) cycleTransaction(ctx context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
+func (s PostgresStructuredTrainingStore) cycleTransaction(ctx context.Context, actor uuid.UUID) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
 	if s.beginCycleTx != nil {
 		return s.beginCycleTx(ctx)
 	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
+		return nil, nil, err
+	}
+	if err = lockTrainingGroupActor(ctx, tx, actor); err != nil {
+		_ = tx.Rollback(ctx)
 		return nil, nil, err
 	}
 	return tx, dbgen.New(tx), nil
@@ -240,8 +238,19 @@ func (s PostgresStructuredTrainingStore) ListManagedTrainingPublicationStates(ct
 	return s.queries().ListManagedTrainingPublicationStates(ctx, params)
 }
 
-func (s PostgresStructuredTrainingStore) ListStructuredTrainingPublicationMembers(ctx context.Context, params dbgen.ListStructuredTrainingPublicationMembersParams) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error) {
-	return s.queries().ListStructuredTrainingPublicationMembers(ctx, params)
+func (s PostgresStructuredTrainingStore) ListStructuredTrainingPublicationMembers(ctx context.Context, plan uuid.UUID) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error) {
+	rows, err := s.queries().PublicationEligibleRecipients(ctx, dbgen.PublicationEligibleRecipientsParams{ActorID: trainingWriteActor(ctx), PlanID: plan})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]dbgen.ListStructuredTrainingPublicationMembersRow, len(rows))
+	for i, row := range rows {
+		if row.MembershipID == nil || *row.MembershipID == uuid.Nil || row.PlacementID == uuid.Nil {
+			return nil, errPublicationSourceUnavailable
+		}
+		result[i] = dbgen.ListStructuredTrainingPublicationMembersRow{PlacementID: row.PlacementID, MembershipID: *row.MembershipID, AthleteUserID: &row.AthleteUserID, AthleteName: row.AthleteName, StartsOn: row.StartsOn, EndsOn: row.EndsOn, SessionID: row.SessionID}
+	}
+	return result, nil
 }
 
 func (s PostgresStructuredTrainingStore) ListTrainingPrescriptionsForViewer(ctx context.Context, params dbgen.ListTrainingPrescriptionsForViewerParams) ([]dbgen.ListTrainingPrescriptionsForViewerRow, error) {
@@ -249,7 +258,27 @@ func (s PostgresStructuredTrainingStore) ListTrainingPrescriptionsForViewer(ctx 
 }
 
 func (s PostgresStructuredTrainingStore) ListLatestTrainingPrescriptionHashesForPlan(ctx context.Context, planID uuid.UUID) ([]dbgen.ListLatestTrainingPrescriptionHashesForPlanRow, error) {
-	return s.queries().ListLatestTrainingPrescriptionHashesForPlan(ctx, planID)
+	actor := trainingWriteActor(ctx)
+	q := s.queries()
+	header, err := q.PublicationPlanForReview(ctx, dbgen.PublicationPlanForReviewParams{ActorID: actor, PlanID: planID})
+	if err != nil {
+		return nil, err
+	}
+	if header.LatestPublicationID == nil {
+		return []dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{}, nil
+	}
+	rows, err := q.PublicationLatestHashes(ctx, dbgen.PublicationLatestHashesParams{ActorID: actor, PlanID: planID, PublicationID: *header.LatestPublicationID})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > trainingPublicationReviewMaxTuples {
+		return nil, errTrainingPublicationReviewLimit
+	}
+	result := make([]dbgen.ListLatestTrainingPrescriptionHashesForPlanRow, len(rows))
+	for i, row := range rows {
+		result[i] = dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{PlacementID: row.PlacementID, MembershipID: row.MembershipID, SessionID: row.SessionID, SnapshotSha256: row.SnapshotSha256}
+	}
+	return result, nil
 }
 
 func (s PostgresStructuredTrainingStore) GetTrainingPrescriptionForViewer(ctx context.Context, params dbgen.GetTrainingPrescriptionForViewerParams) (dbgen.GetTrainingPrescriptionForViewerRow, error) {
@@ -268,90 +297,12 @@ func structuredPublicationConcurrencyError(err error) error {
 	return err
 }
 
-func (s PostgresStructuredTrainingStore) PublishStructuredTrainingPlan(ctx context.Context, input StructuredPublicationInput) (publication dbgen.TrainingPlanPublication, err error) {
-	defer func() { err = structuredPublicationConcurrencyError(err) }()
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	if err != nil {
-		return publication, err
+func (s PostgresStructuredTrainingStore) CreateGroup(ctx context.Context, input StructuredTrainingGroupInput) (dbgen.TrainingGroup, error) {
+	_, row, err := (PostgresTrainingGroupStore{Pool: s.Pool}).createGroupWithMembers(ctx, TrainingGroupCreateInput{ActorID: input.Params.CreatedByID, Name: input.Params.Name, ProgrammeID: input.Params.ProgrammeID, TeamID: input.Params.TeamID}, input.MembershipIDs)
+	if errors.Is(err, ErrTrainingGroupEligibility) {
+		err = errStructuredTrainingMembershipScope
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	queries := dbgen.New(tx)
-	state, err := queries.LockStructuredTrainingPlanForPublication(ctx, input.PlanID)
-	if err != nil {
-		return publication, err
-	}
-	if !state.UpdatedAt.Valid || !input.SourceUpdatedAt.Valid || !state.UpdatedAt.Time.Equal(input.SourceUpdatedAt.Time) {
-		return publication, errStructuredTrainingPublicationConflict
-	}
-	lockedIDs := make([]uuid.UUID, 0, len(input.Prescriptions))
-	seen := make(map[uuid.UUID]bool, len(input.Prescriptions))
-	for _, prescription := range input.Prescriptions {
-		if !seen[prescription.MembershipID] {
-			seen[prescription.MembershipID] = true
-			lockedIDs = append(lockedIDs, prescription.MembershipID)
-		}
-	}
-	if len(lockedIDs) > 0 {
-		rows, lockErr := queries.LockStructuredPublicationMemberships(ctx, lockedIDs)
-		if lockErr != nil {
-			return publication, structuredPublicationConcurrencyError(lockErr)
-		}
-		if len(rows) != len(lockedIDs) {
-			return publication, errStructuredTrainingPublicationConflict
-		}
-	}
-	var supersedesID *uuid.UUID
-	if state.LatestPublicationID != uuid.Nil {
-		supersedesID = &state.LatestPublicationID
-	}
-	publication, err = queries.CreateTrainingPlanPublication(ctx, dbgen.CreateTrainingPlanPublicationParams{
-		PlanID: input.PlanID, Revision: state.LatestRevision + 1, SourceUpdatedAt: state.UpdatedAt,
-		ChangeSummary: input.ChangeSummary, SupersedesID: supersedesID, PublishedByID: input.PublishedByID,
-	})
-	if err != nil {
-		return publication, err
-	}
-	for _, prescription := range input.Prescriptions {
-		if _, err = queries.CreateTrainingPrescription(ctx, dbgen.CreateTrainingPrescriptionParams{
-			PublicationID: publication.ID, SessionID: prescription.SessionID, MembershipID: prescription.MembershipID,
-			AthleteUserID: &prescription.AthleteUserID, Snapshot: prescription.Snapshot, SnapshotSha256: prescription.SnapshotSHA256,
-		}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return publication, errStructuredTrainingPublicationConflict
-			}
-			return publication, err
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return publication, err
-	}
-	return publication, nil
-}
-
-func (s PostgresStructuredTrainingStore) CreateGroup(ctx context.Context, input StructuredTrainingGroupInput) (group dbgen.TrainingGroup, err error) {
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return group, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	queries := dbgen.New(tx)
-	group, err = queries.CreateStructuredTrainingGroup(ctx, input.Params)
-	if err != nil {
-		return group, err
-	}
-	for _, membershipID := range input.MembershipIDs {
-		rows, addErr := queries.AddStructuredTrainingGroupMember(ctx, dbgen.AddStructuredTrainingGroupMemberParams{GroupID: group.ID, MembershipID: membershipID, AddedByID: input.Params.CreatedByID})
-		if addErr != nil {
-			return group, addErr
-		}
-		if rows != 1 {
-			return group, errStructuredTrainingMembershipScope
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return group, err
-	}
-	return group, nil
+	return row, err
 }
 
 func (s PostgresStructuredTrainingStore) CanManageStructuredTrainingGroup(ctx context.Context, params dbgen.CanManageStructuredTrainingGroupParams) (bool, error) {
@@ -367,7 +318,7 @@ func (s PostgresStructuredTrainingStore) CanManageStructuredTrainingWeek(ctx con
 }
 
 func (s PostgresStructuredTrainingStore) UpdateStructuredTrainingWeekLoad(ctx context.Context, params dbgen.UpdateStructuredTrainingWeekLoadParams) (int64, error) {
-	return s.queries().UpdateStructuredTrainingWeekLoad(ctx, params)
+	return withTrainingSchedulePlan(ctx, s, params.UserID, params.PlanID, func(q *dbgen.Queries) (int64, error) { return q.UpdateStructuredTrainingWeekLoad(ctx, params) })
 }
 
 func (s PostgresStructuredTrainingStore) ListManagedTrainingCycles(ctx context.Context, params dbgen.ListManagedTrainingCyclesParams) ([]dbgen.ListManagedTrainingCyclesRow, error) {
@@ -387,10 +338,11 @@ func (s PostgresStructuredTrainingStore) CanManageTrainingCycle(ctx context.Cont
 }
 
 func (s PostgresStructuredTrainingStore) SaveTrainingCycle(ctx context.Context, input StructuredTrainingCycleInput) (cycle dbgen.TrainingCycle, err error) {
+	defer func() { err = trainingScheduleWriteError(err) }()
 	if len(input.WeekIDs) == 0 && len(input.ChildCycleIDs) == 0 {
 		return cycle, errStructuredTrainingCycleScope
 	}
-	tx, queries, err := s.cycleTransaction(ctx)
+	tx, queries, err := s.cycleTransaction(ctx, input.ActorID)
 	if err != nil {
 		return cycle, err
 	}
@@ -530,11 +482,15 @@ func (s PostgresStructuredTrainingStore) SaveTrainingCycle(ctx context.Context, 
 }
 
 func (s PostgresStructuredTrainingStore) CopyStructuredTrainingCycle(ctx context.Context, input StructuredTrainingCycleCopyInput) (cycle dbgen.TrainingCycle, err error) {
-	tx, queries, err := s.cycleTransaction(ctx)
+	defer func() { err = trainingScheduleWriteError(err) }()
+	tx, queries, err := s.cycleTransaction(ctx, input.ActorID)
 	if err != nil {
 		return cycle, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = queries.LockTrainingCycles(ctx, []uuid.UUID{input.SourceCycleID}); err != nil {
+		return cycle, err
+	}
 	source, err := queries.GetTrainingCycleCopySource(ctx, input.SourceCycleID)
 	if err != nil {
 		return cycle, err
@@ -542,6 +498,26 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingCycle(ctx context
 	weeks, err := queries.ListTrainingCycleWeekCopySources(ctx, input.SourceCycleID)
 	if err != nil || len(weeks) == 0 || !weeks[0].WeekStart.Valid || weeks[0].TrainingGroupID == nil {
 		return cycle, errStructuredTrainingCycleScope
+	}
+	planIDs := make([]uuid.UUID, 0, len(weeks))
+	for _, w := range weeks {
+		planIDs = append(planIDs, w.ID)
+	}
+	if err = guardTrainingSchedulePlans(ctx, queries, input.ActorID, planIDs...); err != nil {
+		return cycle, err
+	}
+	allSnapshots := make(map[uuid.UUID][]dbgen.ListStructuredSessionSnapshotsForPlanRow, len(weeks))
+	for _, w := range weeks {
+		rows, readErr := queries.ListStructuredSessionSnapshotsForPlan(ctx, w.ID)
+		if readErr != nil {
+			return cycle, readErr
+		}
+		for _, row := range rows {
+			if err = unsupportedTrainingArtifact(row.Snapshot); err != nil {
+				return cycle, err
+			}
+		}
+		allSnapshots[w.ID] = rows
 	}
 	sourceStart := weeks[0].WeekStart.Time
 	sourceStartUTC := time.Date(sourceStart.Year(), sourceStart.Month(), sourceStart.Day(), 0, 0, 0, 0, time.UTC)
@@ -564,14 +540,22 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingCycle(ctx context
 		if createErr != nil {
 			return cycle, createErr
 		}
-		snapshots, snapshotErr := queries.ListStructuredSessionSnapshotsForPlan(ctx, sourceWeek.ID)
-		if snapshotErr != nil {
-			return cycle, snapshotErr
-		}
+		snapshots := allSnapshots[sourceWeek.ID]
 		for _, row := range snapshots {
+			localTarget := row.StartsAt.Time.In(lisbonLocation()).AddDate(0, 0, shiftDays)
+			copiedStart, timeErr := trainingCopiedExactStart(row.StartsAt.Time, localTarget.Year(), localTarget.Month(), localTarget.Day())
+			if timeErr != nil {
+				return cycle, timeErr
+			}
+			if !row.StartsAt.Valid || !row.EndsAt.Valid {
+				return cycle, ErrTrainingScheduleInvalid
+			}
+			if timeErr = trainingCopiedExactInterval(row.StartsAt.Time, row.EndsAt.Time, copiedStart); timeErr != nil {
+				return cycle, timeErr
+			}
 			destinationID, restoreErr := queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{
 				Snapshot: row.Snapshot, PlanID: created.ID,
-				StartsAt:    pgtype.Timestamptz{Time: row.StartsAt.Time.AddDate(0, 0, shiftDays), Valid: true},
+				StartsAt:    pgtype.Timestamptz{Time: copiedStart, Valid: true},
 				CreatedByID: input.ActorID,
 			})
 			if restoreErr != nil {
@@ -614,16 +598,25 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingCycle(ctx context
 }
 
 func (s PostgresStructuredTrainingStore) CreateStructuredTrainingSession(ctx context.Context, params dbgen.CreateStructuredTrainingSessionParams) (dbgen.TrainingSession, error) {
-	return s.queries().CreateStructuredTrainingSession(ctx, params)
+	return withTrainingScheduleTarget(ctx, s, params.CreatedByID, "PLAN", params.PlanID, func(q *dbgen.Queries) (dbgen.TrainingSession, error) {
+		return q.CreateStructuredTrainingSession(ctx, params)
+	})
 }
 
 func (s PostgresStructuredTrainingStore) CreateSegment(ctx context.Context, input StructuredTrainingSegmentInput) (segmentID uuid.UUID, err error) {
+	defer func() { err = trainingScheduleWriteError(err) }()
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return uuid.Nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err = lockTrainingGroupActor(ctx, tx, trainingWriteActor(ctx)); err != nil {
+		return uuid.Nil, trainingScopeWriteError(err)
+	}
 	queries := dbgen.New(tx)
+	if _, err = lockTrainingScheduleTarget(ctx, queries, trainingWriteActor(ctx), "SESSION", input.Segment.SessionID); err != nil {
+		return uuid.Nil, err
+	}
 	segmentID, err = queries.CreateTrainingSessionSegment(ctx, input.Segment)
 	if err != nil {
 		return uuid.Nil, err
@@ -639,16 +632,23 @@ func (s PostgresStructuredTrainingStore) CreateSegment(ctx context.Context, inpu
 }
 
 func (s PostgresStructuredTrainingStore) CreateTrainingSegmentBlock(ctx context.Context, params dbgen.CreateTrainingSegmentBlockParams) (uuid.UUID, error) {
-	return s.queries().CreateTrainingSegmentBlock(ctx, params)
+	return withTrainingScheduleTarget(ctx, s, trainingWriteActor(ctx), "SEGMENT", params.SegmentID, func(q *dbgen.Queries) (uuid.UUID, error) { return q.CreateTrainingSegmentBlock(ctx, params) })
 }
 
 func (s PostgresStructuredTrainingStore) CreateGymBlock(ctx context.Context, input StructuredGymBlockInput) (blockID uuid.UUID, err error) {
+	defer func() { err = trainingScheduleWriteError(err) }()
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return uuid.Nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err = lockTrainingGroupActor(ctx, tx, trainingWriteActor(ctx)); err != nil {
+		return uuid.Nil, trainingScopeWriteError(err)
+	}
 	queries := dbgen.New(tx)
+	if _, err = lockTrainingScheduleTarget(ctx, queries, trainingWriteActor(ctx), "SEGMENT", input.Block.SegmentID); err != nil {
+		return uuid.Nil, err
+	}
 	blockID, err = queries.CreateTrainingSegmentBlock(ctx, input.Block)
 	if err != nil {
 		return uuid.Nil, err
@@ -672,16 +672,23 @@ func (s PostgresStructuredTrainingStore) CreateGymBlock(ctx context.Context, inp
 }
 
 func (s PostgresStructuredTrainingStore) CreateGymExercise(ctx context.Context, params dbgen.CreateGymExerciseParams) (uuid.UUID, error) {
-	return s.queries().CreateGymExercise(ctx, params)
+	return withTrainingScheduleTarget(ctx, s, trainingWriteActor(ctx), "BLOCK", params.BlockID, func(q *dbgen.Queries) (uuid.UUID, error) { return q.CreateGymExercise(ctx, params) })
 }
 
 func (s PostgresStructuredTrainingStore) CreateWaterBlock(ctx context.Context, input StructuredWaterBlockInput) (blockID uuid.UUID, err error) {
+	defer func() { err = trainingScheduleWriteError(err) }()
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return uuid.Nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err = lockTrainingGroupActor(ctx, tx, trainingWriteActor(ctx)); err != nil {
+		return uuid.Nil, trainingScopeWriteError(err)
+	}
 	queries := dbgen.New(tx)
+	if _, err = lockTrainingScheduleTarget(ctx, queries, trainingWriteActor(ctx), "SEGMENT", input.Block.SegmentID); err != nil {
+		return uuid.Nil, err
+	}
 	blockID, err = queries.CreateTrainingSegmentBlock(ctx, input.Block)
 	if err != nil {
 		return uuid.Nil, err
@@ -705,7 +712,7 @@ func (s PostgresStructuredTrainingStore) CreateWaterBlock(ctx context.Context, i
 }
 
 func (s PostgresStructuredTrainingStore) CreateWaterWorkStep(ctx context.Context, params dbgen.CreateWaterWorkStepParams) (uuid.UUID, error) {
-	return s.queries().CreateWaterWorkStep(ctx, params)
+	return withTrainingScheduleTarget(ctx, s, trainingWriteActor(ctx), "BLOCK", params.BlockID, func(q *dbgen.Queries) (uuid.UUID, error) { return q.CreateWaterWorkStep(ctx, params) })
 }
 
 func (s PostgresStructuredTrainingStore) CreateWaterIntensityProfile(ctx context.Context, params dbgen.CreateWaterIntensityProfileParams) (dbgen.CreateWaterIntensityProfileRow, error) {
@@ -737,29 +744,32 @@ func (s PostgresStructuredTrainingStore) GetGymExercisePlanID(ctx context.Contex
 }
 
 func (s PostgresStructuredTrainingStore) MoveTrainingSessionSegment(ctx context.Context, params dbgen.MoveTrainingSessionSegmentParams) (bool, error) {
-	return s.queries().MoveTrainingSessionSegment(ctx, params)
+	return withTrainingScheduleTarget(ctx, s, trainingWriteActor(ctx), "SEGMENT", params.SegmentID, func(q *dbgen.Queries) (bool, error) { return q.MoveTrainingSessionSegment(ctx, params) })
 }
 
 func (s PostgresStructuredTrainingStore) MoveTrainingSegmentBlock(ctx context.Context, params dbgen.MoveTrainingSegmentBlockParams) (bool, error) {
-	return s.queries().MoveTrainingSegmentBlock(ctx, params)
+	return withTrainingScheduleTarget(ctx, s, trainingWriteActor(ctx), "BLOCK", params.BlockID, func(q *dbgen.Queries) (bool, error) { return q.MoveTrainingSegmentBlock(ctx, params) })
 }
 
 func (s PostgresStructuredTrainingStore) MoveGymExercise(ctx context.Context, params dbgen.MoveGymExerciseParams) (bool, error) {
-	return s.queries().MoveGymExercise(ctx, params)
+	return withTrainingScheduleTarget(ctx, s, trainingWriteActor(ctx), "EXERCISE", params.ExerciseID, func(q *dbgen.Queries) (bool, error) { return q.MoveGymExercise(ctx, params) })
 }
 
 func (s PostgresStructuredTrainingStore) GetRoutineSource(ctx context.Context, kind dbgen.TrainingRoutineKind, sourceID uuid.UUID) (StructuredRoutineSource, error) {
+	return getTrainingRoutineSource(ctx, s.queries(), kind, sourceID)
+}
+func getTrainingRoutineSource(ctx context.Context, q *dbgen.Queries, kind dbgen.TrainingRoutineKind, sourceID uuid.UUID) (StructuredRoutineSource, error) {
 	switch kind {
 	case dbgen.TrainingRoutineKindBLOCK:
-		row, err := s.queries().GetBlockRoutineSource(ctx, sourceID)
+		row, err := q.GetBlockRoutineSource(ctx, sourceID)
 		modality := row.Modality
 		return StructuredRoutineSource{PlanID: row.PlanID, SourceUpdatedAt: row.SourceUpdatedAt, ProgrammeID: row.ProgrammeID, TeamID: row.TeamID, Modality: &modality, Objective: row.Objective, Snapshot: row.Snapshot}, err
 	case dbgen.TrainingRoutineKindSEGMENT:
-		row, err := s.queries().GetSegmentRoutineSource(ctx, sourceID)
+		row, err := q.GetSegmentRoutineSource(ctx, sourceID)
 		modality := row.Modality
 		return StructuredRoutineSource{PlanID: row.PlanID, SourceUpdatedAt: row.SourceUpdatedAt, ProgrammeID: row.ProgrammeID, TeamID: row.TeamID, Modality: &modality, Objective: row.Objective, Snapshot: row.Snapshot}, err
 	case dbgen.TrainingRoutineKindSESSION:
-		row, err := s.queries().GetSessionRoutineSource(ctx, sourceID)
+		row, err := q.GetSessionRoutineSource(ctx, sourceID)
 		return StructuredRoutineSource{PlanID: row.PlanID, SourceUpdatedAt: row.SourceUpdatedAt, ProgrammeID: row.ProgrammeID, TeamID: row.TeamID, Modality: row.Modality, Objective: row.Objective, Snapshot: row.Snapshot}, err
 	default:
 		return StructuredRoutineSource{}, pgx.ErrNoRows
@@ -767,7 +777,22 @@ func (s PostgresStructuredTrainingStore) GetRoutineSource(ctx context.Context, k
 }
 
 func (s PostgresStructuredTrainingStore) CreateTrainingRoutine(ctx context.Context, params dbgen.CreateTrainingRoutineParams) (dbgen.TrainingRoutine, error) {
-	return s.queries().CreateTrainingRoutine(ctx, params)
+	return withTrainingScheduleTarget(ctx, s, params.OwnerUserID, string(params.Kind), params.SourceID, func(q *dbgen.Queries) (dbgen.TrainingRoutine, error) {
+		if e := unsupportedTrainingArtifact(params.Snapshot); e != nil {
+			return dbgen.TrainingRoutine{}, e
+		}
+		fresh, e := getTrainingRoutineSource(ctx, q, params.Kind, params.SourceID)
+		if e != nil {
+			return dbgen.TrainingRoutine{}, e
+		}
+		if e = guardTrainingSchedulePlans(ctx, q, params.OwnerUserID, fresh.PlanID); e != nil {
+			return dbgen.TrainingRoutine{}, e
+		}
+		if !fresh.SourceUpdatedAt.Time.Equal(params.SourceUpdatedAt.Time) || !bytes.Equal(fresh.Snapshot, params.Snapshot) {
+			return dbgen.TrainingRoutine{}, errStructuredTrainingPublicationConflict
+		}
+		return q.CreateTrainingRoutine(ctx, params)
+	})
 }
 
 func (s PostgresStructuredTrainingStore) ListVisibleTrainingRoutines(ctx context.Context, params dbgen.ListVisibleTrainingRoutinesParams) ([]dbgen.ListVisibleTrainingRoutinesRow, error) {
@@ -779,19 +804,40 @@ func (s PostgresStructuredTrainingStore) GetVisibleTrainingRoutine(ctx context.C
 }
 
 func (s PostgresStructuredTrainingStore) InsertTrainingRoutine(ctx context.Context, input StructuredRoutineInsertInput) (destinationID uuid.UUID, err error) {
+	if !validTrainingRoutineKind(input.Routine.Kind) || (input.Routine.Kind == dbgen.TrainingRoutineKindSESSION && !input.StartsAt.Valid) {
+		return uuid.Nil, pgx.ErrNoRows
+	}
+	defer func() { err = trainingScheduleWriteError(err) }()
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return uuid.Nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err = lockTrainingGroupActor(ctx, tx, input.ActorID); err != nil {
+		return uuid.Nil, trainingScopeWriteError(err)
+	}
 	queries := dbgen.New(tx)
+	current, readErr := currentTrainingRoutineV1(ctx, queries, input)
+	if readErr != nil {
+		return uuid.Nil, readErr
+	}
+	input.Routine = current
 	destinationKind := string(input.Routine.Kind)
 	switch input.Routine.Kind {
 	case dbgen.TrainingRoutineKindBLOCK:
+		if _, err = lockTrainingScheduleTarget(ctx, queries, input.ActorID, "SEGMENT", input.TargetID); err != nil {
+			return uuid.Nil, err
+		}
 		destinationID, err = queries.RestoreTrainingBlock(ctx, dbgen.RestoreTrainingBlockParams{Snapshot: input.Routine.Snapshot, SegmentID: input.TargetID})
 	case dbgen.TrainingRoutineKindSEGMENT:
+		if _, err = lockTrainingScheduleTarget(ctx, queries, input.ActorID, "SESSION", input.TargetID); err != nil {
+			return uuid.Nil, err
+		}
 		destinationID, err = queries.RestoreTrainingSegment(ctx, dbgen.RestoreTrainingSegmentParams{Snapshot: input.Routine.Snapshot, SessionID: input.TargetID})
 	case dbgen.TrainingRoutineKindSESSION:
+		if err = guardTrainingSchedulePlans(ctx, queries, input.ActorID, input.TargetID); err != nil {
+			return uuid.Nil, err
+		}
 		if !input.StartsAt.Valid {
 			return uuid.Nil, pgx.ErrNoRows
 		}
@@ -809,14 +855,38 @@ func (s PostgresStructuredTrainingStore) InsertTrainingRoutine(ctx context.Conte
 }
 
 func (s PostgresStructuredTrainingStore) CopyTrainingBlock(ctx context.Context, sourceID, targetSegmentID, actorID uuid.UUID) (destinationID uuid.UUID, err error) {
+	defer func() { err = trainingScheduleWriteError(err) }()
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return uuid.Nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err = lockTrainingGroupActor(ctx, tx, actorID); err != nil {
+		return uuid.Nil, trainingScopeWriteError(err)
+	}
 	queries := dbgen.New(tx)
+	targetPlan, readErr := queries.GetStructuredSegmentPlanID(ctx, targetSegmentID)
+	if readErr != nil {
+		return uuid.Nil, readErr
+	}
+	sourcePlan, readErr := queries.GetStructuredBlockPlanID(ctx, sourceID)
+	if readErr != nil {
+		return uuid.Nil, readErr
+	}
+	if err = guardTrainingSchedulePlans(ctx, queries, actorID, sourcePlan, targetPlan); err != nil {
+		return uuid.Nil, err
+	}
+	if _, err = lockTrainingScheduleTarget(ctx, queries, actorID, "SEGMENT", targetSegmentID); err != nil {
+		return uuid.Nil, err
+	}
+	if _, err = lockTrainingScheduleTarget(ctx, queries, actorID, "BLOCK", sourceID); err != nil {
+		return uuid.Nil, err
+	}
 	source, err := queries.GetBlockRoutineSource(ctx, sourceID)
 	if err != nil {
+		return uuid.Nil, err
+	}
+	if err = unsupportedTrainingArtifact(source.Snapshot); err != nil {
 		return uuid.Nil, err
 	}
 	destinationID, err = queries.RestoreTrainingBlock(ctx, dbgen.RestoreTrainingBlockParams{Snapshot: source.Snapshot, SegmentID: targetSegmentID})
@@ -830,14 +900,37 @@ func (s PostgresStructuredTrainingStore) CopyTrainingBlock(ctx context.Context, 
 }
 
 func (s PostgresStructuredTrainingStore) CopyTrainingSession(ctx context.Context, sourceID, targetPlanID uuid.UUID, startsAt pgtype.Timestamptz, actorID uuid.UUID) (destinationID uuid.UUID, err error) {
+	defer func() { err = trainingScheduleWriteError(err) }()
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return uuid.Nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err = lockTrainingGroupActor(ctx, tx, actorID); err != nil {
+		return uuid.Nil, trainingScopeWriteError(err)
+	}
 	queries := dbgen.New(tx)
+	sourcePlan, readErr := queries.GetStructuredSessionPlanID(ctx, sourceID)
+	if readErr != nil {
+		return uuid.Nil, readErr
+	}
+	if err = guardTrainingSchedulePlans(ctx, queries, actorID, sourcePlan, targetPlanID); err != nil {
+		return uuid.Nil, err
+	}
+	if _, err = lockTrainingScheduleTarget(ctx, queries, actorID, "SESSION", sourceID); err != nil {
+		return uuid.Nil, err
+	}
 	source, err := queries.GetSessionRoutineSource(ctx, sourceID)
 	if err != nil {
+		return uuid.Nil, err
+	}
+	if err = unsupportedTrainingArtifact(source.Snapshot); err != nil {
+		return uuid.Nil, err
+	}
+	if !source.StartsAt.Valid || !source.EndsAt.Valid || !startsAt.Valid {
+		return uuid.Nil, ErrTrainingScheduleInvalid
+	}
+	if err = trainingCopiedExactInterval(source.StartsAt.Time, source.EndsAt.Time, startsAt.Time); err != nil {
 		return uuid.Nil, err
 	}
 	destinationID, err = queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{Snapshot: source.Snapshot, PlanID: targetPlanID, StartsAt: startsAt, CreatedByID: actorID})
@@ -851,19 +944,44 @@ func (s PostgresStructuredTrainingStore) CopyTrainingSession(ctx context.Context
 }
 
 func (s PostgresStructuredTrainingStore) CopyStructuredTrainingDay(ctx context.Context, input StructuredDayCopyInput) (copied int, err error) {
+	defer func() {
+		if err != nil {
+			copied = 0
+		}
+	}()
+	defer func() { err = trainingScheduleWriteError(err) }()
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err = lockTrainingGroupActor(ctx, tx, input.ActorID); err != nil {
+		return 0, trainingScopeWriteError(err)
+	}
 	queries := dbgen.New(tx)
+	if err = guardTrainingSchedulePlans(ctx, queries, input.ActorID, input.SourcePlanID, input.TargetPlanID); err != nil {
+		return 0, err
+	}
 	rows, err := queries.ListStructuredSessionSnapshotsForDay(ctx, dbgen.ListStructuredSessionSnapshotsForDayParams{PlanID: input.SourcePlanID, SourceDate: pgtype.Date{Time: input.SourceDate, Valid: true}})
 	if err != nil {
 		return 0, err
 	}
 	for _, row := range rows {
-		local := row.StartsAt.Time.In(input.TargetDate.Location())
-		startsAt := time.Date(input.TargetDate.Year(), input.TargetDate.Month(), input.TargetDate.Day(), local.Hour(), local.Minute(), local.Second(), 0, input.TargetDate.Location())
+		if err = unsupportedTrainingArtifact(row.Snapshot); err != nil {
+			return 0, err
+		}
+	}
+	for _, row := range rows {
+		startsAt, timeErr := trainingCopiedExactStart(row.StartsAt.Time, input.TargetDate.Year(), input.TargetDate.Month(), input.TargetDate.Day())
+		if timeErr != nil {
+			return 0, timeErr
+		}
+		if !row.StartsAt.Valid || !row.EndsAt.Valid {
+			return 0, ErrTrainingScheduleInvalid
+		}
+		if timeErr = trainingCopiedExactInterval(row.StartsAt.Time, row.EndsAt.Time, startsAt); timeErr != nil {
+			return 0, timeErr
+		}
 		destinationID, err := queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{Snapshot: row.Snapshot, PlanID: input.TargetPlanID, StartsAt: pgtype.Timestamptz{Time: startsAt, Valid: true}, CreatedByID: input.ActorID})
 		if err != nil {
 			return copied, err
@@ -877,12 +995,28 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingDay(ctx context.C
 }
 
 func (s PostgresStructuredTrainingStore) CopyStructuredTrainingWeek(ctx context.Context, input StructuredWeekCopyInput) (plan dbgen.TrainingPlan, err error) {
+	defer func() { err = trainingScheduleWriteError(err) }()
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return plan, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err = lockTrainingGroupActor(ctx, tx, input.ActorID); err != nil {
+		return plan, trainingScopeWriteError(err)
+	}
 	queries := dbgen.New(tx)
+	if err = guardTrainingSchedulePlans(ctx, queries, input.ActorID, input.SourcePlanID); err != nil {
+		return plan, err
+	}
+	rows, readErr := queries.ListStructuredSessionSnapshotsForPlan(ctx, input.SourcePlanID)
+	if readErr != nil {
+		return plan, readErr
+	}
+	for _, row := range rows {
+		if err = unsupportedTrainingArtifact(row.Snapshot); err != nil {
+			return plan, err
+		}
+	}
 	source, err := queries.GetStructuredPlanCopySource(ctx, input.SourcePlanID)
 	if err != nil || source.TrainingGroupID == nil || !source.WeekStart.Valid {
 		return plan, pgx.ErrNoRows
@@ -895,15 +1029,22 @@ func (s PostgresStructuredTrainingStore) CopyStructuredTrainingWeek(ctx context.
 	if err != nil {
 		return plan, err
 	}
-	rows, err := queries.ListStructuredSessionSnapshotsForPlan(ctx, input.SourcePlanID)
-	if err != nil {
-		return plan, err
-	}
 	sourceDate := time.Date(source.WeekStart.Time.Year(), source.WeekStart.Time.Month(), source.WeekStart.Time.Day(), 0, 0, 0, 0, time.UTC)
 	targetDate := time.Date(input.WeekStart.Year(), input.WeekStart.Month(), input.WeekStart.Day(), 0, 0, 0, 0, time.UTC)
 	days := int(targetDate.Sub(sourceDate).Hours() / 24)
 	for _, row := range rows {
-		destinationID, err := queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{Snapshot: row.Snapshot, PlanID: plan.ID, StartsAt: pgtype.Timestamptz{Time: row.StartsAt.Time.AddDate(0, 0, days), Valid: true}, CreatedByID: input.ActorID})
+		localTarget := row.StartsAt.Time.In(lisbonLocation()).AddDate(0, 0, days)
+		copiedStart, timeErr := trainingCopiedExactStart(row.StartsAt.Time, localTarget.Year(), localTarget.Month(), localTarget.Day())
+		if timeErr != nil {
+			return plan, timeErr
+		}
+		if !row.StartsAt.Valid || !row.EndsAt.Valid {
+			return plan, ErrTrainingScheduleInvalid
+		}
+		if timeErr = trainingCopiedExactInterval(row.StartsAt.Time, row.EndsAt.Time, copiedStart); timeErr != nil {
+			return plan, timeErr
+		}
+		destinationID, err := queries.RestoreTrainingSession(ctx, dbgen.RestoreTrainingSessionParams{Snapshot: row.Snapshot, PlanID: plan.ID, StartsAt: pgtype.Timestamptz{Time: copiedStart, Valid: true}, CreatedByID: input.ActorID})
 		if err != nil {
 			return plan, err
 		}
@@ -933,79 +1074,8 @@ func (s PostgresStructuredTrainingStore) ListManagedStructuredCompetitionEvents(
 	return s.queries().ListManagedStructuredCompetitionEvents(ctx, params)
 }
 
-func (s PostgresStructuredTrainingStore) CreateTrainingVariationGroup(ctx context.Context, input StructuredVariationGroupInput) (group dbgen.TrainingVariationGroup, err error) {
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return group, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	queries := dbgen.New(tx)
-	if input.Params.Kind == dbgen.TrainingVariationGroupKindCREW {
-		var programmeID, teamID *uuid.UUID
-		if err := tx.QueryRow(ctx, `SELECT programme_id, team_id FROM training_groups WHERE id=$1 FOR SHARE`, input.Params.TrainingGroupID).Scan(&programmeID, &teamID); err != nil {
-			return group, err
-		}
-		var grantID uuid.UUID
-		grantErr := tx.QueryRow(ctx, `SELECT id FROM staff_grants WHERE user_id=$1 AND capability='COACH' AND revoked_at IS NULL
-			AND (programme_id=$2 OR team_id=$3) LIMIT 1 FOR SHARE`, input.Params.CreatedByID, programmeID, teamID).Scan(&grantID)
-		if grantErr != nil {
-			var admin bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_platform_roles role JOIN platform_roles definition ON definition.id=role.role_id WHERE role.user_id=$1 AND definition.code='ADMIN')`, input.Params.CreatedByID).Scan(&admin); err != nil {
-				return group, err
-			}
-			if !admin {
-				return group, errStructuredVariationMemberScope
-			}
-		}
-		seenMemberships := make(map[uuid.UUID]bool, len(input.MembershipIDs))
-		seenAthletes := make(map[uuid.UUID]bool, len(input.MembershipIDs))
-		orderedMembers := append([]uuid.UUID(nil), input.MembershipIDs...)
-		sort.Slice(orderedMembers, func(i, j int) bool { return orderedMembers[i].String() < orderedMembers[j].String() })
-		for _, membershipID := range orderedMembers {
-			if seenMemberships[membershipID] {
-				return group, errStructuredVariationMemberScope
-			}
-			seenMemberships[membershipID] = true
-			var athleteID uuid.UUID
-			if err := tx.QueryRow(ctx, `SELECT membership.user_id FROM training_group_members group_member
-				JOIN user_memberships membership ON membership.id=group_member.membership_id
-				WHERE group_member.group_id=$1 AND membership.id=$2 FOR SHARE OF group_member, membership`, input.Params.TrainingGroupID, membershipID).Scan(&athleteID); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return group, errStructuredVariationMemberScope
-				}
-				return group, err
-			}
-			if seenAthletes[athleteID] {
-				return group, errStructuredVariationMemberScope
-			}
-			seenAthletes[athleteID] = true
-		}
-		modalities, listErr := queries.ListStructuredCrewModalities(ctx)
-		if listErr != nil {
-			return group, listErr
-		}
-		capacity, valid := structuredCrewSize(modalities, input.Params.CraftCode)
-		if !valid || capacity != len(input.MembershipIDs) {
-			return group, errStructuredVariationCrewCapacity
-		}
-	}
-	group, err = queries.CreateTrainingVariationGroup(ctx, input.Params)
-	if err != nil {
-		return group, err
-	}
-	for _, membershipID := range input.MembershipIDs {
-		rows, addErr := queries.AddTrainingVariationGroupMember(ctx, dbgen.AddTrainingVariationGroupMemberParams{VariationGroupID: group.ID, MembershipID: membershipID, AddedByID: input.Params.CreatedByID})
-		if addErr != nil {
-			return group, addErr
-		}
-		if rows != 1 {
-			return group, errStructuredVariationMemberScope
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return group, err
-	}
-	return group, nil
+func (s PostgresStructuredTrainingStore) CreateTrainingVariationGroup(ctx context.Context, input StructuredVariationGroupInput) (dbgen.TrainingVariationGroup, error) {
+	return s.createDatedVariationGroup(ctx, input)
 }
 
 func (s PostgresStructuredTrainingStore) ListManagedTrainingVariationGroups(ctx context.Context, params dbgen.ListManagedTrainingVariationGroupsParams) ([]dbgen.ListManagedTrainingVariationGroupsRow, error) {
@@ -1013,7 +1083,7 @@ func (s PostgresStructuredTrainingStore) ListManagedTrainingVariationGroups(ctx 
 }
 
 func (s PostgresStructuredTrainingStore) CreateTrainingVariation(ctx context.Context, params dbgen.CreateTrainingVariationParams) (dbgen.TrainingVariation, error) {
-	return s.queries().CreateTrainingVariation(ctx, params)
+	return s.createModernTrainingVariation(ctx, params)
 }
 
 func (s PostgresStructuredTrainingStore) ListTrainingVariationMatchesForManager(ctx context.Context, params dbgen.ListTrainingVariationMatchesForManagerParams) ([]dbgen.ListTrainingVariationMatchesForManagerRow, error) {
@@ -1025,5 +1095,5 @@ func (s PostgresStructuredTrainingStore) GetTrainingVariationPlanID(ctx context.
 }
 
 func (s PostgresStructuredTrainingStore) RetireTrainingVariation(ctx context.Context, params dbgen.RetireTrainingVariationParams) (int64, error) {
-	return s.queries().RetireTrainingVariation(ctx, params)
+	return s.retireModernTrainingVariation(ctx, params)
 }

@@ -26,8 +26,11 @@ func TestMemberEventHistoryBoundaryPaginationAndCurrentMembership(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx)
-	member, programme, season := uuid.New(), uuid.New(), uuid.New()
+	member, formerMember, programme, season := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	if _, err = tx.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Event history member',$2,'hash','1990-01-01')`, member, member.String()+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Former event history member',$2,'hash','1990-01-01')`, formerMember, formerMember.String()+"@example.test"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO programmes(id,code,name_pt) VALUES($1,$2,'Event history programme')`, programme, "HISTORY_"+programme.String()[:8]); err != nil {
@@ -39,6 +42,12 @@ func TestMemberEventHistoryBoundaryPaginationAndCurrentMembership(t *testing.T) 
 	if _, err = tx.Exec(ctx, `INSERT INTO user_memberships(user_id,programme_id,season_id,starts_on) VALUES($1,$2,$3,CURRENT_DATE-20)`, member, programme, season); err != nil {
 		t.Fatal(err)
 	}
+	// Configure a separate already-ended synthetic membership rather than
+	// rewriting the protected past of the active fixture.
+	if _, err = tx.Exec(ctx, `INSERT INTO user_memberships(user_id,programme_id,season_id,starts_on,ends_on) VALUES($1,$2,$3,CURRENT_DATE-20,CURRENT_DATE-1)`, formerMember, programme, season); err != nil {
+		t.Fatal(err)
+	}
+	viewer := member
 	asOf := time.Now().UTC().Truncate(time.Microsecond)
 	ids := make([]uuid.UUID, 11)
 	fixture := map[uuid.UUID]bool{}
@@ -74,7 +83,7 @@ func TestMemberEventHistoryBoundaryPaginationAndCurrentMembership(t *testing.T) 
 	q := dbgen.New(tx)
 	list := func(past bool, limit, offset int32) []dbgen.ListEventsForMemberRow {
 		t.Helper()
-		rows, e := q.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: member, Past: past, AsOf: pgtype.Timestamptz{Time: asOf, Valid: true}, RowLimit: limit, RowOffset: offset})
+		rows, e := q.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: viewer, Past: past, AsOf: pgtype.Timestamptz{Time: asOf, Valid: true}, RowLimit: limit, RowOffset: offset})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -116,11 +125,9 @@ func TestMemberEventHistoryBoundaryPaginationAndCurrentMembership(t *testing.T) 
 	if len(seen) != 2 || !seen[ids[9]] || !seen[ids[10]] {
 		t.Fatalf("ongoing/upcoming boundary=%v", seen)
 	}
-	if _, err = tx.Exec(ctx, `UPDATE user_memberships SET ends_on=CURRENT_DATE-1 WHERE user_id=$1`, member); err != nil {
-		t.Fatal(err)
-	}
-	// A former programme must not expose ongoing or future events after the
-	// transition, but the member keeps events from the time it was assigned.
+	viewer = formerMember
+	// The already-ended fixture must not expose ongoing or future events,
+	// while retaining events from its configured assignment interval.
 	for _, row := range list(false, 10000, 0) {
 		if fixture[row.ID] {
 			t.Fatal("expired membership granted current event access")
@@ -143,10 +150,10 @@ func TestMemberEventHistoryBoundaryPaginationAndCurrentMembership(t *testing.T) 
 	if !found {
 		t.Fatal("former member lost previously authorised event history")
 	}
-	if _, err = q.GetEventDetailForMember(ctx, dbgen.GetEventDetailForMemberParams{UserID: member, EventID: historicalID}); err != nil {
+	if _, err = q.GetEventDetailForMember(ctx, dbgen.GetEventDetailForMemberParams{UserID: viewer, EventID: historicalID}); err != nil {
 		t.Fatalf("former member lost historical event detail: %v", err)
 	}
-	if _, err = q.GetEventDetailForMember(ctx, dbgen.GetEventDetailForMemberParams{UserID: member, EventID: ids[10]}); err == nil {
+	if _, err = q.GetEventDetailForMember(ctx, dbgen.GetEventDetailForMemberParams{UserID: viewer, EventID: ids[10]}); err == nil {
 		t.Fatal("former member retained future event detail")
 	}
 }

@@ -2604,8 +2604,11 @@ type PrivacyProtectedExecutionRetentionSource struct {
 }
 
 type PrivacyProtectedMembershipHistoryReplayCapture struct {
-	RunID      uuid.UUID          `json:"run_id"`
-	CapturedAt pgtype.Timestamptz `json:"captured_at"`
+	RunID                uuid.UUID          `json:"run_id"`
+	CapturedAt           pgtype.Timestamptz `json:"captured_at"`
+	PlacementIds         []uuid.UUID        `json:"placement_ids"`
+	PlacementChangeIds   []uuid.UUID        `json:"placement_change_ids"`
+	PlacementPrincipalID *uuid.UUID         `json:"placement_principal_id"`
 }
 
 type PrivacyProtectedMembershipHistoryReplayPostcondition struct {
@@ -2624,8 +2627,11 @@ type PrivacyProtectedMembershipHistoryReplayRow struct {
 }
 
 type PrivacyProtectedMembershipHistorySourceCapture struct {
-	ExecutionID uuid.UUID          `json:"execution_id"`
-	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
+	ExecutionID          uuid.UUID          `json:"execution_id"`
+	CapturedAt           pgtype.Timestamptz `json:"captured_at"`
+	PlacementIds         []uuid.UUID        `json:"placement_ids"`
+	PlacementChangeIds   []uuid.UUID        `json:"placement_change_ids"`
+	PlacementPrincipalID *uuid.UUID         `json:"placement_principal_id"`
 }
 
 type PrivacyProtectedMembershipHistorySourcePostcondition struct {
@@ -3056,6 +3062,14 @@ type PrivacyProtectedRestoreTombstoneReceipt struct {
 	RecordedAt       pgtype.Timestamptz `json:"recorded_at"`
 }
 
+type PrivacyProtectedTrainingPlacementErasureFence struct {
+	TransactionID int64       `json:"transaction_id"`
+	SubjectUserID uuid.UUID   `json:"subject_user_id"`
+	Operation     string      `json:"operation"`
+	EffectiveDate pgtype.Date `json:"effective_date"`
+	PrincipalID   *uuid.UUID  `json:"principal_id"`
+}
+
 type PrivacyPseudonymousPrincipal struct {
 	ID        uuid.UUID          `json:"id"`
 	Purpose   string             `json:"purpose"`
@@ -3393,6 +3407,22 @@ type TrainingGroupMember struct {
 	AddedAt      pgtype.Timestamptz `json:"added_at"`
 }
 
+type TrainingGroupPlacement struct {
+	ID                   uuid.UUID          `json:"id"`
+	SubjectUserID        *uuid.UUID         `json:"subject_user_id"`
+	SubjectPrincipalID   *uuid.UUID         `json:"subject_principal_id"`
+	ProgrammeID          uuid.UUID          `json:"programme_id"`
+	GroupID              uuid.UUID          `json:"group_id"`
+	StartsOn             pgtype.Date        `json:"starts_on"`
+	EndsOn               pgtype.Date        `json:"ends_on"`
+	ChangeID             uuid.UUID          `json:"change_id"`
+	Version              int64              `json:"version"`
+	SupersededByChangeID *uuid.UUID         `json:"superseded_by_change_id"`
+	CancelledByChangeID  *uuid.UUID         `json:"cancelled_by_change_id"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
 type TrainingLog struct {
 	ID              uuid.UUID          `json:"id"`
 	UserID          uuid.UUID          `json:"user_id"`
@@ -3401,6 +3431,35 @@ type TrainingLog struct {
 	DistanceMetres  int32              `json:"distance_metres"`
 	Notes           string             `json:"notes"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type TrainingPlacementChange struct {
+	ID                     uuid.UUID          `json:"id"`
+	SubjectUserID          *uuid.UUID         `json:"subject_user_id"`
+	SubjectPrincipalID     *uuid.UUID         `json:"subject_principal_id"`
+	ProgrammeID            uuid.UUID          `json:"programme_id"`
+	SeasonID               uuid.UUID          `json:"season_id"`
+	Kind                   string             `json:"kind"`
+	SourcePlacementID      *uuid.UUID         `json:"source_placement_id"`
+	DestinationPlacementID *uuid.UUID         `json:"destination_placement_id"`
+	ReturnPlacementID      *uuid.UUID         `json:"return_placement_id"`
+	EffectiveOn            pgtype.Date        `json:"effective_on"`
+	TemporaryUntil         pgtype.Date        `json:"temporary_until"`
+	OriginalSourceStartsOn pgtype.Date        `json:"original_source_starts_on"`
+	OriginalSourceVersion  *int64             `json:"original_source_version"`
+	OriginalSourceEndsOn   pgtype.Date        `json:"original_source_ends_on"`
+	CancelsChangeID        *uuid.UUID         `json:"cancels_change_id"`
+	ActorUserID            *uuid.UUID         `json:"actor_user_id"`
+	ActorPrincipalID       *uuid.UUID         `json:"actor_principal_id"`
+	CanonicalCommand       []byte             `json:"canonical_command"`
+	HeadRevision           int64              `json:"head_revision"`
+	RecordedAt             pgtype.Timestamptz `json:"recorded_at"`
+}
+
+type TrainingPlacementHead struct {
+	SubjectUserID uuid.UUID `json:"subject_user_id"`
+	ProgrammeID   uuid.UUID `json:"programme_id"`
+	Revision      int64     `json:"revision"`
 }
 
 type TrainingPlan struct {
@@ -3439,6 +3498,19 @@ type TrainingPrescription struct {
 	Snapshot       []byte             `json:"snapshot"`
 	SnapshotSha256 string             `json:"snapshot_sha256"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	PlacementID    *uuid.UUID         `json:"placement_id"`
+}
+
+type TrainingPrescriptionWithdrawal struct {
+	PrescriptionID     uuid.UUID          `json:"prescription_id"`
+	LivePrescriptionID *uuid.UUID         `json:"live_prescription_id"`
+	ChangeID           uuid.UUID          `json:"change_id"`
+	Leg                string             `json:"leg"`
+	EffectiveOn        pgtype.Date        `json:"effective_on"`
+	ObservedSessionOn  pgtype.Date        `json:"observed_session_on"`
+	ObservedStartsAt   pgtype.Timestamptz `json:"observed_starts_at"`
+	ObservedPrecision  string             `json:"observed_precision"`
+	RecordedAt         pgtype.Timestamptz `json:"recorded_at"`
 }
 
 type TrainingRoutine struct {
@@ -3459,6 +3531,19 @@ type TrainingRoutine struct {
 	Snapshot        []byte                    `json:"snapshot"`
 	CreatedAt       pgtype.Timestamptz        `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz        `json:"updated_at"`
+}
+
+type TrainingScheduleControlState struct {
+	Singleton            bool               `json:"singleton"`
+	DatabaseIncarnation  uuid.UUID          `json:"database_incarnation"`
+	SchemaContract       string             `json:"schema_contract"`
+	StateEpoch           int64              `json:"state_epoch"`
+	RequiredReader       int32              `json:"required_reader"`
+	FloorCommitID        *uuid.UUID         `json:"floor_commit_id"`
+	FloorManifestSha256  *string            `json:"floor_manifest_sha256"`
+	PartialV2Enabled     bool               `json:"partial_v2_enabled"`
+	EverPartialV2Enabled bool               `json:"ever_partial_v2_enabled"`
+	ChangedAt            pgtype.Timestamptz `json:"changed_at"`
 }
 
 type TrainingSegmentBlock struct {
@@ -3488,6 +3573,9 @@ type TrainingSession struct {
 	CreatedByID        uuid.UUID          `json:"created_by_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	SchedulePrecision  string             `json:"schedule_precision"`
+	ScheduledOn        pgtype.Date        `json:"scheduled_on"`
+	DayBand            *string            `json:"day_band"`
 }
 
 type TrainingSessionActivityMatch struct {

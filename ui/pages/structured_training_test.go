@@ -30,7 +30,7 @@ func TestStructuredTrainingRendersAdminIntensityProfilesAndPlannedTotals(t *test
 		t.Fatal(err)
 	}
 	html := output.String()
-	for _, expected := range []string{"Perfis de intensidade", "Ritmo sustentável", "O limite inferior de R5", "Esforço planeado", "27 min", "revisão 2", "Resumo semanal", "Carga planeada", "70%", "Registo real do atleta", "Ver prescrições e respostas dos atletas", "Contexto de edição", "Plano selecionado", "Sessões da semana selecionada"} {
+	for _, expected := range []string{"Perfis de intensidade", "Ritmo sustentável", "podem sobrepor-se intencionalmente", "Esforço planeado", "27 min", "revisão 2", "Resumo semanal", "Carga planeada", "70%", "Registo real do atleta", "Ver prescrições e respostas dos atletas", "Contexto de edição", "Plano selecionado", "Sessões da semana selecionada"} {
 		if !strings.Contains(html, expected) {
 			t.Fatalf("rendered page missing %q", expected)
 		}

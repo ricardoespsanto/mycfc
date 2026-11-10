@@ -18,8 +18,14 @@ func TestTrainingPageActionsSeparateActivityFromCoordination(t *testing.T) {
 		{
 			name:   "coordination exposes authoring",
 			page:   TrainingPage{Management: true, CanManage: true, StructuredAvailable: true},
-			labels: []string{"Criar plano", "Criar sessão", "Planeamento semanal"},
-			hrefs:  []string{"/admin/treinos/planos/criar", "/admin/treinos/sessoes/criar", "/admin/treinos/estruturados"},
+			labels: []string{"Grupos de treino", "Planeamento semanal", "Criar plano", "Criar sessão"},
+			hrefs:  []string{"/admin/treinos/estruturados/grupos", "/admin/treinos/estruturados", "/admin/treinos/planos/criar", "/admin/treinos/sessoes/criar"},
+		},
+		{
+			name:   "legacy coordination retains authoring without structured feature",
+			page:   TrainingPage{Management: true, CanManage: true},
+			labels: []string{"Criar plano", "Criar sessão"},
+			hrefs:  []string{"/admin/treinos/planos/criar", "/admin/treinos/sessoes/criar"},
 		},
 		{
 			name: "activity without structured planning has no actions",

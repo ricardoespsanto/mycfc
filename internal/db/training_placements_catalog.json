@@ -1,0 +1,2481 @@
+{
+  "privacy_protected.membership_history_replay_captures": {
+    "columns": {
+      "run_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "captured_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "placement_ids": [
+        "pg_catalog",
+        "_uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        1
+      ],
+      "placement_change_ids": [
+        "pg_catalog",
+        "_uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        1
+      ],
+      "placement_principal_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "membership_history_replay_captures_pkey": [
+        "CREATE UNIQUE INDEX membership_history_replay_captures_pkey ON privacy_protected.membership_history_replay_captures USING btree (run_id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "privacy_membership_history_replay_captures_immutable": [
+        "prevent_privacy_execution_record_delete()",
+        27,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "membership_history_replay_captures_pkey": [
+        "PRIMARY KEY (run_id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "membership_history_replay_placements_bounded": [
+        "CHECK (((cardinality(placement_ids) \u003c= 4096) AND (cardinality(placement_change_ids) \u003c= 4096) AND (array_position(placement_ids, NULL::uuid) IS NULL) AND (array_position(placement_change_ids, NULL::uuid) IS NULL)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "membership_history_replay_captures_run_id_fkey": [
+        "FOREIGN KEY (run_id) REFERENCES privacy_protected.restore_replay_runs(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "membership_history_replay_captures_placement_principal_id_fkey": [
+        "FOREIGN KEY (placement_principal_id) REFERENCES privacy_pseudonymous_principals(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "privacy_protected.membership_history_source_captures": {
+    "columns": {
+      "captured_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "execution_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "placement_ids": [
+        "pg_catalog",
+        "_uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        1
+      ],
+      "placement_change_ids": [
+        "pg_catalog",
+        "_uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        1
+      ],
+      "placement_principal_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "membership_history_source_captures_pkey": [
+        "CREATE UNIQUE INDEX membership_history_source_captures_pkey ON privacy_protected.membership_history_source_captures USING btree (execution_id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "privacy_membership_history_source_captures_immutable": [
+        "prevent_privacy_execution_record_delete()",
+        27,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "membership_history_source_captures_pkey": [
+        "PRIMARY KEY (execution_id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "membership_history_source_placements_bounded": [
+        "CHECK (((cardinality(placement_ids) \u003c= 4096) AND (cardinality(placement_change_ids) \u003c= 4096) AND (array_position(placement_ids, NULL::uuid) IS NULL) AND (array_position(placement_change_ids, NULL::uuid) IS NULL)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "membership_history_source_captures_execution_id_fkey": [
+        "FOREIGN KEY (execution_id) REFERENCES privacy_erasure_executions(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "membership_history_source_captures_placement_principal_id_fkey": [
+        "FOREIGN KEY (placement_principal_id) REFERENCES privacy_pseudonymous_principals(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "privacy_protected.training_placement_erasure_fence": {
+    "columns": {
+      "operation": [
+        "pg_catalog",
+        "text",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "principal_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "effective_date": [
+        "pg_catalog",
+        "date",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "transaction_id": [
+        "pg_catalog",
+        "int8",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "subject_user_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "training_placement_erasure_fence_pkey": [
+        "CREATE UNIQUE INDEX training_placement_erasure_fence_pkey ON privacy_protected.training_placement_erasure_fence USING btree (transaction_id, subject_user_id, operation)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": null,
+    "constraints": {
+      "training_placement_erasure_fence_pkey": [
+        "PRIMARY KEY (transaction_id, subject_user_id, operation)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_erasure_fence_check": [
+        "CHECK (((operation = ANY (ARRAY['MEMBERSHIP_HISTORY_ANONYMIZE'::text, 'AUDIT_ACTOR_ANONYMIZE'::text])) = (principal_id IS NOT NULL)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_erasure_fence_operation_check": [
+        "CHECK ((operation = ANY (ARRAY['MEMBERSHIP_ACTIVE_REVOKE'::text, 'MEMBERSHIP_HISTORY_ANONYMIZE'::text, 'TRAINING_PRESCRIPTION_DELETE'::text, 'AUDIT_ACTOR_ANONYMIZE'::text])))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_erasure_fence_principal_id_fkey": [
+        "FOREIGN KEY (principal_id) REFERENCES privacy_pseudonymous_principals(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.teams": {
+    "columns": {
+      "id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "code": [
+        "pg_catalog",
+        "varchar",
+        44,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "name": [
+        "pg_catalog",
+        "varchar",
+        124,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "season_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "programme_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "teams_pkey": [
+        "CREATE UNIQUE INDEX teams_pkey ON teams USING btree (id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "teams_id_season_programme_unique": [
+        "CREATE UNIQUE INDEX teams_id_season_programme_unique ON teams USING btree (id, season_id, programme_id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "teams_season_programme_code_unique": [
+        "CREATE UNIQUE INDEX teams_season_programme_code_unique ON teams USING btree (season_id, programme_id, code)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "teams_shared_kayak_polo": [
+        "guard_shared_kayak_polo_team()",
+        23,
+        true,
+        "",
+        [
+          "season_id",
+          "programme_id"
+        ],
+        true,
+        true,
+        true
+      ],
+      "teams_placement_scope_guard": [
+        "guard_training_placement_team_scope()",
+        19,
+        true,
+        "",
+        [
+          "programme_id",
+          "season_id"
+        ],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "teams_pkey": [
+        "PRIMARY KEY (id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "teams_code_valid": [
+        "CHECK ((((code)::text = btrim((code)::text)) AND ((code)::text ~ '^[A-Za-z][A-Za-z0-9_]*$'::text)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "teams_name_valid": [
+        "CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) \u003e= 2) AND (char_length((name)::text) \u003c= 120))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "teams_season_id_fkey": [
+        "FOREIGN KEY (season_id) REFERENCES seasons(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "teams_programme_id_fkey": [
+        "FOREIGN KEY (programme_id) REFERENCES programmes(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "teams_id_season_programme_unique": [
+        "UNIQUE (id, season_id, programme_id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "teams_season_programme_code_unique": [
+        "UNIQUE (season_id, programme_id, code)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.training_group_placements": {
+    "columns": {
+      "id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "ends_on": [
+        "pg_catalog",
+        "date",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "version": [
+        "pg_catalog",
+        "int8",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "group_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "change_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "starts_on": [
+        "pg_catalog",
+        "date",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "updated_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "programme_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "subject_user_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "subject_principal_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "cancelled_by_change_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "superseded_by_change_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "training_group_placements_pkey": [
+        "CREATE UNIQUE INDEX training_group_placements_pkey ON training_group_placements USING btree (id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "training_group_placements_group_dates_idx": [
+        "CREATE INDEX training_group_placements_group_dates_idx ON training_group_placements USING btree (group_id, starts_on, ends_on)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "training_group_placements_subject_user_id_programme_id_dat_excl": [
+        "CREATE INDEX training_group_placements_subject_user_id_programme_id_dat_excl ON training_group_placements USING gist (subject_user_id, programme_id, daterange(starts_on, ends_on, '[]'::text)) WHERE ((subject_user_id IS NOT NULL) AND (superseded_by_change_id IS NULL) AND (cancelled_by_change_id IS NULL))",
+        true,
+        true,
+        true,
+        false,
+        false,
+        true,
+        false
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "training_group_placements_guard": [
+        "guard_training_group_placement()",
+        31,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_group_placements_sealed_history": [
+        "guard_sealed_training_placement_history()",
+        31,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_group_placements_touch_candidates": [
+        "touch_training_placement_candidates()",
+        29,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_group_placements_active_subject_attachment": [
+        "require_active_privacy_attachment_subject()",
+        23,
+        true,
+        "7375626a6563745f757365725f696400",
+        [
+          "subject_user_id"
+        ],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "training_group_placements_pkey": [
+        "PRIMARY KEY (id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_group_placements_dates": [
+        "CHECK (((ends_on IS NULL) OR (starts_on \u003c= ends_on)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_group_placements_subject": [
+        "CHECK ((num_nonnulls(subject_user_id, subject_principal_id) = 1))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_group_placements_group_id_fkey": [
+        "FOREIGN KEY (group_id) REFERENCES training_groups(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_group_placements_version_check": [
+        "CHECK ((version \u003e 0))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_group_placements_change_id_fkey": [
+        "FOREIGN KEY (change_id) REFERENCES training_placement_changes(id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED",
+        true,
+        true,
+        true,
+        true,
+        0
+      ],
+      "training_group_placements_programme_id_fkey": [
+        "FOREIGN KEY (programme_id) REFERENCES programmes(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_group_placements_subject_user_id_fkey": [
+        "FOREIGN KEY (subject_user_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_group_placements_subject_principal_id_fkey": [
+        "FOREIGN KEY (subject_principal_id) REFERENCES privacy_pseudonymous_principals(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_group_placements_cancelled_by_change_id_fkey": [
+        "FOREIGN KEY (cancelled_by_change_id) REFERENCES training_placement_changes(id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED",
+        true,
+        true,
+        true,
+        true,
+        0
+      ],
+      "training_group_placements_superseded_by_change_id_fkey": [
+        "FOREIGN KEY (superseded_by_change_id) REFERENCES training_placement_changes(id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED",
+        true,
+        true,
+        true,
+        true,
+        0
+      ],
+      "training_group_placements_subject_user_id_programme_id_fkey": [
+        "FOREIGN KEY (subject_user_id, programme_id) REFERENCES training_placement_heads(subject_user_id, programme_id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_group_placements_subject_user_id_programme_id_dat_excl": [
+        "EXCLUDE USING gist (subject_user_id WITH =, programme_id WITH =, daterange(starts_on, ends_on, '[]'::text) WITH \u0026\u0026) WHERE (((subject_user_id IS NOT NULL) AND (superseded_by_change_id IS NULL) AND (cancelled_by_change_id IS NULL)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.training_groups": {
+    "columns": {
+      "id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "name": [
+        "pg_catalog",
+        "varchar",
+        124,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "team_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "updated_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "programme_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_by_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "training_groups_pkey": [
+        "CREATE UNIQUE INDEX training_groups_pkey ON training_groups USING btree (id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "training_groups_team_idx": [
+        "CREATE INDEX training_groups_team_idx ON training_groups USING btree (team_id) WHERE (team_id IS NOT NULL)",
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true
+      ],
+      "training_groups_programme_idx": [
+        "CREATE INDEX training_groups_programme_idx ON training_groups USING btree (programme_id) WHERE (programme_id IS NOT NULL)",
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "training_groups_touch_plan": [
+        "touch_structured_training_plan()",
+        17,
+        true,
+        "",
+        [
+          "name",
+          "programme_id",
+          "team_id"
+        ],
+        true,
+        true,
+        true
+      ],
+      "training_groups_placement_scope_guard": [
+        "guard_training_placement_group_scope()",
+        19,
+        true,
+        "",
+        [
+          "programme_id",
+          "team_id"
+        ],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "training_groups_pkey": [
+        "PRIMARY KEY (id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_groups_name_valid": [
+        "CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) \u003e= 2) AND (char_length((name)::text) \u003c= 120))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_groups_scope_valid": [
+        "CHECK ((num_nonnulls(programme_id, team_id) = 1))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_groups_team_id_fkey": [
+        "FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_groups_programme_id_fkey": [
+        "FOREIGN KEY (programme_id) REFERENCES programmes(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_groups_created_by_id_fkey": [
+        "FOREIGN KEY (created_by_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.training_placement_changes": {
+    "columns": {
+      "id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "kind": [
+        "pg_catalog",
+        "text",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "season_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "recorded_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "effective_on": [
+        "pg_catalog",
+        "date",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "programme_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "actor_user_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "head_revision": [
+        "pg_catalog",
+        "int8",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "subject_user_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "temporary_until": [
+        "pg_catalog",
+        "date",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "cancels_change_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "canonical_command": [
+        "pg_catalog",
+        "jsonb",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "actor_principal_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "return_placement_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "source_placement_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "subject_principal_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "original_source_ends_on": [
+        "pg_catalog",
+        "date",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "original_source_version": [
+        "pg_catalog",
+        "int8",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "destination_placement_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "original_source_starts_on": [
+        "pg_catalog",
+        "date",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "training_placement_changes_pkey": [
+        "CREATE UNIQUE INDEX training_placement_changes_pkey ON training_placement_changes USING btree (id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "training_placement_changes_subject_idx": [
+        "CREATE INDEX training_placement_changes_subject_idx ON training_placement_changes USING btree (subject_user_id, programme_id, recorded_at, id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "training_placement_changes_cancels_change_id_key": [
+        "CREATE UNIQUE INDEX training_placement_changes_cancels_change_id_key ON training_placement_changes USING btree (cancels_change_id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "training_placement_changes_immutable": [
+        "guard_training_placement_audit()",
+        27,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_placement_changes_sealed_history": [
+        "guard_sealed_training_placement_history()",
+        31,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_placement_changes_active_subject_attachment": [
+        "require_active_privacy_attachment_subject()",
+        23,
+        true,
+        "7375626a6563745f757365725f696400",
+        [
+          "subject_user_id"
+        ],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "training_placement_changes_pkey": [
+        "PRIMARY KEY (id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_actor": [
+        "CHECK ((num_nonnulls(actor_user_id, actor_principal_id) = 1))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_cancel": [
+        "CHECK (((kind = 'CANCEL'::text) = (cancels_change_id IS NOT NULL)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_subject": [
+        "CHECK ((num_nonnulls(subject_user_id, subject_principal_id) = 1))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_return_fk": [
+        "FOREIGN KEY (return_placement_id) REFERENCES training_group_placements(id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED",
+        true,
+        true,
+        true,
+        true,
+        0
+      ],
+      "training_placement_changes_source_fk": [
+        "FOREIGN KEY (source_placement_id) REFERENCES training_group_placements(id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED",
+        true,
+        true,
+        true,
+        true,
+        0
+      ],
+      "training_placement_changes_temporary": [
+        "CHECK ((((kind = 'TEMPORARY'::text) AND (temporary_until \u003e= effective_on) AND (return_placement_id IS NOT NULL)) OR ((kind \u003c\u003e 'TEMPORARY'::text) AND (temporary_until IS NULL) AND (return_placement_id IS NULL))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_kind_check": [
+        "CHECK ((kind = ANY (ARRAY['JOIN'::text, 'LEAVE'::text, 'MOVE'::text, 'TEMPORARY'::text, 'CANCEL'::text])))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_destination_fk": [
+        "FOREIGN KEY (destination_placement_id) REFERENCES training_group_placements(id) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED",
+        true,
+        true,
+        true,
+        true,
+        0
+      ],
+      "training_placement_changes_season_id_fkey": [
+        "FOREIGN KEY (season_id) REFERENCES seasons(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_programme_id_fkey": [
+        "FOREIGN KEY (programme_id) REFERENCES programmes(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_actor_user_id_fkey": [
+        "FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_head_revision_check": [
+        "CHECK ((head_revision \u003e 0))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_subject_user_id_fkey": [
+        "FOREIGN KEY (subject_user_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_cancels_change_id_key": [
+        "UNIQUE (cancels_change_id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_cancels_change_id_fkey": [
+        "FOREIGN KEY (cancels_change_id) REFERENCES training_placement_changes(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_actor_principal_id_fkey": [
+        "FOREIGN KEY (actor_principal_id) REFERENCES privacy_pseudonymous_principals(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_canonical_command_check": [
+        "CHECK (((jsonb_typeof(canonical_command) = 'object'::text) AND (octet_length((canonical_command)::text) \u003c= 4096)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_subject_principal_id_fkey": [
+        "FOREIGN KEY (subject_principal_id) REFERENCES privacy_pseudonymous_principals(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_changes_subject_user_id_programme_id_fkey": [
+        "FOREIGN KEY (subject_user_id, programme_id) REFERENCES training_placement_heads(subject_user_id, programme_id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.training_placement_heads": {
+    "columns": {
+      "revision": [
+        "pg_catalog",
+        "int8",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "programme_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "subject_user_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "training_placement_heads_pkey": [
+        "CREATE UNIQUE INDEX training_placement_heads_pkey ON training_placement_heads USING btree (subject_user_id, programme_id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "training_placement_heads_guard": [
+        "guard_training_placement_head()",
+        27,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_placement_heads_active_subject_attachment": [
+        "require_active_privacy_attachment_subject()",
+        23,
+        true,
+        "7375626a6563745f757365725f696400",
+        [
+          "subject_user_id"
+        ],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "training_placement_heads_pkey": [
+        "PRIMARY KEY (subject_user_id, programme_id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_heads_revision_check": [
+        "CHECK ((revision \u003e= 0))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_heads_programme_id_fkey": [
+        "FOREIGN KEY (programme_id) REFERENCES programmes(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_placement_heads_subject_user_id_fkey": [
+        "FOREIGN KEY (subject_user_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.training_prescription_withdrawals": {
+    "columns": {
+      "leg": [
+        "pg_catalog",
+        "text",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "change_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "recorded_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "effective_on": [
+        "pg_catalog",
+        "date",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "prescription_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "observed_precision": [
+        "pg_catalog",
+        "text",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "observed_starts_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "observed_session_on": [
+        "pg_catalog",
+        "date",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "live_prescription_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "training_prescription_withdrawals_pkey": [
+        "CREATE UNIQUE INDEX training_prescription_withdrawals_pkey ON training_prescription_withdrawals USING btree (prescription_id, change_id, leg)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "training_prescription_withdrawals_guard": [
+        "guard_training_prescription_withdrawal()",
+        7,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_prescription_withdrawals_immutable": [
+        "guard_training_prescription_withdrawal_immutable()",
+        27,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_prescription_withdrawals_sealed_history": [
+        "guard_sealed_training_placement_history()",
+        31,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "training_prescription_withdrawals_pkey": [
+        "PRIMARY KEY (prescription_id, change_id, leg)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_prescription_withdrawals_leg_check": [
+        "CHECK ((leg = ANY (ARRAY['OUTBOUND'::text, 'RETURN'::text])))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_prescription_withdrawals_change_id_fkey": [
+        "FOREIGN KEY (change_id) REFERENCES training_placement_changes(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_prescription_withdrawals_observed_precision_check": [
+        "CHECK ((observed_precision = ANY (ARRAY['INTERVAL'::text, 'START_ONLY'::text, 'DAY'::text, 'BAND'::text])))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_prescription_withdrawals_live_prescription_id_fkey": [
+        "FOREIGN KEY (live_prescription_id) REFERENCES training_prescriptions(id) ON DELETE SET NULL",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.training_sessions": {
+    "columns": {
+      "id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "title": [
+        "pg_catalog",
+        "varchar",
+        184,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "status": [
+        "pg_catalog",
+        "varchar",
+        24,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "ends_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "plan_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "day_band": [
+        "pg_catalog",
+        "text",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "starts_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "entry_kind": [
+        "public",
+        "training_entry_kind",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "updated_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "description": [
+        "pg_catalog",
+        "varchar",
+        4004,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "modality_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "cancelled_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "scheduled_on": [
+        "pg_catalog",
+        "date",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_by_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "cancelled_by_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "schedule_precision": [
+        "pg_catalog",
+        "text",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "cancellation_reason": [
+        "pg_catalog",
+        "varchar",
+        504,
+        false,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "training_sessions_pkey": [
+        "CREATE UNIQUE INDEX training_sessions_pkey ON training_sessions USING btree (id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "training_sessions_plan_starts_idx": [
+        "CREATE INDEX training_sessions_plan_starts_idx ON training_sessions USING btree (plan_id, starts_at)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "training_sessions_status_starts_idx": [
+        "CREATE INDEX training_sessions_status_starts_idx ON training_sessions USING btree (status, starts_at)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "training_sessions_touch_plan": [
+        "touch_structured_training_plan()",
+        29,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_sessions_schedule_guard": [
+        "training_schedule_control.guard_session()",
+        31,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_sessions_latch_placement_departure": [
+        "latch_training_placement_session_departures()",
+        19,
+        true,
+        "",
+        [
+          "scheduled_on",
+          "starts_at",
+          "ends_at",
+          "schedule_precision"
+        ],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "training_sessions_pkey": [
+        "PRIMARY KEY (id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_times_valid": [
+        "CHECK ((starts_at \u003c ends_at))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_title_valid": [
+        "CHECK ((((title)::text = btrim((title)::text)) AND ((char_length((title)::text) \u003e= 2) AND (char_length((title)::text) \u003c= 180))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_plan_id_fkey": [
+        "FOREIGN KEY (plan_id) REFERENCES training_plans(id) ON DELETE CASCADE",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_status_valid": [
+        "CHECK (((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'CANCELLED'::character varying])::text[])))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_modality_id_fkey": [
+        "FOREIGN KEY (modality_id) REFERENCES modalities(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_description_valid": [
+        "CHECK ((((description)::text = btrim((description)::text)) AND (char_length((description)::text) \u003c= 4000)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_created_by_id_fkey": [
+        "FOREIGN KEY (created_by_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_cancelled_by_id_fkey": [
+        "FOREIGN KEY (cancelled_by_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_schedule_shape_valid": [
+        "CHECK (training_session_schedule_valid(schedule_precision, scheduled_on, starts_at, ends_at, day_band, entry_kind))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_cancellation_complete": [
+        "CHECK (((((status)::text = 'ACTIVE'::text) AND (cancelled_at IS NULL) AND (cancelled_by_id IS NULL) AND (cancellation_reason IS NULL)) OR (((status)::text = 'CANCELLED'::text) AND (cancelled_at IS NOT NULL) AND (cancelled_by_id IS NOT NULL) AND (cancellation_reason IS NOT NULL))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_sessions_cancellation_reason_valid": [
+        "CHECK (((cancellation_reason IS NULL) OR (((cancellation_reason)::text = btrim((cancellation_reason)::text)) AND ((char_length((cancellation_reason)::text) \u003e= 2) AND (char_length((cancellation_reason)::text) \u003c= 500)))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": false
+  },
+  "public.user_memberships": {
+    "columns": {
+      "id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "ends_on": [
+        "pg_catalog",
+        "date",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "team_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "user_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "season_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "starts_on": [
+        "pg_catalog",
+        "date",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "updated_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "principal_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "programme_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "age_exception_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "age_exception_by_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "age_exception_reason": [
+        "pg_catalog",
+        "varchar",
+        504,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "competition_category_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "user_memberships_pkey": [
+        "CREATE UNIQUE INDEX user_memberships_pkey ON user_memberships USING btree (id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "user_memberships_team_idx": [
+        "CREATE INDEX user_memberships_team_idx ON user_memberships USING btree (team_id) WHERE (team_id IS NOT NULL)",
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true
+      ],
+      "user_memberships_active_user_idx": [
+        "CREATE INDEX user_memberships_active_user_idx ON user_memberships USING btree (user_id, starts_on, ends_on)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "user_memberships_one_participation_per_day": [
+        "CREATE INDEX user_memberships_one_participation_per_day ON user_memberships USING gist (user_id, daterange(starts_on, COALESCE(ends_on, 'infinity'::date), '[]'::text))",
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        false
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "user_memberships_sealed_history": [
+        "prevent_sealed_membership_history_mutation()",
+        31,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "user_memberships_history_immutable": [
+        "prevent_dated_participation_rewrite()",
+        19,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "user_memberships_placement_successor": [
+        "check_training_placement_participation_successor()",
+        17,
+        true,
+        "",
+        [],
+        true,
+        false,
+        false
+      ],
+      "user_memberships_touch_training_plan": [
+        "touch_structured_training_plan()",
+        17,
+        true,
+        "",
+        [
+          "user_id",
+          "starts_on",
+          "ends_on",
+          "programme_id",
+          "team_id"
+        ],
+        true,
+        true,
+        true
+      ],
+      "user_memberships_active_subject_attachment": [
+        "require_active_privacy_attachment_subject()",
+        23,
+        true,
+        "757365725f696400",
+        [
+          "user_id"
+        ],
+        true,
+        true,
+        true
+      ],
+      "user_memberships_dated_participation_valid": [
+        "validate_dated_participation()",
+        23,
+        true,
+        "",
+        [
+          "user_id",
+          "season_id",
+          "programme_id",
+          "starts_on",
+          "ends_on",
+          "competition_category_id",
+          "age_exception_reason",
+          "age_exception_by_id",
+          "age_exception_at"
+        ],
+        true,
+        true,
+        true
+      ],
+      "user_memberships_touch_placement_candidates": [
+        "touch_training_placement_candidates()",
+        29,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "user_memberships_pkey": [
+        "PRIMARY KEY (id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_dates_valid": [
+        "CHECK (((ends_on IS NULL) OR (starts_on \u003c= ends_on)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_user_id_fkey": [
+        "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_season_id_fkey": [
+        "FOREIGN KEY (season_id) REFERENCES seasons(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_principal_id_fkey": [
+        "FOREIGN KEY (principal_id) REFERENCES privacy_pseudonymous_principals(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_programme_id_fkey": [
+        "FOREIGN KEY (programme_id) REFERENCES programmes(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_placement_successor": [
+        "TRIGGER DEFERRABLE INITIALLY DEFERRED",
+        true,
+        true,
+        true,
+        true,
+        0
+      ],
+      "user_memberships_age_exception_complete": [
+        "CHECK ((((age_exception_reason IS NULL) AND (age_exception_by_id IS NULL) AND (age_exception_at IS NULL)) OR ((age_exception_reason IS NOT NULL) AND ((age_exception_reason)::text = btrim((age_exception_reason)::text)) AND ((char_length((age_exception_reason)::text) \u003e= 2) AND (char_length((age_exception_reason)::text) \u003c= 500)) AND (age_exception_by_id IS NOT NULL) AND (age_exception_at IS NOT NULL))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_age_exception_by_id_fkey": [
+        "FOREIGN KEY (age_exception_by_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_one_participation_per_day": [
+        "EXCLUDE USING gist (user_id WITH =, daterange(starts_on, COALESCE(ends_on, 'infinity'::date), '[]'::text) WITH \u0026\u0026)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_subject_principal_exactly_one": [
+        "CHECK ((num_nonnulls(user_id, principal_id) = 1))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_team_same_season_programme_fk": [
+        "FOREIGN KEY (team_id, season_id, programme_id) REFERENCES teams(id, season_id, programme_id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "user_memberships_category_same_season_programme_fk": [
+        "FOREIGN KEY (competition_category_id, season_id, programme_id) REFERENCES competition_categories(id, season_id, programme_id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  }
+}

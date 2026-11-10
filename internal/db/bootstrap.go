@@ -26,7 +26,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion              = "reset-baseline-v1"
-	baselineIncludesThrough      = "202610010003_privacy_attachment_trigger_runtime"
+	baselineIncludesThrough      = "202611100006_training_rhythm_references"
 	mediaCleanupRole             = "mycfc_media_cleanup"
 	dataRetentionRole            = "mycfc_data_retention"
 	privacyRetentionRole         = "mycfc_privacy_retention"
@@ -136,7 +136,7 @@ func BootstrapRoles(ctx context.Context, conn bootstrapConnection, databaseName 
 	statements := []namedStatement{
 		{"enable citext", "CREATE EXTENSION IF NOT EXISTS citext"},
 		{"enable pgcrypto", "CREATE EXTENSION IF NOT EXISTS pgcrypto"},
-		{"configure app role", roleStatement(credentials.AppUsername, credentials.AppPassword)},
+		{"configure app role", publisherRoleStatement(credentials.AppUsername, credentials.AppPassword)},
 		{"configure migration role", roleStatement(credentials.MigrationUsername, credentials.MigrationPassword)},
 		{"configure media cleanup capability role", noLoginRoleStatement(mediaCleanupRole)},
 		{"configure data retention capability role", noLoginRoleStatement(dataRetentionRole)},
@@ -413,11 +413,13 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 		{"revoke web guardian operator schema access", "REVOKE ALL ON SCHEMA guardian_ops FROM " + app},
 		{"revoke migration guardian operator functions", "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA guardian_ops FROM " + migration},
 		{"grant migration guardian schema helper", "GRANT EXECUTE ON FUNCTION guardian_ops.schema_ready(text) TO " + migration},
+		{"grant migration guardian internal read helpers", "GRANT EXECUTE ON FUNCTION guardian_ops.preflight(uuid,text,bytea,bytea,text,text,text), guardian_ops.canonical_policy(), guardian_ops.canonical_approval(jsonb) TO " + migration},
 		{"revoke public guardian age handoff sequence access", "REVOKE ALL PRIVILEGES ON SEQUENCE " + guardianAgeHandoffPrivateSequences + " FROM PUBLIC"},
 		{"revoke public protected schema access", "REVOKE ALL ON SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected table access", "REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke public protected sequence access", "REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA privacy_protected FROM PUBLIC"},
 		{"revoke web execution table access", "REVOKE ALL PRIVILEGES ON TABLE " + executionTables + " FROM " + app},
+		{"grant web dated placement fixed API", "DO $$ BEGIN IF to_regclass('public.training_placement_heads') IS NULL THEN RETURN; END IF; GRANT EXECUTE ON FUNCTION training_placement_group_programme(uuid), training_placement_actor_scope(uuid,uuid), training_placement_resolve(uuid,uuid,uuid,date), training_placement_touch_heads(uuid,uuid[]), lock_training_publication_placement_heads(uuid,uuid), lock_training_placement_existing_heads_for_join(uuid,uuid,uuid[]), apply_training_placement_change(uuid,uuid,uuid,uuid,uuid,text,uuid,uuid,date,date,bigint,text), cancel_training_placement_change(uuid,uuid,uuid,bigint,text), training_prescription_current_delivery(uuid) TO " + app + "; GRANT SELECT ON TABLE training_placement_heads,training_group_placements,training_placement_changes,training_prescription_withdrawals TO " + app + "; REVOKE INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER ON TABLE training_placement_heads,training_group_placements,training_placement_changes,training_prescription_withdrawals FROM " + app + "; END $$"},
 		{"grant web pre-cutoff retention capture", "GRANT EXECUTE ON FUNCTION privacy_execution_capture_retention_sources(uuid,uuid) TO " + app},
 		{"revoke web retention table access", "REVOKE ALL PRIVILEGES ON TABLE " + retentionTables + " FROM " + app},
 		{"revoke web completion control table access", "REVOKE ALL PRIVILEGES ON TABLE " + completionControlTables + " FROM " + app},
@@ -529,6 +531,9 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 			return fmt.Errorf("harden privacy execution roles (%s): %w", statement.name, err)
 		}
 	}
+	if err := hardenTrainingScheduleRoles(ctx, conn, credentials); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -619,6 +624,9 @@ func commitBaseline(ctx context.Context, tx pgx.Tx, beforeCommit func(context.Co
 		}
 	}
 	if err := VerifyDatedParticipationContract(ctx, tx); err != nil {
+		return err
+	}
+	if err := VerifyTrainingRecipientMigrationFinal(ctx, tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -809,6 +817,14 @@ func roleStatement(username, password string) string {
 	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = " + quoteLiteral(username) + ") THEN " +
 		"CREATE ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS; END IF; " +
 		"ALTER ROLE " + quoteIdentifier(username) + " WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD " + quoteLiteral(password) + "; END $$"
+}
+
+// Preserve an existing publisher's LOGIN/NOLOGIN state across the initial
+// corrected-reader fence. Only a newly created empty-target principal gets LOGIN.
+func publisherRoleStatement(username, password string) string {
+	return "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname OPERATOR(pg_catalog.=) " + quoteLiteral(username) + "::pg_catalog.name) THEN " +
+		"CREATE ROLE " + quoteIdentifier(username) + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS; END IF; " +
+		"ALTER ROLE " + quoteIdentifier(username) + " WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD " + quoteLiteral(password) + "; END $$"
 }
 
 func noLoginRoleStatement(username string) string {

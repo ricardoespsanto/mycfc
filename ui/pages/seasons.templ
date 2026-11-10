@@ -1,0 +1,272 @@
+package pages
+
+import (
+	"github.com/cfcoimbra/mycfc/internal/validation"
+	"github.com/cfcoimbra/mycfc/ui/components"
+	"strconv"
+)
+
+type SeasonRow struct {
+	ID, Code, Name, StartsOn, EndsOn, SelectURL string
+	Current                                     bool
+}
+type SeasonForm struct {
+	Code, Name, StartsOn, EndsOn string
+	Errors                       validation.FieldErrors
+}
+type SeasonsPage struct {
+	ContextDay, ContextOriginGroup, ContextOriginWeek, ContextOriginDay string
+	Meta                                                                            components.PageMeta
+	CSRFField                                                                       templ.Component
+	Mode                                                                            string
+	Rows                                                                            []SeasonRow
+	Target, Current                                                                 SeasonRow
+	HasCurrent                                                                      bool
+	Form                                                                            SeasonForm
+	Token                                                                           string
+	ContextKind, ContextID, ContextWeekID, ContextPage, ContextQuery                string
+	CollectionURL, CreateURL, ActionURL, ReturnURL, PreviousURL, NextURL, ReviewURL string
+	Success, Error, Conflict                                                        string
+}
+
+templ Seasons(page SeasonsPage) {
+	@components.Base(page.Meta, seasonsContent(page))
+}
+
+templ seasonsContent(page SeasonsPage) {
+	if page.Mode == "create" || page.Mode == "select" || page.Mode == "preview" {
+		<div class="task-route-page">
+			@components.TaskRoute(seasonTaskConfig(page)) {
+				<div class="task-form">
+					@components.StatusMessage(page.Success, "success")
+					if page.Error != "" {
+						<section class="error-summary" role="alert" tabindex="-1" autofocus><h2>Não foi possível concluir a tarefa</h2><p>{ page.Error }</p></section>
+					}
+					if page.Mode == "create" {
+						@seasonCreateForm(page)
+					} else {
+						@seasonSelectionForm(page)
+					}
+				</div>
+			}
+		</div>
+	} else {
+		@components.PageHeader("Administração", "Épocas", "Configure as datas do clube e escolha deliberadamente a época atual.", []components.PageAction{{Label: "Criar época", Href: page.CreateURL, Variant: "primary"}, {Label: "Voltar", Href: page.ReturnURL, Variant: "quiet"}})
+		@components.StatusMessage(page.Success, "success")
+		@components.StatusMessage(page.Error, "error")
+		if !page.HasCurrent {
+			@components.Callout("Sem época atual", "Crie uma época com datas explícitas e selecione-a depois. Criar uma época não a torna atual.", "info")
+		}
+		if len(page.Rows) == 0 {
+			@components.EmptyState("Ainda sem épocas", "Introduza o código, o nome e as datas escolhidas pelo clube.")
+		} else {
+			@components.RecordList("Épocas do clube") {
+				for _, season := range page.Rows {
+					@components.RecordItem(season.Name, season.SelectURL, season.Code) {
+						<div class="stack">
+							<p class="record-meta">{ season.StartsOn } a { season.EndsOn }</p>
+							if season.Current {
+								@components.Badge("Atual", "success")
+							} else {
+								<a
+									class="action action--secondary"
+									href={ templ.SafeURL(season.SelectURL) }
+								>Selecionar como atual</a>
+							}
+						</div>
+					}
+				}
+			}
+		}
+		@seasonPagination(page)
+	}
+}
+
+templ seasonCreateForm(page SeasonsPage) {
+	<form
+		class="form-layout"
+		method="post"
+		action={ templ.SafeURL(page.ActionURL) }
+		data-task-form
+		novalidate
+	>
+		@page.CSRFField
+		@seasonContext(page)
+		@seasonErrors(page)
+		<p>A nova época fica sem seleção. Depois de a criar, poderá pré-visualizar e confirmar a sua seleção como época atual.</p>
+		@components.RequiredNote()
+		<div class="field-group">
+			@components.FieldLabel("season-code", "Código", true)
+			<input
+				id="season-code"
+				name="code"
+				value={ page.Form.Code }
+				required
+				maxlength="20"
+				aria-invalid={ strconv.FormatBool(page.Form.Errors["code"] != "") }
+				aria-describedby="season-code-help code-error"
+			/>@components.FieldHelp("season-code-help", "Use o código escolhido pelo clube. O código não determina as datas.")
+			@components.FieldErrorMessage("code", page.Form.Errors["code"])
+		</div>
+		<div class="field-group">
+			@components.FieldLabel("season-name", "Nome", true)
+			<input
+				id="season-name"
+				name="name"
+				value={ page.Form.Name }
+				required
+				minlength="2"
+				maxlength="120"
+				aria-invalid={ strconv.FormatBool(page.Form.Errors["name"] != "") }
+				aria-describedby="name-error"
+			/>@components.FieldErrorMessage("name", page.Form.Errors["name"])
+		</div>
+		@components.FieldGrid() {
+			<div class="field-group">
+				@components.FieldLabel("season-start", "Data de início", true)
+				<input
+					id="season-start"
+					name="starts_on"
+					type="date"
+					value={ page.Form.StartsOn }
+					required
+					aria-invalid={ strconv.FormatBool(page.Form.Errors["starts_on"] != "") }
+					aria-describedby="starts_on-error"
+				/>@components.FieldErrorMessage("starts_on", page.Form.Errors["starts_on"])
+			</div>
+			<div class="field-group">
+				@components.FieldLabel("season-end", "Data de fim", true)
+				<input
+					id="season-end"
+					name="ends_on"
+					type="date"
+					value={ page.Form.EndsOn }
+					required
+					aria-invalid={ strconv.FormatBool(page.Form.Errors["ends_on"] != "") }
+					aria-describedby="ends_on-error"
+				/>@components.FieldErrorMessage("ends_on", page.Form.Errors["ends_on"])
+			</div>
+		}
+		<p class="field-help">Introduza ambas as datas. Não são deduzidas do nome, do código ou do ano atual.</p>
+		@components.TaskActions(page.ReturnURL) {
+			<button class="action action--primary" type="submit">Criar época</button>
+		}
+	</form>
+}
+
+templ seasonSelectionForm(page SeasonsPage) {
+	<form
+		class="form-layout"
+		method="post"
+		action={ templ.SafeURL(page.ActionURL) }
+		data-task-form
+	>
+		@page.CSRFField
+		@seasonContext(page)
+		@seasonErrors(page)
+		<section id="season-selection" tabindex="-1" aria-labelledby="season-target-title"><h2 id="season-target-title">Época a selecionar</h2>@seasonSummary(page.Target)
+</section>
+		<section aria-labelledby="season-current-title">
+			<h2 id="season-current-title">Época atual</h2>
+			if page.HasCurrent {
+				@seasonSummary(page.Current)
+			} else {
+				<p>Não existe uma época atual.</p>
+			}
+		</section>
+		if page.Mode == "preview" {
+			<section aria-labelledby="season-consequences-title"><h2 id="season-consequences-title">Rever antes de confirmar</h2><p>Esta seleção passa a ser a referência para as tarefas que usam a época atual. Não altera as datas nem os identificadores das épocas, não copia escalões ou atletas e não transfere planos nem publicações.</p><p>As datas apresentadas são as datas configuradas pelo clube; selecionar a época não significa que incluam o dia de hoje.</p></section>
+		} else {
+			<p>Pré-visualize as consequências antes de confirmar a alteração.</p>
+		}
+		if page.Token != "" {
+			<input type="hidden" name="preview_token" value={ page.Token }/>
+		}
+		@components.TaskActions(page.ReturnURL) {
+			if page.Conflict != "" || page.Form.Errors.Has("form") || (page.Mode == "preview" && page.Token == "") {
+				<a
+					class="action action--primary"
+					href={ templ.SafeURL(page.ReviewURL) }
+				>Recarregar e rever a seleção</a>
+			} else if page.Mode == "preview" {
+				<input type="hidden" name="confirm" value="yes"/>
+				<button class="action action--primary" type="submit">Confirmar época atual</button>
+			} else {
+				<button class="action action--primary" type="submit">Pré-visualizar alteração</button>
+			}
+		}
+	</form>
+}
+
+templ seasonSummary(season SeasonRow) {
+	<dl><dt>Nome</dt><dd>{ season.Name }</dd><dt>Código</dt><dd>{ season.Code }</dd><dt>Data de início</dt><dd>{ season.StartsOn }</dd><dt>Data de fim</dt><dd>{ season.EndsOn }</dd></dl>
+}
+
+templ seasonContext(page SeasonsPage) {
+	<input type="hidden" name="return_kind" value={ page.ContextKind }/>
+	if page.ContextID != "" {
+		<input type="hidden" name="return_id" value={ page.ContextID }/>
+	}
+	if page.ContextWeekID != "" {
+		<input type="hidden" name="week_id" value={ page.ContextWeekID }/>
+	}
+	if page.ContextPage != "" {
+		<input type="hidden" name="return_page" value={ page.ContextPage }/>
+	}
+	if page.ContextQuery != "" {
+		<input type="hidden" name="return_q" value={ page.ContextQuery }/>
+	}
+	if page.ContextDay != "" {
+		<input type="hidden" name="day" value={ page.ContextDay }/>
+	}
+	if page.ContextOriginGroup != "" {
+		<input type="hidden" name="origin_group" value={ page.ContextOriginGroup }/>
+	}
+	if page.ContextOriginWeek != "" {
+		<input type="hidden" name="origin_week" value={ page.ContextOriginWeek }/>
+	}
+	if page.ContextOriginDay != "" {
+		<input type="hidden" name="origin_day" value={ page.ContextOriginDay }/>
+	}
+}
+
+templ seasonErrors(page SeasonsPage) {
+	if page.Conflict != "" {
+		@components.TaskConflict("A seleção foi alterada", page.Conflict, "season-selection", page.ReviewURL, "Recarregar e rever a seleção")
+	} else {
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "form", Field: seasonFirstField(page)}, {Key: "code", Field: "season-code"}, {Key: "name", Field: "season-name"}, {Key: "starts_on", Field: "season-start"}, {Key: "ends_on", Field: "season-end"}}))
+	}
+}
+
+templ seasonPagination(page SeasonsPage) {
+	if page.PreviousURL != "" || page.NextURL != "" {
+		<nav class="cluster" aria-label="Páginas de épocas">
+			if page.PreviousURL != "" {
+				<a
+					class="action action--quiet"
+					href={ templ.SafeURL(page.PreviousURL) }
+				>Página anterior</a>
+			}
+			if page.NextURL != "" {
+				<a
+					class="action action--quiet"
+					href={ templ.SafeURL(page.NextURL) }
+				>Página seguinte</a>
+			}
+		</nav>
+	}
+}
+
+func seasonFirstField(page SeasonsPage) string {
+	if page.Mode == "create" {
+		return "season-code"
+	}
+	return "season-selection"
+}
+func seasonTaskConfig(page SeasonsPage) components.TaskSurfaceConfig {
+	title, description := "Selecionar época atual", "Reveja a época e as datas antes de alterar a referência atual."
+	if page.Mode == "create" {
+		title, description = "Criar época", "Introduza os dados e as datas escolhidos pelo clube."
+	}
+	return components.TaskSurfaceConfig{ID: "season-task", TitleID: "season-task-title", Eyebrow: "Administração · Épocas", Title: title, Description: description, Variant: "modal", ReturnURL: page.ReturnURL}
+}

@@ -968,14 +968,29 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	actorID, guardianID, athleteID, unrelatedID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	actorID, guardianID, athleteID, unrelatedID, expiredGuardianID, expiredAthleteID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	seasonID := uuid.New()
-	for id, name := range map[uuid.UUID]string{actorID: "Treinadora estruturada", guardianID: "Responsável estruturada", unrelatedID: "Pessoa sem relação"} {
+	for id, name := range map[uuid.UUID]string{actorID: "Treinadora estruturada", guardianID: "Responsável estruturada", unrelatedID: "Pessoa sem relação", expiredGuardianID: "Responsável de participação terminada"} {
 		if _, err := conn.Exec(ctx, `INSERT INTO users (id, name, email, password_hash, date_of_birth) VALUES ($1, $2, $3, 'hash', '1980-01-01')`, id, name, "structured-"+uuid.NewString()+"@example.test"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	insertVerifiedDependentFixture(t, ctx, conn, guardianID, athleteID, "Atleta menor estruturada", time.Now().AddDate(-14, 0, 0))
+	// Both dependants share the same current fixture policy. Adopting a second
+	// policy would intentionally invalidate the first guardian's authority.
+	if _, err := conn.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,guardian_id,is_dependent,date_of_birth) VALUES($1,'Atleta com participação terminada',NULL,NULL,NULL,true,$2)`, expiredAthleteID, time.Now().AddDate(-14, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, `WITH relationship AS (
+ INSERT INTO guardian_authority_relationships(guardian_user_id,subject_user_id,submitted_label,state,version,policy_version,
+ verified_at,verified_by,verified_until,review_due_at,created_at,updated_at)
+ SELECT $1,$2,'Synthetic ended participant','VERIFIED',2,policy_version,clock_timestamp(),$1,clock_timestamp()+interval '365 days',clock_timestamp()+interval '180 days',clock_timestamp(),clock_timestamp()
+ FROM guardian_authority_relationships WHERE guardian_user_id=$3 AND subject_user_id=$4 RETURNING id,created_at,policy_version)
+ INSERT INTO guardian_authority_events(relationship_id,relationship_version,actor_ref,actor_role,action,from_state,to_state,policy_version,
+ evidence_type,evidence_reference,evidence_sha256,occurred_at,verified_until,review_due_at)
+ SELECT id,2,$1,'VERIFIER','VERIFIED','PENDING','VERIFIED',policy_version,'CIVIL_REGISTRY','fixture/'||id::text,digest(id::text,'sha256'),created_at,created_at+interval '365 days',created_at+interval '180 days' FROM relationship`, expiredGuardianID, expiredAthleteID, guardianID, athleteID); err != nil {
+		t.Fatal(err)
+	}
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	if _, err := conn.Exec(ctx, `INSERT INTO seasons (id, code, name, starts_on, ends_on) VALUES ($1, $2, 'Época estruturada', $3, $4)`, seasonID, "ST_"+uuid.NewString()[:8], today.AddDate(0, -1, 0), today.AddDate(0, 1, 0)); err != nil {
 		t.Fatal(err)
@@ -985,6 +1000,10 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	if err := conn.QueryRow(ctx, `INSERT INTO user_memberships (user_id, season_id, programme_id, competition_category_id, starts_on) VALUES ($1, $2, $3, $4, $5) RETURNING id`, athleteID, seasonID, programme.ID, categoryID, today.AddDate(0, 0, -1)).Scan(&membershipID); err != nil {
 		t.Fatal(err)
 	}
+	var expiredMembershipID uuid.UUID
+	if err := conn.QueryRow(ctx, `INSERT INTO user_memberships(user_id,season_id,programme_id,competition_category_id,starts_on,ends_on) VALUES($1,$2,$3,$4,$5,$6) RETURNING id`, expiredAthleteID, seasonID, programme.ID, categoryID, today.AddDate(0, 0, -10), today.AddDate(0, 0, -1)).Scan(&expiredMembershipID); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		_, _ = conn.Exec(context.Background(), `DELETE FROM training_plans WHERE training_group_id IN (SELECT id FROM training_groups WHERE created_by_id = $1)`, actorID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM training_groups WHERE created_by_id = $1`, actorID)
@@ -992,7 +1011,7 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 		_, _ = conn.Exec(context.Background(), `DELETE FROM user_memberships WHERE season_id = $1`, seasonID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM competition_categories WHERE season_id = $1`, seasonID)
 		_, _ = conn.Exec(context.Background(), `DELETE FROM seasons WHERE id = $1`, seasonID)
-		_, _ = conn.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{athleteID, actorID, guardianID, unrelatedID})
+		_, _ = conn.Exec(context.Background(), `DELETE FROM users WHERE id = ANY($1)`, []uuid.UUID{athleteID, actorID, guardianID, unrelatedID, expiredGuardianID, expiredAthleteID})
 	})
 
 	group, err := queries.CreateStructuredTrainingGroup(ctx, dbgen.CreateStructuredTrainingGroupParams{Name: "Cadetes estruturados", ProgrammeID: &programme.ID, CreatedByID: actorID})
@@ -1001,6 +1020,11 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	}
 	if rows, err := queries.AddStructuredTrainingGroupMember(ctx, dbgen.AddStructuredTrainingGroupMemberParams{AddedByID: actorID, MembershipID: membershipID, GroupID: group.ID}); err != nil || rows != 1 {
 		t.Fatalf("add group member rows = %d, err = %v", rows, err)
+	}
+	// Deliberate compatibility-roster fixture: the overview must still reject
+	// a member whose initial configured participation has already ended.
+	if _, err := conn.Exec(ctx, `INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, group.ID, expiredMembershipID, actorID); err != nil {
+		t.Fatal(err)
 	}
 	weekStart := today.AddDate(0, 0, -((int(today.Weekday()) + 6) % 7))
 	week, err := queries.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: "M33", Description: "Semana híbrida", WeekStart: pgtype.Date{Time: weekStart, Valid: true}, CreatedByID: actorID, GroupID: group.ID})
@@ -1119,12 +1143,18 @@ func TestStructuredTrainingHybridPlanAndGuardianVisibility(t *testing.T) {
 	if err != nil || len(rows) != 4 {
 		t.Fatalf("rejected DOB edit changed guardian visibility: rows=%d err=%v", len(rows), err)
 	}
-	if _, err := conn.Exec(ctx, `UPDATE user_memberships SET ends_on = CURRENT_DATE - 1 WHERE id = $1`, membershipID); err != nil {
-		t.Fatal(err)
+	if _, err := conn.Exec(ctx, `UPDATE user_memberships SET ends_on = CURRENT_DATE - 1 WHERE id = $1`, membershipID); !sqlState(err, "23514") {
+		t.Fatalf("past participation boundary rewrite should fail closed: %v", err)
+	}
+	for name, userID := range map[string]uuid.UUID{"expired athlete": expiredAthleteID, "expired guardian": expiredGuardianID} {
+		rows, err := queries.ListStructuredTrainingOverviewForSubject(ctx, userID)
+		if err != nil || len(rows) != 0 {
+			t.Fatalf("%s overview rows=%d err=%v", name, len(rows), err)
+		}
 	}
 	rows, err = queries.ListStructuredTrainingOverviewForSubject(ctx, guardianID)
-	if err != nil || len(rows) != 0 {
-		t.Fatalf("guardian rows after membership expiry = %d, err = %v", len(rows), err)
+	if err != nil || len(rows) != 4 {
+		t.Fatalf("rejected past rewrite changed current guardian visibility: rows=%d err=%v", len(rows), err)
 	}
 
 	source, err := queries.GetSessionRoutineSource(ctx, session.ID)

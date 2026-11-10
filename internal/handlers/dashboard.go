@@ -1135,8 +1135,8 @@ func numericString(value pgtype.Numeric) string {
 
 func (h Dashboard) programmeAgenda(ctx context.Context, userID uuid.UUID, includeTraining bool) ([]DashboardAgendaItemVM, error) {
 	type agendaItem struct {
-		vm       DashboardAgendaItemVM
-		startsAt time.Time
+		vm      DashboardAgendaItemVM
+		sortKey string
 	}
 	events, err := h.Store.ListEventsForMember(ctx, dbgen.ListEventsForMemberParams{UserID: userID, RowLimit: 6, AsOf: pgtype.Timestamptz{Time: h.now(), Valid: true}})
 	if err != nil {
@@ -1153,7 +1153,7 @@ func (h Dashboard) programmeAgenda(ctx context.Context, userID uuid.UUID, includ
 			}
 		}
 		items = append(items, agendaItem{
-			startsAt: event.StartsAt.Time,
+			sortKey: trainingScheduleSortKey(TrainingSessionSchedule{Date: event.StartsAt.Time.In(h.location()).Format("2006-01-02"), StartsAt: &event.StartsAt.Time}),
 			vm: DashboardAgendaItemVM{
 				Title:  event.Title,
 				Detail: detail,
@@ -1168,7 +1168,11 @@ func (h Dashboard) programmeAgenda(ctx context.Context, userID uuid.UUID, includ
 			return nil, err
 		}
 		for _, session := range sessions {
-			detail := h.formatAgendaRange(session.StartsAt.Time, session.EndsAt.Time)
+			schedule, scheduleErr := trainingScheduleFromRecord(session.SchedulePrecision, session.ScheduledOn, session.StartsAt, session.EndsAt, session.DayBand)
+			if scheduleErr != nil {
+				return nil, scheduleErr
+			}
+			detail := trainingScheduleView(schedule, h.location()).Label
 			if session.ModalityName != nil && *session.ModalityName != "" {
 				detail += " · " + *session.ModalityName
 			}
@@ -1184,12 +1188,12 @@ func (h Dashboard) programmeAgenda(ctx context.Context, userID uuid.UUID, includ
 				trainingURL = "/treinos/prescricoes/sessoes/" + session.ID.String()
 			}
 			items = append(items, agendaItem{
-				startsAt: session.StartsAt.Time,
-				vm:       DashboardAgendaItemVM{Title: session.Title, Detail: detail, URL: trainingURL, Kind: kind},
+				sortKey: trainingScheduleSortKey(schedule),
+				vm:      DashboardAgendaItemVM{Title: session.Title, Detail: detail, URL: trainingURL, Kind: kind},
 			})
 		}
 	}
-	sort.SliceStable(items, func(i, j int) bool { return items[i].startsAt.Before(items[j].startsAt) })
+	sort.SliceStable(items, func(i, j int) bool { return items[i].sortKey < items[j].sortKey })
 	if len(items) > 8 {
 		items = items[:8]
 	}

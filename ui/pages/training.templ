@@ -8,12 +8,17 @@ import (
 
 type TrainingChoice struct{ ID, Name string }
 type TrainingSession struct {
+ OutcomeWriteUnsupported bool `json:"-"`
+ OutcomeUnsupportedMessage string `json:"-"`
+	Schedule TrainingScheduleView
+	WriteUnsupported bool
+	UnsupportedMessage string
 	ID, Plan, Title, Detail, When, Modality, Outcome, Distance, DistanceKM, CancellationReason string
 	ActualDuration, DurationMinutes, PerceivedEffort, RecoveryFeeling, PerceptionNote, FeedbackUpdatedAt string
 	OutcomeVersion int
 	Cancelled, PrescriptionAvailable bool
 }
-type ManagedTrainingSession struct{ ID, Title, Description, When, Modality, CancellationReason, CancelledAt, CancelledBy string; Cancelled, Editable bool }
+type ManagedTrainingSession struct{ Schedule TrainingScheduleView; WriteUnsupported bool; UnsupportedMessage string; ID, Title, Description, When, Modality, CancellationReason, CancelledAt, CancelledBy string; Cancelled, Editable bool }
 type ManagedTrainingPlan struct {
 	ID, Title, Description string
 	Sessions               []ManagedTrainingSession
@@ -28,6 +33,8 @@ type TrainingSessionForm struct {
 	Errors                                                   validation.FieldErrors
 }
 type TrainingSessionEditPage struct {
+	WriteUnsupported bool
+	UnsupportedMessage string
 	Meta components.PageMeta
 	CSRFField templ.Component
 	SessionID, Conflict, CancellationReason string
@@ -36,8 +43,11 @@ type TrainingSessionEditPage struct {
 	Plans, Modalities []TrainingChoice
 }
 type TrainingSessionCancelPage struct {
+	WriteUnsupported bool
+	UnsupportedMessage string
 	Meta components.PageMeta
 	SessionID, Title, When, ExpectedUpdatedAt, Conflict, CancellationReason string
+	ActionURL, ReturnURL, ReloadURL string
 	CancellationErrors validation.FieldErrors
 	CSRFField templ.Component
 }
@@ -71,7 +81,7 @@ templ trainingContent(page TrainingPage) {
 	@BasicCalendar(page.Calendar, "Calendário de treinos", "Vista mensal das sessões carregadas nesta página.")
 	<section class="module">
 		@components.SectionHeading("Agenda", "As minhas sessões", "O trabalho previsto para o seu grupo e o respetivo estado.")
-		if len(page.Sessions) == 0 {
+		if len(page.Sessions) == 0 && page.Error == "" {
 			@components.EmptyState("Sem sessões disponíveis", "Quando o seu grupo tiver trabalho planeado, ele aparece aqui.")
 		}
 		if len(page.Sessions) > 0 {
@@ -81,12 +91,18 @@ templ trainingContent(page TrainingPage) {
 						<div class="record-item__copy">
 							<h3>{ session.Plan }: { session.Title }</h3>
 							<p class="record-meta">
-								{ session.When }
+								{ trainingScheduleLabel(session.Schedule, session.When) }
 								if session.Modality != "" {
 									· { session.Modality }
 								}
 							</p>
 							<p>{ session.Detail }</p>
+if session.WriteUnsupported {
+@components.Callout("Consulta da sessão", trainingUnsupportedMessage(session.UnsupportedMessage), "info")
+}
+if session.OutcomeWriteUnsupported {
+@components.Callout("Resultado indisponível", session.OutcomeUnsupportedMessage, "info")
+}
 							if session.PrescriptionAvailable {
 								<p><a class="action action--quiet" href={ templ.SafeURL("/treinos/prescricoes/sessoes/" + session.ID) }>Abrir prescrição publicada</a></p>
 							}
@@ -120,10 +136,12 @@ templ trainingContent(page TrainingPage) {
 									if session.FeedbackUpdatedAt != "" {
 										<small>Última atualização: { session.FeedbackUpdatedAt }</small>
 									}
-									<details class="inline-disclosure"><summary>Registar ou corrigir dados reais e perceção</summary>@trainingFeedbackForm(page, session, true)</details>
+									if !session.OutcomeWriteUnsupported {
+<details class="inline-disclosure"><summary>Registar ou corrigir dados reais e perceção</summary>@trainingFeedbackForm(page, session, true)</details>
+}
 								}
 							</div>
-						} else {
+						} else if !session.OutcomeWriteUnsupported {
 							<div class="record-item__actions">
 								<details class="inline-disclosure"><summary>Marcar concluída</summary><form class="form-layout" method="post" action="/treinos/sessoes/resultados">@page.CSRFField
 	<input type="hidden" name="session_id" value={ session.ID }/><input type="hidden" name="status" value="COMPLETED"/>@trainingFeedbackFields(session, false)<button type="submit">Concluir sessão</button></form></details>
@@ -138,8 +156,8 @@ templ trainingContent(page TrainingPage) {
 									<select id={ "replacement-session-" + session.ID } name="replacement_session_id" required>
 										<option value="">Selecione</option>
 										for _, replacement := range page.Sessions {
-										if replacement.ID != session.ID && !replacement.Cancelled {
-												<option value={ replacement.ID }>{ replacement.Plan }: { replacement.Title } ({ replacement.When })</option>
+										if replacement.ID != session.ID && !replacement.Cancelled && !replacement.OutcomeWriteUnsupported {
+												<option value={ replacement.ID }>{ replacement.Plan }: { replacement.Title } ({ trainingScheduleLabel(replacement.Schedule, replacement.When) })</option>
 											}
 										}
 									</select>@components.FieldLabel("replacement-reason-"+session.ID, "Motivo", true)
@@ -218,7 +236,7 @@ templ trainingAuthoring(page TrainingPage) {
 	<section id="gerir-treinos" class="module">
 			<section>
 				@components.SectionHeading("", "Planos e sessões", "Âmbitos e sessões sob a sua responsabilidade.")
-				if len(page.ManagedPlans) == 0 {
+				if len(page.ManagedPlans) == 0 && page.Error == "" {
 					@components.EmptyState("Sem planos no seu âmbito", "Crie o primeiro plano para começar a organizar sessões.")
 				}
 				if len(page.ManagedPlans) > 0 {
@@ -228,14 +246,14 @@ templ trainingAuthoring(page TrainingPage) {
 								<div class="record-item__copy">
 									<h3>{ plan.Title }</h3>
 									<p>{ plan.Description }</p>
-									if len(plan.Sessions) == 0 {
+									if len(plan.Sessions) == 0 && page.Error == "" {
 										<p class="record-meta">Ainda sem sessões.</p>
 									}
 									for _, session := range plan.Sessions {
 										<div class="nested-record">
 											<h4>{ session.Title }</h4>
 											<p class="record-meta">
-												{ session.When }
+												{ trainingScheduleLabel(session.Schedule, session.When) }
 												if session.Modality != "" {
 													· { session.Modality }
 												}
@@ -247,7 +265,9 @@ templ trainingAuthoring(page TrainingPage) {
 														<small>Cancelada em { session.CancelledAt } por { session.CancelledBy }.</small>
 													}
 												</div>
-											} else if session.Editable {
+											} else if session.WriteUnsupported {
+@components.Callout("Consulta da sessão", trainingUnsupportedMessage(session.UnsupportedMessage), "info")
+} else if session.Editable {
 												<p><a class="action action--secondary" href={ templ.SafeURL("/admin/treinos/sessoes/" + session.ID + "/editar") }>Editar sessão</a></p>
 											}
 										</div>
@@ -358,6 +378,20 @@ templ TrainingSessionEdit(page TrainingSessionEditPage) {
 templ trainingSessionEditContent(page TrainingSessionEditPage) {
 	@components.PageHeader("Coordenação · Treinos", "Editar sessão", page.Form.Title, []components.PageAction{{Label: "Voltar aos treinos", Href: "/admin/treinos", Variant: "quiet"}})
 	@components.StatusMessage(page.Conflict, "error")
+	if page.WriteUnsupported {
+@components.Callout("Sessão disponível para consulta", trainingUnsupportedMessage(page.UnsupportedMessage), "info")
+<p>{ page.Form.Description }</p>
+if page.Form.StartsAt != "" || page.Form.EndsAt != "" {
+<section aria-labelledby="unsupported-session-proposal"><h2 id="unsupported-session-proposal">Horário apresentado</h2><dl class="status-summary">
+if page.Form.StartsAt != "" {
+<div><dt>Início proposto</dt><dd>{ page.Form.StartsAt }</dd></div>
+}
+if page.Form.EndsAt != "" {
+<div><dt>Fim proposto</dt><dd>{ page.Form.EndsAt }</dd></div>
+}
+</dl></section>
+}
+} else {
 	<section class="module">
 		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Form.Errors), []components.FieldErrorRef{{Key: "state", Field: "training-session-edit-title"}, {Key: "plan_id", Field: "training-session-edit-plan"}, {Key: "title", Field: "training-session-edit-title"}, {Key: "description", Field: "training-session-edit-description"}, {Key: "starts_at", Field: "training-session-edit-start"}, {Key: "ends_at", Field: "training-session-edit-end"}, {Key: "modality_id", Field: "training-session-edit-modality"}}))
 		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/sessoes/" + page.SessionID) }>@page.CSRFField
@@ -389,27 +423,61 @@ templ trainingSessionEditContent(page TrainingSessionEditPage) {
 		<h2 id="cancel-training-session-title">Cancelar sessão</h2><p>A sessão e os resultados existentes continuam visíveis. Esta ação não pode ser anulada.</p>
 		<a class="action action--danger" href={ templ.SafeURL("/admin/treinos/sessoes/" + page.SessionID + "/cancelar") }>Cancelar sessão</a>
 	</section>
+	}
 }
 
 templ TrainingSessionCancel(page TrainingSessionCancelPage) { @components.Base(page.Meta, trainingSessionCancelContent(page)) }
 templ trainingSessionCancelContent(page TrainingSessionCancelPage) {
 	<div class="task-route-page">
-		@components.TaskRoute(components.TaskSurfaceConfig{ID: "cancelar-sessao", TitleID: "cancel-training-session-title", Eyebrow: "Confirmação", Title: "Cancelar sessão", Description: page.Title + " · " + page.When, Variant: "confirmation", ReturnURL: "/admin/treinos"}) {
-			<form class="form-layout task-form destructive-region" method="post" action={ templ.SafeURL("/admin/treinos/sessoes/" + page.SessionID + "/cancelar") } data-task-form>
+		@components.TaskRoute(components.TaskSurfaceConfig{ID: "cancelar-sessao", TitleID: "cancel-training-session-title", Eyebrow: "Confirmação", Title: "Cancelar sessão", Description: page.Title + " · " + page.When, Variant: "confirmation", ReturnURL: trainingSessionCancelReturnURL(page)}) {
+			if page.WriteUnsupported {
+<div class="task-form">@components.Callout("Sessão disponível para consulta", trainingUnsupportedMessage(page.UnsupportedMessage), "info")
+@components.StatusMessage(page.Conflict, "error")
+if page.CancellationReason != "" {
+<dl class="status-summary"><div><dt>Motivo apresentado</dt><dd>{ page.CancellationReason }</dd></div></dl>
+}
+<p><a class="action action--secondary" href={ templ.SafeURL(trainingSessionCancelReturnURL(page)) }>{ trainingSessionCancelReturnLabel(page) }</a></p>
+if page.ReloadURL != "" {
+<p><a class="action action--quiet" href={ templ.SafeURL(page.ReloadURL) }>Recarregar sessão atual</a></p>
+}</div>
+} else {
+			<form class="form-layout task-form destructive-region" method="post" action={ templ.SafeURL(trainingSessionCancelActionURL(page)) } data-task-form>
 				@page.CSRFField<input type="hidden" name="expected_updated_at" value={ page.ExpectedUpdatedAt }/>
-				@components.TaskConflict("A sessão foi alterada", page.Conflict, "", "/admin/treinos", "Voltar aos treinos")
+				@components.TaskConflict("A sessão foi alterada", page.Conflict, "", trainingSessionCancelRecoveryURL(page), trainingSessionCancelRecoveryLabel(page))
 				<p>A sessão mantém-se legível, incluindo resultados existentes, mas deixa de aceitar novas ações.</p>
 				@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.CancellationErrors), []components.FieldErrorRef{{Key: "cancellation_reason", Field: "training-session-cancellation-reason"}, {Key: "confirm_cancellation", Field: "confirm-training-session-cancellation"}}))
 				@components.FieldLabel("training-session-cancellation-reason", "Motivo", true)<textarea id="training-session-cancellation-reason" name="cancellation_reason" minlength="2" maxlength="500" required>{ page.CancellationReason }</textarea>@components.FieldErrorMessage("cancellation_reason", page.CancellationErrors["cancellation_reason"])
 				<label for="confirm-training-session-cancellation"><input id="confirm-training-session-cancellation" type="checkbox" name="confirm_cancellation" value="yes" required/> Confirmo que pretendo cancelar definitivamente a sessão { page.Title }.</label>@components.FieldErrorMessage("confirm_cancellation", page.CancellationErrors["confirm_cancellation"])
-				@components.TaskActions("/admin/treinos") {
+				@components.TaskActions(trainingSessionCancelReturnURL(page)) {
 					if page.Conflict == "" {
 						<button class="action action--danger" type="submit" data-task-submit>Cancelar sessão</button>
 					}
 				}
 			</form>
+}
 		}
 	</div>
+}
+
+func trainingSessionCancelActionURL(page TrainingSessionCancelPage) string {
+	if page.ActionURL != "" { return page.ActionURL }
+	return "/admin/treinos/sessoes/" + page.SessionID + "/cancelar"
+}
+func trainingSessionCancelReturnURL(page TrainingSessionCancelPage) string {
+	if page.ReturnURL != "" { return page.ReturnURL }
+	return "/admin/treinos"
+}
+func trainingSessionCancelReturnLabel(page TrainingSessionCancelPage) string {
+	if page.ReturnURL != "" { return "Voltar à semana" }
+	return "Voltar aos treinos"
+}
+func trainingSessionCancelRecoveryURL(page TrainingSessionCancelPage) string {
+	if page.ReloadURL != "" { return page.ReloadURL }
+	return trainingSessionCancelReturnURL(page)
+}
+func trainingSessionCancelRecoveryLabel(page TrainingSessionCancelPage) string {
+	if page.ReloadURL != "" { return "Recarregar sessão atual" }
+	return trainingSessionCancelReturnLabel(page)
 }
 
 templ trainingScopeChoices(page TrainingPage, prefix, programmeID, teamID string) {
@@ -456,10 +524,10 @@ func trainingOutcomeTone(status string) string {
 
 func trainingPageActions(page TrainingPage) []components.PageAction {
 	if page.Management && page.CanManage {
-		actions := []components.PageAction{{Label: "Criar plano", Href: "/admin/treinos/planos/criar", Variant: "primary", TaskID: "criar-plano"}, {Label: "Criar sessão", Href: "/admin/treinos/sessoes/criar", Variant: "secondary", TaskID: "criar-sessao"}}
 		if page.StructuredAvailable {
-			actions = append(actions, components.PageAction{Label: "Planeamento semanal", Href: "/admin/treinos/estruturados", Variant: "secondary"})
+			return []components.PageAction{{Label: "Grupos de treino", Href: "/admin/treinos/estruturados/grupos", Variant: "primary"}, {Label: "Planeamento semanal", Href: "/admin/treinos/estruturados", Variant: "secondary"}, {Label: "Criar plano", Href: "/admin/treinos/planos/criar", Variant: "quiet", TaskID: "criar-plano"}, {Label: "Criar sessão", Href: "/admin/treinos/sessoes/criar", Variant: "quiet", TaskID: "criar-sessao"}}
 		}
+		actions := []components.PageAction{{Label: "Criar plano", Href: "/admin/treinos/planos/criar", Variant: "primary", TaskID: "criar-plano"}, {Label: "Criar sessão", Href: "/admin/treinos/sessoes/criar", Variant: "secondary", TaskID: "criar-sessao"}}
 		return actions
 	}
 	if !page.Management && page.StructuredAvailable {

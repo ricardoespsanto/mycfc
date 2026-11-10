@@ -18,8 +18,24 @@ const Database = "mycfc"
 const OldWebRole = "mycfc_app"
 const WebRole = "mycfc_disposable_web_20261001"
 const PredecessorDigest = "8ad238f2a1e36976bebd8f6950c935c9fa5b72862fe7cb14d2ad1149d37d1a4e"
-const FinalDigest = "98de2a416ee0006262398c32d012d81c2b5fcb599c2e607bbb006692919fac84"
+const FinalDigest = "88bdc8ccf003c6a4994310c11e2d1c18ce5d4b212ccb6eff8113f8499b9152ec"
+
+// BaselineDigest remains the retired disposable-reset schema pin.
 const BaselineDigest = "fc8f9dbb96dcfd7f49aa81e562bf53684416a32282a26d4d9a9d329f20c14a1f"
+
+// NormalBaselineDigest is for corrected normal fresh/forward verification, not reset.
+const NormalBaselineDigest = "1f176bfd2274d786a575d236d5e4be109bba15b16ff0a2837dc3b6d830fcd06a"
+
+// NormalFinalDigest is independent of the retired disposable FinalDigest pin.
+const NormalFinalDigest = "f5a62bd2101f4fde83044661c92626767563d523fbfffb5696f35dab2cc7e107"
+
+// NormalAuthoringParentDigest identifies the exact closed C/recipient80 schema.
+const NormalAuthoringParentDigest = "c90c7f02fcc0859420133135bd4b12ea0a4aa27cfccdf150eaea08a9fb08c335"
+
+// NormalRecipientParentDigest is the reviewed compatibility79 inventory.
+const NormalRecipientParentDigest = "88bdc8ccf003c6a4994310c11e2d1c18ce5d4b212ccb6eff8113f8499b9152ec"
+
+const NormalParentDigest = "98de2a416ee0006262398c32d012d81c2b5fcb599c2e607bbb006692919fac84"
 
 // FreshGenesisDigest is the recorded inventory of the original v2.0.2 receipt.
 // The receipt remains immutable when a compatible forward migration advances

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -83,19 +85,66 @@ func (s DatedParticipationService) writeWithReason(ctx context.Context, in Ordin
 	if s.Pool == nil || in.ActorID == uuid.Nil || in.MemberID == uuid.Nil || in.SeasonID == uuid.Nil || in.ProgrammeID == uuid.Nil || in.StartsOn.IsZero() {
 		return empty, ErrDatedParticipationWindow
 	}
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	if err != nil {
-		return empty, err
+
+	var row dbgen.UserMembership
+	outcome, err := WithRecipientPublicationTx(ctx, s.Pool, RecipientTxOptions{AdmissionTimeout: 5 * time.Second, TransactionTimeout: 10 * time.Second, CleanupTimeout: 5 * time.Second}, func(txCtx context.Context, commands dbgen.DBTX) error {
+		var bodyErr error
+		row, bodyErr = writeDatedParticipation(txCtx, commands, in, oldID, reason)
+		return bodyErr
+	})
+	if outcome.Outcome == SessionTxOutcomeUnknown || errors.Is(err, ErrCommitOutcomeUnknown) {
+		return empty, errors.Join(ErrCommitOutcomeUnknown, err)
 	}
-	defer tx.Rollback(ctx)
+	if outcome.Outcome == SessionTxCommitted {
+		return row, nil
+	}
+	var server *pgconn.PgError
+	if errors.As(err, &server) && (server.Code == "40001" || server.Code == "55P03" || server.Code == "40P01") {
+		return empty, ErrClassificationStale
+	}
+	return empty, err
+}
+
+// The existing pinned helper owns admission, transaction lifecycle and commit.
+// This body acquires no session/advisory framework of its own.
+func writeDatedParticipation(ctx context.Context, tx dbgen.DBTX, in OrdinaryDatedAssignment, oldID *uuid.UUID, reason string) (dbgen.UserMembership, error) {
+	var empty dbgen.UserMembership
+	var err error
 	var today time.Time
-	if err = tx.QueryRow(ctx, `SELECT (now() AT TIME ZONE 'Europe/Lisbon')::date`).Scan(&today); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date`).Scan(&today); err != nil {
 		return empty, err
 	}
 	tomorrow := today.AddDate(0, 0, 1)
 	start := in.StartsOn.Format("2006-01-02")
 	if (oldID == nil && start != today.Format("2006-01-02") && start != tomorrow.Format("2006-01-02")) || (oldID != nil && start != tomorrow.Format("2006-01-02")) {
 		return empty, ErrDatedParticipationWindow
+	}
+
+	// A self-actor must take UPDATE initially, rather than SHARE then upgrade
+	// while another writer holds its placement head. Other actors retain SHARE.
+	actorMode := " FOR SHARE NOWAIT"
+	if in.ActorID == in.MemberID {
+		actorMode = " FOR UPDATE NOWAIT"
+	}
+	var actorID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT id FROM users WHERE id=$1 AND is_active AND erased_at IS NULL AND NOT is_dependent AND date_of_birth<=((clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date`+actorMode, in.ActorID).Scan(&actorID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return empty, ErrDatedParticipationForbidden
+		}
+		return empty, err
+	}
+	for _, statement := range []string{`SELECT role_id FROM user_platform_roles WHERE user_id=$1 ORDER BY role_id FOR SHARE NOWAIT`, `SELECT id FROM staff_grants WHERE user_id=$1 AND capability='COACH' AND revoked_at IS NULL ORDER BY id FOR SHARE NOWAIT`} {
+		rows, e := tx.Query(ctx, statement, in.ActorID)
+		if e != nil {
+			return empty, e
+		}
+		for rows.Next() {
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			return empty, e
+		}
 	}
 	var authorized bool
 	if err = tx.QueryRow(ctx, `SELECT guardian_authority_is_administrator($1)`, in.ActorID).Scan(&authorized); err != nil {
@@ -119,7 +168,7 @@ func (s DatedParticipationService) writeWithReason(ctx context.Context, in Ordin
 			return empty, err
 		}
 		var active bool
-		if err = tx.QueryRow(ctx, `SELECT revoked_at IS NULL FROM staff_grants WHERE id=$1 FOR SHARE`, grantID).Scan(&active); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT revoked_at IS NULL FROM staff_grants WHERE id=$1 FOR SHARE NOWAIT`, grantID).Scan(&active); err != nil {
 			return empty, err
 		}
 		if !active {
@@ -128,7 +177,7 @@ func (s DatedParticipationService) writeWithReason(ctx context.Context, in Ordin
 	}
 	var eligible bool
 	if err = tx.QueryRow(ctx, `SELECT `+ClassificationSubjectEligibilitySQL+`
-  FROM users member WHERE member.id=$1 FOR UPDATE`, in.MemberID).Scan(&eligible); err != nil {
+  FROM users member WHERE member.id=$1 FOR UPDATE NOWAIT`, in.MemberID).Scan(&eligible); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return empty, ErrDatedParticipationForbidden
 		}
@@ -145,6 +194,26 @@ func (s DatedParticipationService) writeWithReason(ctx context.Context, in Ordin
 		if version != in.ExpectedVersion {
 			return empty, ErrClassificationStale
 		}
+	}
+
+	// Version the complete affected person/programme keys under the protected
+	// subject before any membership/group business lock or close/insert write.
+	programmes := []uuid.UUID{in.ProgrammeID}
+	if oldID != nil {
+		var oldProgramme uuid.UUID
+		if err = tx.QueryRow(ctx, `SELECT programme_id FROM user_memberships WHERE id=$1 AND user_id=$2 AND season_id=$3`, *oldID, in.MemberID, in.SeasonID).Scan(&oldProgramme); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return empty, ErrDatedParticipationTransition
+			}
+			return empty, err
+		}
+		if oldProgramme != in.ProgrammeID {
+			programmes = append(programmes, oldProgramme)
+		}
+	}
+	sort.Slice(programmes, func(i, j int) bool { return programmes[i].String() < programmes[j].String() })
+	if _, err = tx.Exec(ctx, `SELECT public.training_placement_touch_heads($1,$2::uuid[])`, in.MemberID, programmes); err != nil {
+		return empty, err
 	}
 	// Resolve the shared Polo team inside the interval transaction, never from form data.
 	var teamID *uuid.UUID
@@ -195,8 +264,13 @@ func (s DatedParticipationService) writeWithReason(ctx context.Context, in Ordin
 	if err != nil {
 		return empty, fmt.Errorf("create participation: %w", err)
 	}
-	if err = tx.Commit(ctx); err != nil {
+
+	var finalDay time.Time
+	if err = tx.QueryRow(ctx, `SELECT (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date`).Scan(&finalDay); err != nil {
 		return empty, err
+	}
+	if finalDay.Format("2006-01-02") != today.Format("2006-01-02") {
+		return empty, ErrClassificationStale
 	}
 	return row, nil
 }

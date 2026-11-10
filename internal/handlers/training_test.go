@@ -591,11 +591,11 @@ func TestTrainingSessionUpdateProtectsOutcomeLockedPlansAndStaleWrites(t *testin
 		}
 	})
 
-	t.Run("stale write reloads current session", func(t *testing.T) {
+	t.Run("stale write retains submitted session", func(t *testing.T) {
 		store := &trainingWorkflowStore{editSession: base, updateErr: pgx.ErrNoRows}
 		w := httptest.NewRecorder()
 		(Training{Store: store, Location: time.UTC, Now: func() time.Time { return starts.Add(-time.Hour) }}).UpdateSession(w, request(planID))
-		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "alterada entretanto") || !strings.Contains(w.Body.String(), "Sessão atual") {
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "alterada entretanto") || !strings.Contains(w.Body.String(), "Sessão alterada") || strings.Contains(w.Body.String(), `value="Sessão atual"`) {
 			t.Fatalf("response=%d body=%q", w.Code, w.Body.String())
 		}
 	})
@@ -714,6 +714,10 @@ type trainingWorkflowStore struct {
 	createPlanErr      error
 	createdSession     dbgen.CreateTrainingSessionParams
 	editSession        dbgen.GetTrainingSessionForEditRow
+	editReads          int
+	updateCalls        int
+	successfulUpdates  int
+	recoveryReads      int
 	cancelled          dbgen.CancelTrainingSessionParams
 	updated            dbgen.UpdateTrainingSessionParams
 	updateErr          error
@@ -740,6 +744,7 @@ func (s *trainingWorkflowStore) CreateTrainingSession(_ context.Context, params 
 }
 
 func (s *trainingWorkflowStore) GetTrainingSessionForEdit(context.Context, uuid.UUID) (dbgen.GetTrainingSessionForEditRow, error) {
+	s.editReads++
 	return s.editSession, s.editErr
 }
 func (s *trainingWorkflowStore) CancelTrainingSession(_ context.Context, params dbgen.CancelTrainingSessionParams) (dbgen.TrainingSession, error) {
@@ -751,10 +756,15 @@ func (s *trainingWorkflowStore) TrainingPlanExists(context.Context, uuid.UUID) (
 }
 func (s *trainingWorkflowStore) UpdateTrainingSession(_ context.Context, params dbgen.UpdateTrainingSessionParams) (dbgen.TrainingSession, error) {
 	s.updated = params
+	s.updateCalls++
+	if s.updateErr == nil {
+		s.successfulUpdates++
+	}
 	return dbgen.TrainingSession{ID: params.ID}, s.updateErr
 }
 
 func (s *trainingWorkflowStore) ListTrainingPlansForCoach(context.Context, dbgen.ListTrainingPlansForCoachParams) ([]dbgen.ListTrainingPlansForCoachRow, error) {
+	s.recoveryReads++
 	return s.plans, nil
 }
 
@@ -821,4 +831,51 @@ func int32Ptr(value int32) *int32 { return &value }
 
 func equalInt32Pointers(left, right *int32) bool {
 	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func TestTrainingStaleEditRetainsProposalAndOriginalVersionWithoutReloadingPrivateRow(t *testing.T) {
+	actor, plan, session, modality := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	start := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	oldVersion := start.Add(-24 * time.Hour)
+	latestVersion := oldVersion.Add(5 * time.Minute)
+	current := dbgen.GetTrainingSessionForEditRow{ID: session, PlanID: plan, Title: "Intervalo exato alterado", Description: "Descrição já guardada", StartsAt: pgtype.Timestamptz{Time: start.Add(time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: start.Add(2 * time.Hour), Valid: true}, Status: "ACTIVE", UpdatedAt: pgtype.Timestamptz{Time: latestVersion, Valid: true}}
+	values := url.Values{"plan_id": {plan.String()}, "title": {"Título obsoleto conservado"}, "description": {"Descrição proposta conservada"}, "starts_at": {start.Format("2006-01-02T15:04")}, "ends_at": {start.Add(time.Hour).Format("2006-01-02T15:04")}, "modality_id": {modality.String()}, "expected_updated_at": {oldVersion.Format(time.RFC3339Nano)}}
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+	}{{"stale exact write", pgx.ErrNoRows, 409}, {"concurrent change", errStructuredTrainingPublicationConflict, 409}, {"fresh scope revoked", errTrainingScheduleUnavailable, 404}} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &trainingWorkflowStore{editSession: current, updateErr: tc.err, plans: []dbgen.ListTrainingPlansForCoachRow{{ID: plan, Title: "Plano autorizado"}}, modalities: []dbgen.ListAnnouncementModalitiesRow{{ID: modality, NamePt: "Canoagem"}}}
+			h := Training{Store: store, Location: time.UTC, Now: func() time.Time { return start.Add(-time.Hour) }}
+			response := performTrainingRequest(t, CurrentUser{ID: actor, IsAdmin: true}, http.MethodPost, "/admin/treinos/sessoes/"+session.String(), values, "id", session.String(), h.UpdateSession)
+			if response.Code != tc.status {
+				t.Fatalf("status%d want%d", response.Code, tc.status)
+			}
+			if store.editReads != 1 || store.updateCalls != 1 || store.successfulUpdates != 0 {
+				t.Fatalf("row reads%d update attempts%d successful mutations%d", store.editReads, store.updateCalls, store.successfulUpdates)
+			}
+			if store.editSession.Title != current.Title || !store.editSession.UpdatedAt.Time.Equal(latestVersion) {
+				t.Fatal("stale failure changed stored session")
+			}
+			body := response.Body.String()
+			if tc.status == 404 {
+				if strings.Contains(body, values.Get("title")) || strings.Contains(body, values.Get("description")) || store.recoveryReads != 0 {
+					t.Fatal("revoked scope rendered retained proposal or fetched recovery data")
+				}
+				return
+			}
+			for _, retained := range []string{`name="title" value="` + values.Get("title") + `"`, values.Get("description"), `value="` + values.Get("starts_at") + `"`, `value="` + values.Get("ends_at") + `"`, `name="expected_updated_at" value="` + values.Get("expected_updated_at") + `"`, `value="` + modality.String() + `" selected`} {
+				if !strings.Contains(body, retained) {
+					t.Errorf("lost safe proposal field %s", retained)
+				}
+			}
+			if strings.Contains(body, `value="`+current.Title+`"`) || strings.Contains(body, `value="`+latestVersion.Format(time.RFC3339Nano)+`"`) {
+				t.Fatal("conflict silently replaced input or rebased version")
+			}
+			if !store.updated.ExpectedUpdatedAt.Time.Equal(oldVersion) {
+				t.Fatal("write attempt replaced original optimistic token")
+			}
+		})
+	}
 }

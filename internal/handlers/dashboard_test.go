@@ -984,3 +984,15 @@ func (f *dashboardStoreFake) ListWhatsAppGroupsForUserProgramme(_ context.Contex
 func (f *dashboardStoreFake) ListDependentsByGuardian(_ context.Context, _ dbgen.ListDependentsByGuardianParams) ([]dbgen.ListDependentsByGuardianRow, error) {
 	return f.dependents, nil
 }
+
+func TestProgrammeAgendaRefusesInvalidStoredSchedule(t *testing.T) {
+	h := Dashboard{Store: &dashboardStoreFake{
+		upcomingTraining: []dbgen.ListUpcomingTrainingSessionsForDashboardRow{{
+			ID: uuid.New(), Title: "Invalid stored session", SchedulePrecision: "INTERVAL",
+		}},
+	}}
+	agenda, err := h.programmeAgenda(t.Context(), uuid.New(), true)
+	if err == nil || len(agenda) != 0 {
+		t.Fatalf("invalid stored schedule appeared in agenda: items %d, error %v", len(agenda), err)
+	}
+}

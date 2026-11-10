@@ -41,8 +41,46 @@ async function emulateBrowserZoom(page, zoom, viewport = { width: 1280, height: 
 }
 
 // Exercise the supported staff classification task, never the retired membership form.
+async function createAdultMember(page, name, email, birthDate) {
+  await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
+  // The page clears sensitive fields on pageshow. Enter credentials after it settles.
+  await page.waitForLoadState('networkidle');
+  await page.locator('#member-name').fill(name);
+  await page.locator('#member-email').fill(email);
+  await page.locator('#member-birth').fill(birthDate);
+  await page.locator('#member-password').fill(password);
+  await page.locator('#member-password-confirmation').fill(password);
+  await expect(page.locator('#member-password')).toHaveValue(password);
+  await expect(page.locator('#member-password-confirmation')).toHaveValue(password);
+  await page.getByRole('button', { name: 'Criar conta' }).click();
+  await expect(page.getByText('Conta criada.', { exact: true })).toBeVisible();
+}
+
 async function assignCurrentParticipation(page, programme, beforeConfirmation = async () => {}) {
   const memberURL = page.url();
+  await page.waitForLoadState('networkidle');
+  if (await page.getByRole('link', { name: 'Configurar épocas', exact: true }).count()) {
+    // A new fixture explicitly configures its own dates; member reads never invent a club season.
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Lisbon' }).format(new Date());
+    const offset = days => new Date(Date.parse(`${today}T12:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
+    async function seasonPost(button, suffix, expectedStatus) {
+      const pending = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith(suffix));
+      await button.click();
+      expect((await pending).status()).toBe(expectedStatus);
+      await page.waitForLoadState('networkidle');
+    }
+    await page.getByRole('link', { name: 'Configurar épocas', exact: true }).click();
+    await page.getByRole('link', { name: 'Criar época', exact: true }).click();
+    await page.locator('#season-code').fill(`SYNE2E${Date.now()}`);
+    await page.locator('#season-name').fill('Época sintética E2E — datas apenas do teste');
+    await page.locator('#season-start').fill(offset(-30));
+    await page.locator('#season-end').fill(offset(30));
+    await seasonPost(page.getByRole('button', { name: 'Criar época', exact: true }), '/admin/epocas/criar', 303);
+    await seasonPost(page.getByRole('button', { name: 'Pré-visualizar alteração', exact: true }), '/selecionar', 200);
+    await seasonPost(page.getByRole('button', { name: 'Confirmar época atual', exact: true }), '/selecionar', 303);
+    await page.goto(memberURL);
+    await expect(page.getByRole('link', { name: 'Configurar épocas', exact: true })).toHaveCount(0);
+  }
   await page.getByRole('link', { name: 'Alterar participação e consultar histórico' }).click();
   const classificationURL = page.url();
   if (programme === 'Competição') {
@@ -52,6 +90,8 @@ async function assignCurrentParticipation(page, programme, beforeConfirmation = 
     await page.locator('#scope').selectOption(await page.locator('#scope option').filter({ hasText: programme }).getAttribute('value'));
     await page.getByLabel('Código único nesta época e programa', { exact: true }).fill(code);
     await page.getByLabel('Nome do escalão', { exact: true }).fill(categoryName);
+    await page.locator('#birth_date_from').fill('1980-01-01');
+    await page.locator('#birth_date_to').fill('2015-12-31');
     await page.getByRole('button', { name: 'Criar escalão', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Definições acessíveis' })).toContainText(`${categoryName} (${code})`);
     await page.goto(classificationURL);
@@ -60,6 +100,7 @@ async function assignCurrentParticipation(page, programme, beforeConfirmation = 
   } else {
     await page.locator('#scope').selectOption(await page.locator('#scope option').filter({ hasText: programme }).getAttribute('value'));
   }
+  const seasonID = (await page.locator('#scope').inputValue()).split(':', 1)[0];
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Lisbon' }).format(new Date());
   await page.getByLabel('Data de início', { exact: true }).fill(today);
   await page.getByRole('button', { name: 'Guardar participação', exact: true }).click();
@@ -83,9 +124,60 @@ async function assignCurrentParticipation(page, programme, beforeConfirmation = 
   } else {
     expect(confirmation.status()).toBe(200);
   }
-  await expect(page.getByRole('status')).toContainText('Guardada:');
+  await expect(page.getByRole('status').filter({ hasText: 'Guardada:' })).toContainText('Guardada:');
   await expect(page.getByRole('region', { name: 'Histórico de participação' })).toContainText(programme);
   await page.goto(memberURL);
+  return seasonID;
+}
+
+// The week workspace uses native disclosure/task navigation, with dated roster review.
+async function revealTrainingControl(control) {
+  await expect(control).toHaveCount(1);
+  for (let i = 0; i < 24 && !(await control.isVisible()); i++) {
+    const closed = control.locator('xpath=ancestor::details[not(@open)][last()]');
+    await expect(closed).toHaveCount(1);
+    await closed.locator(':scope > summary').click();
+  }
+  await expect(control).toBeVisible();
+}
+
+async function openTrainingDetails(page) {
+  const details = page.locator('#workspace-details');
+  if (await details.count() && (await details.getAttribute('open')) === null) {
+    await details.locator(':scope > summary').click();
+  }
+}
+
+async function createTrainingGroupWithAthlete(page, name, athlete, seasonID) {
+  const root = '/admin/treinos/estruturados';
+  await page.goto(`${root}/grupos/criar`);
+  await page.getByLabel('Nome do grupo', { exact: false }).fill(name);
+  await page.getByLabel('Participação do grupo', { exact: false }).selectOption({ label: 'Competição' });
+  await page.getByRole('button', { name: 'Criar grupo', exact: true }).click();
+  await expect(page.getByText('Ainda sem atletas', { exact: true })).toBeVisible();
+  const group = new URL(page.url()).pathname.split('/').at(-1);
+  await page.goto(`${root}/grupos/${group}/atletas`);
+  await page.getByLabel('Época', { exact: false }).selectOption(seasonID);
+  await page.getByLabel('Data da colocação', { exact: false }).fill(new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Lisbon' }).format(new Date()));
+  await page.getByLabel('Nome do atleta', { exact: true }).fill(athlete);
+  await page.getByRole('button', { name: 'Pesquisar', exact: true }).click();
+  async function confirmPlacement() {
+    await page.getByRole('checkbox', { name: athlete, exact: true }).check();
+    const response = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === `${root}/grupos/${group}/atletas`);
+    await page.getByRole('button', { name: 'Adicionar atletas', exact: true }).click();
+    return (await response).status();
+  }
+  let status = await confirmPlacement();
+  if (status === 409) {
+    // A concurrent staff change requires a new signed roster selection.
+    await expect(page.getByRole('alert')).toContainText('O grupo foi alterado');
+    await page.getByRole('link', { name: 'Recarregar e rever o grupo', exact: true }).click();
+    status = await confirmPlacement();
+  }
+  expect(status).toBe(303);
+  await page.waitForLoadState('networkidle');
+  await expect(page.locator('body')).toContainText(athlete);
+  return group;
 }
 
 async function verificationLinkFor(recipient) {
@@ -424,42 +516,67 @@ test.describe('authentication', () => {
   test('requests and verifies authority before dependent profile access', async ({ page, browser }) => {
     test.setTimeout(300_000);
 
+    async function fillReadyPassword(actorPage, field) {
+      // pageshow clears sensitive fields after all navigation resources finish.
+      await actorPage.waitForLoadState('networkidle');
+      await field.fill(password);
+      await expect(field).toHaveValue(password);
+      expect(await field.evaluate(input => input.checkValidity())).toBe(true);
+    }
+
+    async function submitReadyForm(button) {
+      expect(await button.evaluate(control => control.form.checkValidity())).toBe(true);
+      expect(await button.evaluate(control => [...control.form.querySelectorAll('input[type="password"]')].every(input => input.value.length > 0))).toBe(true);
+      await button.click();
+    }
+
     await page.goto('/login');
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
-    await page.getByLabel('Palavra-passe').fill(password);
-    await page.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(page, page.getByLabel('Palavra-passe'));
+    await submitReadyForm(page.getByRole('button', { name: 'Iniciar sessão' }));
     const invitationTokens = [];
     for (let index = 0; index < 2; index += 1) {
       await page.goto('/admin/representacoes/convites');
       const createInvitation = page.locator('section[aria-labelledby="guardian-invitation-create-title"]');
       await createInvitation.getByLabel('Email do adulto').fill(guardianEmail);
-      await createInvitation.getByLabel('Palavra-passe atual').fill(password);
-      await createInvitation.getByRole('button', { name: 'Criar convite' }).click();
+      await fillReadyPassword(page, createInvitation.getByLabel('Palavra-passe atual'));
+      await submitReadyForm(createInvitation.getByRole('button', { name: 'Criar convite' }));
       invitationTokens.push(await page.locator('code').textContent());
     }
-    await page.context().clearCookies();
+    // An isolated guest context cannot inherit late Set-Cookie responses from the admin page.
+    const registrationContext = await browser.newContext({ baseURL });
+    const registrationPage = await registrationContext.newPage();
 
-    await page.goto('/registo');
-    await page.getByLabel('Nome').fill('Guardião de teste');
-    await page.getByLabel('Correio eletrónico').fill(guardianEmail);
-    await page.getByLabel('Data de nascimento').fill('1980-01-01');
-    await page.locator('#password').fill(password);
-    await page.getByLabel('Confirmar palavra-passe').fill(password);
-    await page.getByLabel(/Aceito os termos gerais/).check();
-    await page.waitForTimeout(2100);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
-    await expect(page).toHaveURL('/today');
-    await expectNoSeriousAxeViolations(page);
-    await page.goto(await verificationLinkFor(guardianEmail));
-    await expect(page).toHaveURL(/\/perfil$/);
-    await page.getByRole('button', { name: 'Terminar sessão' }).click();
+    await registrationPage.goto('/registo');
+    await registrationPage.getByLabel('Nome').fill('Guardião de teste');
+    await registrationPage.getByLabel('Correio eletrónico').fill(guardianEmail);
+    await registrationPage.getByLabel('Data de nascimento').fill('1980-01-01');
+    await fillReadyPassword(registrationPage, registrationPage.locator('#password'));
+    await fillReadyPassword(registrationPage, registrationPage.getByLabel('Confirmar palavra-passe'));
+    await registrationPage.getByLabel(/Aceito os termos gerais/).check();
+    await registrationPage.waitForTimeout(2100);
+    await submitReadyForm(registrationPage.getByRole('button', { name: 'Criar conta' }));
+    await expect(registrationPage).toHaveURL('/today');
+    await expectNoSeriousAxeViolations(registrationPage);
+    await registrationPage.goto(await verificationLinkFor(guardianEmail));
+    await expect(registrationPage).toHaveURL(/\/perfil$/);
+    await registrationPage.getByRole('button', { name: 'Terminar sessão' }).click();
 
-    const context = await browser.newContext({ baseURL });
-    const interactivePage = await context.newPage();
+    await registrationPage.waitForLoadState('networkidle');
+    await registrationContext.close();
+
+    let context = await browser.newContext({ baseURL });
+    let interactivePage = await context.newPage();
+    async function startFreshActorContext() {
+      const viewport = interactivePage.viewportSize();
+      await context.close();
+      context = await browser.newContext({ baseURL, viewport });
+      interactivePage = await context.newPage();
+    }
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill(guardianEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.goto('/dashboard/guardian');
     await expect(interactivePage).toHaveURL('/dashboard/guardian');
     await interactivePage.getByRole('link', { name: 'Pedir associação' }).click();
@@ -467,18 +584,18 @@ test.describe('authentication', () => {
     await interactivePage.getByLabel('Nome').fill('X');
     await interactivePage.getByLabel('Data de nascimento').fill('2014-01-01');
     await interactivePage.getByLabel('Código de convite do clube').fill(invitationTokens[0]);
-    await interactivePage.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe atual'));
     await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
-    await interactivePage.getByRole('button', { name: 'Enviar pedido' }).click();
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Enviar pedido' }));
     await expect(interactivePage.locator('.error-summary')).toBeVisible();
     await expect(interactivePage.getByLabel('Nome')).toHaveValue('X');
 
     await interactivePage.getByLabel('Nome').fill('Menor de teste');
     await interactivePage.getByLabel('Data de nascimento').fill('2014-01-01');
     await interactivePage.getByLabel('Código de convite do clube').fill(invitationTokens[0]);
-    await interactivePage.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe atual'));
     await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
-    await interactivePage.getByRole('button', { name: 'Enviar pedido' }).click();
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Enviar pedido' }));
 
     await expect(interactivePage).toHaveURL('/dashboard/guardian');
     await expect(interactivePage.getByRole('status')).toContainText('Pedido recebido');
@@ -492,8 +609,8 @@ test.describe('authentication', () => {
     const noJSPage = await noJSContext.newPage();
     await noJSPage.goto('/login');
     await noJSPage.getByLabel('Correio eletrónico').fill(adminEmail);
-    await noJSPage.getByLabel('Palavra-passe').fill(password);
-    await noJSPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(noJSPage, noJSPage.getByLabel('Palavra-passe'));
+    await submitReadyForm(noJSPage.getByRole('button', { name: 'Iniciar sessão' }));
     await noJSPage.goto('/admin/representacoes');
     await noJSPage.getByRole('listitem').filter({ hasText: 'Menor de teste' }).getByRole('link').click();
 	    const noJSApprove = noJSPage.locator('details').filter({ hasText: 'Aprovar representação' });
@@ -504,11 +621,11 @@ test.describe('authentication', () => {
 	    await noJSContext.close();
 
     // Change actors without depending on a particular navigation layout.
-    await context.clearCookies();
+    await startFreshActorContext();
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill(adminEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.getByRole('link', { name: 'Verificar representações' }).click();
     const queueItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
     await expect(queueItem).toContainText('A aguardar verificação');
@@ -517,18 +634,18 @@ test.describe('authentication', () => {
     await approve.locator('summary').click();
     await approve.getByLabel('Categoria de verificação').selectOption('IN_PERSON_ID_AND_CIVIL_RECORD');
     await approve.getByLabel('Motivo').selectOption('RELATIONSHIP_CONFIRMED');
-    await approve.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, approve.getByLabel('Palavra-passe atual'));
     await approve.getByLabel(/Confirmo que observei/).check();
-    await approve.getByRole('button', { name: 'Aprovar representação' }).click();
+    await submitReadyForm(approve.getByRole('button', { name: 'Aprovar representação' }));
     await expect(interactivePage).toHaveURL('/admin/representacoes');
     await expect(interactivePage.getByRole('status')).toHaveText('Decisão de representação registada.');
 
     // Change actors without depending on a particular navigation layout.
-    await context.clearCookies();
+    await startFreshActorContext();
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill(guardianEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.goto('/dashboard/guardian');
     const dependentLink = interactivePage.getByRole('link', { name: 'Menor de teste' });
     await expect(dependentLink).toBeVisible();
@@ -547,11 +664,11 @@ test.describe('authentication', () => {
     await interactivePage.setViewportSize({ width: 1280, height: 800 });
     // Reset the actor explicitly. Waiting on the responsive logout control here
     // can leave this long journey on the guardian page until the test timeout.
-    await context.clearCookies();
+    await startFreshActorContext();
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill(adminEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.getByRole('link', { name: 'Verificar representações' }).click();
     const verifiedItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
     await expect(verifiedItem).toContainText('Representação verificada');
@@ -563,10 +680,10 @@ test.describe('authentication', () => {
     await suspend.locator('summary').click();
     await suspend.getByLabel('Categoria de verificação').selectOption('CLUB_REGISTRATION_RECORD');
     await suspend.getByLabel('Motivo').selectOption('CONFLICT');
-    await suspend.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, suspend.getByLabel('Palavra-passe atual'));
     await suspend.getByLabel(/Confirmo que observei/).check();
     await suspend.getByLabel(/termina imediatamente o acesso/).check();
-    await suspend.getByRole('button', { name: 'Suspender acesso' }).click();
+    await submitReadyForm(suspend.getByRole('button', { name: 'Suspender acesso' }));
     const suspendedItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
     await expect(suspendedItem).toContainText('Em revisão pelo clube');
     await suspendedItem.getByRole('link').click();
@@ -577,11 +694,11 @@ test.describe('authentication', () => {
 
     // A conflicted verifier sees a focused, read-only task surface without the
     // global shell, so reset the session before continuing as the guardian.
-    await context.clearCookies();
+    await startFreshActorContext();
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill(guardianEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.goto('/dashboard/guardian');
     await expect(interactivePage.getByRole('link', { name: 'Menor de teste' })).toHaveCount(0);
     await expect(interactivePage.getByText('Em revisão pelo clube')).toBeVisible();
@@ -594,13 +711,13 @@ test.describe('authentication', () => {
     await interactivePage.getByLabel('Nome').fill('Menor rejeitado');
     await interactivePage.getByLabel('Data de nascimento').fill('2013-02-02');
     await interactivePage.getByLabel('Código de convite do clube').fill(invitationTokens[1]);
-    await interactivePage.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe atual'));
     await interactivePage.getByLabel(/Aceito a responsabilidade pelo menor a cargo/).check();
-    await interactivePage.getByRole('button', { name: 'Enviar pedido' }).click();
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Enviar pedido' }));
     await interactivePage.getByRole('button', { name: 'Terminar sessão' }).click();
     await interactivePage.getByLabel('Correio eletrónico').fill(adminEmail);
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.getByRole('link', { name: 'Verificar representações' }).click();
     const rejectionItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor rejeitado' });
     const rejectionURL = await rejectionItem.getByRole('link').getAttribute('href');
@@ -609,9 +726,9 @@ test.describe('authentication', () => {
     await reject.locator('summary').click();
     await reject.getByLabel('Categoria de verificação').selectOption('IN_PERSON_ID_AND_CIVIL_RECORD');
     await reject.getByLabel('Motivo').selectOption('AUTHORITY_NOT_ESTABLISHED');
-    await reject.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, reject.getByLabel('Palavra-passe atual'));
     await reject.getByLabel(/Confirmo que observei/).check();
-    await reject.getByRole('button', { name: 'Rejeitar pedido' }).click();
+    await submitReadyForm(reject.getByRole('button', { name: 'Rejeitar pedido' }));
     await interactivePage.goto(rejectionURL);
     await expect(interactivePage.getByText(/Este pedido terminou sem aprovação/)).toBeVisible();
     await expect(interactivePage.locator('#guardian-authority-decisions')).toHaveCount(0);
@@ -619,11 +736,11 @@ test.describe('authentication', () => {
     await expectNoHorizontalOverflow(interactivePage);
     await expectNoSeriousAxeViolations(interactivePage);
 
-    await context.clearCookies();
+    await startFreshActorContext();
     await interactivePage.goto('/login');
     await interactivePage.getByLabel('Correio eletrónico').fill('e2e-guardian-admin-two@example.test');
-    await interactivePage.getByLabel('Palavra-passe').fill(password);
-    await interactivePage.getByRole('button', { name: 'Iniciar sessão' }).click();
+    await fillReadyPassword(interactivePage, interactivePage.getByLabel('Palavra-passe'));
+    await submitReadyForm(interactivePage.getByRole('button', { name: 'Iniciar sessão' }));
     await interactivePage.goto('/admin/representacoes');
     const conflictedItem = interactivePage.getByRole('listitem').filter({ hasText: 'Menor de teste' });
     await conflictedItem.getByRole('link').click();
@@ -631,16 +748,16 @@ test.describe('authentication', () => {
     await resolve.locator('summary').click();
     await resolve.getByLabel('Categoria de verificação').selectOption('COURT_OR_LEGAL_AUTHORITY');
     await resolve.getByLabel('Motivo').selectOption('RELATIONSHIP_CONFIRMED');
-    await resolve.getByLabel('Palavra-passe atual').fill(password);
+    await fillReadyPassword(interactivePage, resolve.getByLabel('Palavra-passe atual'));
     await resolve.getByLabel(/Confirmo que observei/).check();
-    await resolve.getByRole('button', { name: 'Aprovar representação' }).click();
+    await submitReadyForm(resolve.getByRole('button', { name: 'Aprovar representação' }));
 
 	    const resolvedGuardianContext = await browser.newContext({ baseURL });
 	    const resolvedGuardianPage = await resolvedGuardianContext.newPage();
 	    await resolvedGuardianPage.goto('/login');
 	    await resolvedGuardianPage.getByLabel('Correio eletrónico').fill(guardianEmail);
-	    await resolvedGuardianPage.getByLabel('Palavra-passe').fill(password);
-	    await resolvedGuardianPage.getByRole('button', { name: 'Iniciar sessão' }).click();
+	    await fillReadyPassword(resolvedGuardianPage, resolvedGuardianPage.getByLabel('Palavra-passe'));
+	    await submitReadyForm(resolvedGuardianPage.getByRole('button', { name: 'Iniciar sessão' }));
 	    await expect(resolvedGuardianPage).toHaveURL('/today');
 	    await resolvedGuardianPage.goto('/dashboard/guardian');
 	    await expect(resolvedGuardianPage.getByRole('link', { name: 'Menor de teste' })).toBeVisible();
@@ -835,13 +952,7 @@ test.describe('authentication', () => {
 
     await page.getByRole('link', { name: 'Membros', exact: true }).click();
     await expect(page).toHaveURL('/admin/membros');
-    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
-    await page.locator('#member-name').fill(athleteName);
-    await page.locator('#member-email').fill(athleteEmail);
-    await page.locator('#member-birth').fill('2000-01-01');
-    await page.locator('#member-password').fill(password);
-    await page.locator('#member-password-confirmation').fill(password);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await createAdultMember(page, athleteName, athleteEmail, '2000-01-01');
     await page.getByLabel('Pesquisar membros').fill(athleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await expect(page).toHaveURL(new RegExp('/admin/membros\\?q='));
@@ -965,6 +1076,7 @@ test.describe('authentication', () => {
     test.setTimeout(600000);
     const context = await browser.newContext({ baseURL });
     const page = await context.newPage();
+    page.setDefaultTimeout(15000);
     const suffix = Date.now();
     const structuredAthleteName = `Atleta estruturado E2E ${suffix}`;
     const structuredAthleteEmail = `e2e-structured-${suffix}@example.test`;
@@ -983,26 +1095,20 @@ test.describe('authentication', () => {
     const formatDateTime = (value) => `${formatDate(value)}T${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
 
     await page.goto('/login');
+    await page.waitForLoadState('networkidle');
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/admin/membros');
-    await page.getByRole('link', { name: 'Criar conta' }).click();
-    await page.locator('#member-name').fill(structuredAthleteName);
-    await page.locator('#member-email').fill(structuredAthleteEmail);
-    await page.locator('#member-birth').fill('2005-01-01');
-    await page.locator('#member-password').fill(password);
-    await page.locator('#member-password-confirmation').fill(password);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
-    await expect(page.getByText('Conta criada.', { exact: true })).toBeVisible();
+    await createAdultMember(page, structuredAthleteName, structuredAthleteEmail, '2005-01-01');
     await page.getByLabel('Pesquisar membros').fill(structuredAthleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: structuredAthleteName }).click();
-    await assignCurrentParticipation(page, 'Competição');
-    await page.goto('/admin/treinos/estruturados');
-
-    await expect(page.getByRole('heading', { name: 'Planeamento semanal', level: 1 })).toBeVisible();
-    await page.getByRole('tab', { name: 'Perfis de intensidade' }).click();
+    const seasonID = await assignCurrentParticipation(page, 'Competição');
+    const groupID = await createTrainingGroupWithAthlete(page, groupName, structuredAthleteName, seasonID);
+    await page.goto(`/admin/treinos/estruturados?group_id=${groupID}`);
+    await expect(page.getByRole('heading', { name: groupName, level: 1 })).toBeVisible();
+    await openTrainingDetails(page);
     await page.getByRole('button', { name: 'Criar perfil ou nova revisão' }).click();
     const profileForm = page.locator('form[action="/admin/treinos/estruturados/agua/perfis"]');
     await profileForm.getByLabel('Nome').fill(intensityProfileName);
@@ -1010,7 +1116,7 @@ test.describe('authentication', () => {
     await profileForm.getByLabel('Notas (opcional)').fill('Perfil do clube; R5 por confirmar');
     await profileForm.getByRole('button', { name: 'Guardar perfil' }).click();
     await expect(page.getByRole('status')).toHaveText('Nova revisão do perfil de intensidade criada.');
-    await page.getByRole('tab', { name: 'Perfis de intensidade' }).click();
+    await openTrainingDetails(page);
     const profileCard = page.getByRole('heading', { name: intensityProfileName }).locator('xpath=ancestor::article[1]');
     await profileCard.getByRole('button', { name: 'Adicionar ou atualizar zona' }).click();
     const zoneForm = profileCard.locator('form[action$="/zonas"]');
@@ -1019,34 +1125,29 @@ test.describe('authentication', () => {
     await zoneForm.getByLabel('Significado para o atleta').fill('Ritmo sustentável para a duração ou distância prescrita');
     await zoneForm.getByRole('button', { name: 'Guardar zona' }).click();
     await expect(page.getByRole('status')).toHaveText('Zona de intensidade adicionada.');
-    await page.getByRole('tab', { name: 'Plano semanal' }).click();
-    await page.getByRole('link', { name: 'Criar grupo' }).click();
-    const groupForm = page.locator('form[action="/admin/treinos/estruturados/grupos"]');
-    await groupForm.getByLabel('Nome').fill(groupName);
-    await groupForm.getByLabel('Programa').selectOption({ label: 'Competição' });
-    await groupForm.getByLabel(new RegExp(structuredAthleteName)).check();
-    await groupForm.getByRole('button', { name: 'Criar grupo' }).click();
-    await expect(page.getByRole('status')).toHaveText('Grupo de treino criado.');
+    await page.goto(`/admin/treinos/estruturados/grupos/${groupID}`);
 
     await page.getByRole('link', { name: 'Criar semana' }).click();
     const weekForm = page.locator('form[action="/admin/treinos/estruturados/semanas"]');
+    await revealTrainingControl(weekForm.getByLabel('Grupo'));
     await weekForm.getByLabel('Grupo').selectOption({ label: groupName });
     await weekForm.getByLabel('Título').fill(weekTitle);
     await weekForm.getByLabel('Segunda-feira da semana').fill(formatDate(monday));
 	await weekForm.getByLabel('Carga planeada (%)').fill('70');
     await weekForm.getByRole('button', { name: 'Criar semana' }).click();
     await expect(page.getByRole('status')).toHaveText('Semana de treino criada.');
-    const week = page.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
-    await expect(week).toContainText(`Época ${today.getFullYear()}`);
+    await openTrainingDetails(page);
+    const week = page.locator('#training-plan').getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
+    await expect(week).toContainText('Época sintética E2E');
 	await expect(week).toContainText('Carga planeada: 70%');
 	await week.getByRole('button', { name: 'Atualizar carga planeada' }).click();
 	const weekLoadForm = week.locator('form[action$="/carga"]');
 	await weekLoadForm.getByLabel('Carga planeada (%)').fill('65');
 	await weekLoadForm.getByRole('button', { name: 'Guardar carga planeada' }).click();
 	await expect(page.getByRole('status')).toHaveText('Carga planeada da semana atualizada.');
-	await expect(page.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]')).toContainText('Carga planeada: 65%');
+	await expect(page.locator('#training-plan').getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]')).toContainText('Carga planeada: 65%');
 
-    await page.getByRole('link', { name: 'Criar sessão' }).click();
+    await page.locator('#criar-sessao-estruturada > summary').click();
     const sessionForm = page.locator('form[action="/admin/treinos/estruturados/sessoes"]');
     const weekOption = sessionForm.getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
     await sessionForm.getByLabel('Semana').selectOption(await weekOption.getAttribute('value'));
@@ -1200,7 +1301,7 @@ test.describe('authentication', () => {
     await saveRoutineForm.getByRole('button', { name: 'Guardar rotina' }).click();
     await expect(page.getByRole('status')).toHaveText('Rotina guardada como cópia independente.');
 
-    await page.getByRole('tab', { name: 'Rotinas' }).click();
+    await openTrainingDetails(page);
     const routineLibrary = page.getByRole('heading', { name: 'Biblioteca de rotinas' }).locator('xpath=ancestor::section[1]');
     await routineLibrary.getByLabel('Etiqueta').fill('ginásio');
     await routineLibrary.getByRole('button', { name: 'Filtrar rotinas' }).click();
@@ -1216,24 +1317,26 @@ test.describe('authentication', () => {
     await expect(session.getByText('Supino', { exact: true })).toHaveCount(2);
 
     const copiedWeekTitle = `Microciclo copiado E2E ${suffix}`;
-    const sourceWeek = page.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
+    const sourceWeek = page.locator('#training-plan').getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
     await sourceWeek.getByRole('button', { name: 'Copiar semana' }).click();
     const copyWeekForm = sourceWeek.locator('input[name="week_start"]').locator('xpath=ancestor::form[1]');
     await copyWeekForm.getByLabel('Título da nova semana').fill(copiedWeekTitle);
     await copyWeekForm.getByLabel('Nova segunda-feira').fill(formatDate(nextMonday));
     await copyWeekForm.getByRole('button', { name: 'Criar cópia da semana' }).click();
     await expect(page.getByRole('status')).toHaveText('Semana copiada como novo rascunho independente.');
-    const plannerSelector = page.locator('.structured-planner__selector');
+    const plannerSelector = page.locator('.week-workspace__selector');
     const copiedWeekOption = plannerSelector.getByLabel('Semana').locator('option').filter({ hasText: copiedWeekTitle });
     await plannerSelector.getByLabel('Semana').selectOption(await copiedWeekOption.getAttribute('value'));
-    await plannerSelector.getByRole('button', { name: 'Abrir contexto' }).click();
-    const copiedWeek = page.getByRole('heading', { name: copiedWeekTitle }).locator('xpath=ancestor::section[1]');
+    await plannerSelector.getByRole('button', { name: 'Abrir semana' }).click();
+    await openTrainingDetails(page);
+    const copiedWeek = page.locator('#training-plan').getByRole('heading', { name: copiedWeekTitle }).locator('xpath=ancestor::section[1]');
     await expect(copiedWeek).toContainText(sessionTitle);
     await expect(copiedWeek).toContainText('Prancha');
 
-    const sourceWeekOption = page.locator('.structured-planner__selector').getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
-    await page.locator('.structured-planner__selector').getByLabel('Semana').selectOption(await sourceWeekOption.getAttribute('value'));
-    await page.locator('.structured-planner__selector').getByRole('button', { name: 'Abrir contexto' }).click();
+    const sourceWeekOption = page.locator('.week-workspace__selector').getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
+    await page.locator('.week-workspace__selector').getByLabel('Semana').selectOption(await sourceWeekOption.getAttribute('value'));
+    await page.locator('.week-workspace__selector').getByRole('button', { name: 'Abrir semana' }).click();
+    await openTrainingDetails(page);
     const sourceWeekToggle = sourceWeek.locator(':scope > .training-card__header').getByRole('button');
     if ((await sourceWeekToggle.getAttribute('aria-expanded')) === 'false') await sourceWeekToggle.click();
     session = sourceWeek.locator('article.training-card--session').filter({ hasText: sessionTitle });
@@ -1244,6 +1347,7 @@ test.describe('authentication', () => {
     await expect(waterSegment).toContainText("2x7' jogo · HxH · GR e pivot");
     await waterSegment.getByText('Ações do segmento', { exact: true }).click();
     await waterSegment.locator('.record-item__actions').last().getByRole('button', { name: 'Subir segmento' }).click();
+    await openTrainingDetails(page);
     session = sourceWeek.locator('article.training-card--session').filter({ hasText: sessionTitle });
     await expect(session.getByRole('heading', { name: /Água · Ataque 3 e defesa 2-2/ })).toBeVisible();
 
@@ -1253,19 +1357,18 @@ test.describe('authentication', () => {
     await context.close();
 
     const accessibilityContext = await browser.newContext({ baseURL });
+    accessibilityContext.setDefaultTimeout(15000);
     const accessibilityPage = await accessibilityContext.newPage();
     await accessibilityPage.goto('/login');
     await accessibilityPage.getByLabel('Correio eletrónico').fill(adminEmail);
     await accessibilityPage.getByLabel('Palavra-passe').fill(password);
     await accessibilityPage.getByRole('button', { name: 'Iniciar sessão' }).click();
-    await accessibilityPage.goto('/admin/treinos/estruturados');
-    const accessiblePlanner = accessibilityPage.locator('.structured-planner__selector');
-    await accessiblePlanner.getByLabel('Grupo').selectOption({ label: groupName });
-    await accessiblePlanner.getByRole('button', { name: 'Abrir contexto' }).click();
-    const accessibleWeekOption = accessibilityPage.locator('.structured-planner__selector').getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
-    await accessibilityPage.locator('.structured-planner__selector').getByLabel('Semana').selectOption(await accessibleWeekOption.getAttribute('value'));
-    await accessibilityPage.locator('.structured-planner__selector').getByRole('button', { name: 'Abrir contexto' }).click();
-    const accessibleSourceWeek = accessibilityPage.getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
+    await accessibilityPage.goto(`/admin/treinos/estruturados?group_id=${groupID}`);
+    const accessibleWeekOption = accessibilityPage.locator('.week-workspace__selector').getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
+    await accessibilityPage.locator('.week-workspace__selector').getByLabel('Semana').selectOption(await accessibleWeekOption.getAttribute('value'));
+    await accessibilityPage.locator('.week-workspace__selector').getByRole('button', { name: 'Abrir semana' }).click();
+    await openTrainingDetails(accessibilityPage);
+    const accessibleSourceWeek = accessibilityPage.locator('#training-plan').getByRole('heading', { name: weekTitle }).locator('xpath=ancestor::section[1]');
     const accessibleWeekToggle = accessibleSourceWeek.getByRole('button', { name: 'Mostrar' }).first();
     if (await accessibleWeekToggle.isVisible()) await accessibleWeekToggle.click();
     await expect(accessibleSourceWeek.getByRole('heading', { name: sessionTitle })).toBeVisible();
@@ -1275,6 +1378,7 @@ test.describe('authentication', () => {
 
   test('administrator publishes an immutable private training prescription', async ({ page }) => {
     test.setTimeout(600000);
+    page.setDefaultTimeout(15000);
     const suffix = Date.now();
     const athleteName = `Atleta publicação E2E ${suffix}`;
     const athleteEmail = `e2e-publication-${suffix}@example.test`;
@@ -1291,39 +1395,27 @@ test.describe('authentication', () => {
     const formatDateTime = (value) => `${formatDate(value)}T${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}`;
 
     await page.goto('/login');
+    await page.waitForLoadState('networkidle');
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/admin/membros');
-    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
-    await page.locator('#member-name').fill(athleteName);
-    await page.locator('#member-email').fill(athleteEmail);
-    await page.locator('#member-birth').fill('2005-01-01');
-    await page.locator('#member-password').fill(password);
-    await page.locator('#member-password-confirmation').fill(password);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await createAdultMember(page, athleteName, athleteEmail, '2005-01-01');
     await page.getByLabel('Pesquisar membros').fill(athleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: athleteName }).click();
-    await assignCurrentParticipation(page, 'Competição');
-
-    await page.goto('/admin/treinos/estruturados');
-    await page.getByRole('link', { name: 'Criar grupo' }).click();
-    const groupForm = page.locator('form[action="/admin/treinos/estruturados/grupos"]');
-    await groupForm.getByLabel('Nome').fill(groupName);
-    await groupForm.getByLabel('Programa').selectOption({ label: 'Competição' });
-    await groupForm.getByLabel(new RegExp(athleteName)).check();
-    await groupForm.getByRole('button', { name: 'Criar grupo' }).click();
-    await expect(page.getByRole('status')).toHaveText('Grupo de treino criado.');
-    await page.waitForLoadState('domcontentloaded');
+    const seasonID = await assignCurrentParticipation(page, 'Competição');
+    const groupID = await createTrainingGroupWithAthlete(page, groupName, athleteName, seasonID);
+    await page.goto(`/admin/treinos/estruturados/grupos/${groupID}`);
     await page.getByRole('link', { name: 'Criar semana' }).click();
-    await expect(page.locator('dialog#criar-semana-treino')).toBeVisible();
+    await expect(page.locator('#criar-semana-treino')).toBeVisible();
     const weekForm = page.locator('form[action="/admin/treinos/estruturados/semanas"]');
+    await revealTrainingControl(weekForm.getByLabel('Grupo'));
     await weekForm.getByLabel('Grupo').selectOption({ label: groupName });
     await weekForm.getByLabel('Título').fill(weekTitle);
     await weekForm.getByLabel('Segunda-feira da semana').fill(formatDate(monday));
     await weekForm.getByRole('button', { name: 'Criar semana' }).click();
-    await page.getByRole('link', { name: 'Criar sessão' }).click();
+    await page.locator('#criar-sessao-estruturada > summary').click();
     const sessionForm = page.locator('form[action="/admin/treinos/estruturados/sessoes"]');
     const weekOption = sessionForm.getByLabel('Semana').locator('option').filter({ hasText: weekTitle });
     await sessionForm.getByLabel('Semana').selectOption(await weekOption.getAttribute('value'));
@@ -1332,14 +1424,38 @@ test.describe('authentication', () => {
     await sessionForm.getByLabel('Fim').fill(formatDateTime(endsAt));
     await sessionForm.getByRole('button', { name: 'Criar sessão' }).click();
 
-    await page.getByRole('tab', { name: 'Publicar' }).click();
-    let publicationCard = page.getByRole('heading', { name: weekTitle, exact: true }).locator('xpath=ancestor::article[1]');
+    await openTrainingDetails(page);
+    let publicationCard = page.locator('#training-publication').getByRole('heading', { name: weekTitle, exact: true }).locator('xpath=ancestor::article[1]');
     await expect(publicationCard).toContainText('Pré-visualização: 1 novas · 0 alteradas · 0 removidas · 0 sem alterações');
     await publicationCard.getByLabel('Resumo desta revisão').fill('Primeira publicação E2E');
-    await publicationCard.getByRole('button', { name: 'Pré-visualizado · publicar revisão' }).click();
+    const plannerURL = page.url();
+    const [previewResponse] = await Promise.all([
+      page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/publicar')),
+      publicationCard.getByRole('button', { name: 'Rever destinatários', exact: true }).click(),
+    ]);
+    expect(previewResponse.status()).toBe(200);
+    await expect(page.getByRole('heading', { name: 'Destinatários desta revisão', exact: true })).toBeVisible();
+    await expect(page.getByRole('listitem').filter({ hasText: athleteName })).toBeVisible();
+    const confirmation = page.locator('form').filter({ has: page.locator('[name="publication_intent"][value="confirm"]') });
+    await expect(confirmation.locator('[name="reviewed_latest_revision"]')).toHaveValue('0');
+    await expect(confirmation.locator('[name="reviewed_latest_id"]')).toHaveValue('');
+    await expect(confirmation.locator('[name="review_token"]')).not.toHaveValue('');
+    const unchangedPlanner = await page.context().newPage();
+    await unchangedPlanner.goto(plannerURL);
+    await openTrainingDetails(unchangedPlanner);
+    const unchangedCard = unchangedPlanner.locator('#training-publication').getByRole('heading', { name: weekTitle, exact: true }).locator('xpath=ancestor::article[1]');
+    await expect(unchangedCard).toContainText('Rascunho nunca publicado');
+    await expect(unchangedCard).not.toContainText('revisão 1');
+    await unchangedPlanner.close();
+    await expect(confirmation.locator('[name="change_summary"]')).toHaveValue('Primeira publicação E2E');
+    const [confirmedResponse] = await Promise.all([
+      page.waitForResponse(r => r.request().method() === 'POST' && r.url().endsWith('/publicar')),
+      confirmation.getByRole('button', { name: 'Publicar revisão', exact: true }).click(),
+    ]);
+    expect(confirmedResponse.status()).toBe(303);
     await expect(page.getByRole('status')).toHaveText('Revisão 1 publicada para 1 prescrições privadas.');
-    await page.getByRole('tab', { name: 'Publicar' }).click();
-    publicationCard = page.getByRole('heading', { name: weekTitle, exact: true }).locator('xpath=ancestor::article[1]');
+    await openTrainingDetails(page);
+    publicationCard = page.locator('#training-publication').getByRole('heading', { name: weekTitle, exact: true }).locator('xpath=ancestor::article[1]');
     await expect(publicationCard).toContainText('Publicado · sem alterações pendentes');
     await expect(publicationCard).toContainText('0 novas · 0 alteradas · 0 removidas · 1 sem alterações');
 
@@ -1460,13 +1576,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: 'Membros', exact: true }).click();
-    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
-    await page.locator('#member-name').fill(waitlistedName);
-    await page.locator('#member-email').fill(waitlistedEmail);
-    await page.locator('#member-birth').fill('2000-01-01');
-    await page.locator('#member-password').fill(password);
-    await page.locator('#member-password-confirmation').fill(password);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await createAdultMember(page, waitlistedName, waitlistedEmail, '2000-01-01');
     await page.getByLabel('Pesquisar membros').fill(waitlistedName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: waitlistedName }).click();
@@ -1661,17 +1771,12 @@ test.describe('authentication', () => {
     const title = `Notícia E2E ${Date.now()}`;
     const publishedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString().slice(0, 16);
     await page.goto('/login');
+    await page.waitForLoadState('networkidle');
     await page.getByLabel('Correio eletrónico').fill(adminEmail);
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: 'Membros', exact: true }).click();
-    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
-    await page.locator('#member-name').fill(memberName);
-    await page.locator('#member-email').fill(leisureEmail);
-    await page.locator('#member-birth').fill('2000-01-01');
-    await page.locator('#member-password').fill(password);
-    await page.locator('#member-password-confirmation').fill(password);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await createAdultMember(page, memberName, leisureEmail, '2000-01-01');
     await page.getByLabel('Pesquisar membros').fill(memberName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: memberName }).click();

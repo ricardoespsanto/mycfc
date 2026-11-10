@@ -123,7 +123,27 @@ func TestDisposableReleaseAtomicReplacementAndRetiredRetry(t *testing.T) {
 		}
 		return conn
 	}
-	t.Run("success and permanent retirement", func(t *testing.T) {
+	t.Run("current candidate refuses retired reset without mutation", func(t *testing.T) {
+		conn := setup(t)
+		before := func() string {
+			var b string
+			if err := conn.QueryRow(ctx, `SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(u) ORDER BY id) FROM users u),(SELECT jsonb_agg(to_jsonb(h)) FROM synthetic_history h),(SELECT rolcanlogin FROM pg_roles WHERE rolname='mycfc_app'),(SELECT jsonb_agg(version ORDER BY version) FROM mycfc_meta.schema_migrations))::text`).Scan(&b); err != nil {
+				t.Fatal(err)
+			}
+			return b
+		}
+		expected := before()
+		if err := BootstrapDisposableRelease(ctx, conn, "mycfc", credentials); err == nil {
+			t.Fatal("current candidate accepted retired reset")
+		}
+		if got := before(); got != expected {
+			t.Fatal("retired-reset refusal modified records, ledger or login state")
+		}
+	})
+	t.Run("archived success and permanent retirement unsupported on current candidate", func(t *testing.T) {
+		if os.Getenv("MYCFC_RUN_ARCHIVED_RELEASE_REHEARSALS") != "1" {
+			t.Skip("archived retired reset success; current candidate must refuse reset")
+		}
 		conn := setup(t)
 		var id, hash string
 		if err := conn.QueryRow(ctx, "SELECT id::text,password_hash FROM users WHERE email='retained@example.test'").Scan(&id, &hash); err != nil {
@@ -200,22 +220,27 @@ func TestDisposableReleaseAtomicReplacementAndRetiredRetry(t *testing.T) {
 			t.Fatal("invalid administrator reset predecessor")
 		}
 	})
-	// Inject driver faults at transaction boundaries, retaining a real PostgreSQL
-	// transaction. Every failure must roll back DDL/identity and redact DETAIL.
-	for _, stage := range []string{"LOCK TABLE public.users", "CREATE TEMP TABLE retained_disposable_admin", "DROP SCHEMA", "CREATE SCHEMA public", "SET LOCAL ROLE", "CREATE TABLE mycfc_meta.schema_migrations", "INSERT INTO mycfc_meta.schema_migrations", "RESET ROLE", "INSERT INTO public.users", "INSERT INTO public.user_platform_roles", "REVOKE ALL ON DATABASE", "REVOKE ALL ON SCHEMA public", "REVOKE ALL ON ALL TABLES", "CREATE SCHEMA mycfc_disposable_release", "INSERT INTO mycfc_disposable_release.completion", "CREATE FUNCTION mycfc_disposable_release.matches"} {
-		t.Run("rollback "+stage, func(t *testing.T) {
-			conn := setup(t)
-			fault := &disposableFaultConnection{Conn: conn, stage: stage}
-			err := BootstrapDisposableRelease(ctx, fault, "mycfc", credentials)
-			if err == nil || strings.Contains(err.Error(), "private-driver-detail") {
-				t.Fatalf("unsafe fault response: %v", err)
-			}
-			var exists bool
-			if err := conn.QueryRow(ctx, "SELECT to_regclass('public.synthetic_history') IS NOT NULL").Scan(&exists); err != nil || !exists {
-				t.Fatalf("failed replacement committed: %v", err)
-			}
-		})
-	}
+	t.Run("archived reset transaction fault injection unsupported on current candidate", func(t *testing.T) {
+		if os.Getenv("MYCFC_RUN_ARCHIVED_RELEASE_REHEARSALS") != "1" {
+			t.Skip("archived reset executor unreachable behind current candidate guard")
+		}
+		// Inject driver faults at transaction boundaries, retaining a real PostgreSQL
+		// transaction. Every failure must roll back DDL/identity and redact DETAIL.
+		for _, stage := range []string{"LOCK TABLE public.users", "CREATE TEMP TABLE retained_disposable_admin", "DROP SCHEMA", "CREATE SCHEMA public", "SET LOCAL ROLE", "CREATE TABLE mycfc_meta.schema_migrations", "INSERT INTO mycfc_meta.schema_migrations", "RESET ROLE", "INSERT INTO public.users", "INSERT INTO public.user_platform_roles", "REVOKE ALL ON DATABASE", "REVOKE ALL ON SCHEMA public", "REVOKE ALL ON ALL TABLES", "CREATE SCHEMA mycfc_disposable_release", "INSERT INTO mycfc_disposable_release.completion", "CREATE FUNCTION mycfc_disposable_release.matches"} {
+			t.Run("rollback "+stage, func(t *testing.T) {
+				conn := setup(t)
+				fault := &disposableFaultConnection{Conn: conn, stage: stage}
+				err := BootstrapDisposableRelease(ctx, fault, "mycfc", credentials)
+				if err == nil || strings.Contains(err.Error(), "private-driver-detail") {
+					t.Fatalf("unsafe fault response: %v", err)
+				}
+				var exists bool
+				if err := conn.QueryRow(ctx, "SELECT to_regclass('public.synthetic_history') IS NOT NULL").Scan(&exists); err != nil || !exists {
+					t.Fatalf("failed replacement committed: %v", err)
+				}
+			})
+		}
+	})
 }
 
 type disposableFaultConnection struct {

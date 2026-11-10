@@ -65,30 +65,46 @@ func TestMemberLoginID(t *testing.T) {
 	}
 }
 
-func TestCurrentSeasonUsesExistingCreatesMissingAndPropagatesFailures(t *testing.T) {
-	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
-	for _, tc := range []struct {
-		name      string
-		lookupErr error
-		createErr error
-		wantErr   bool
-		created   bool
-	}{
-		{name: "existing season"},
-		{name: "missing season creates current year", lookupErr: pgx.ErrNoRows, created: true},
-		{name: "lookup failure", lookupErr: errors.New("database unavailable"), wantErr: true},
-		{name: "creation failure", lookupErr: pgx.ErrNoRows, createErr: errors.New("database unavailable"), wantErr: true, created: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			store := &memberWorkflowStore{season: dbgen.Season{ID: uuid.New(), Name: "Existente"}, seasonErr: tc.lookupErr, createSeasonErr: tc.createErr}
-			season, err := (Members{Store: store, Location: time.UTC, Now: func() time.Time { return now }}).currentSeason(t.Context())
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("season=%#v error=%v", season, err)
-			}
-			if tc.created && (store.createdSeason.Code != "2026" || store.createdSeason.StartsOn.Time != time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
-				t.Fatalf("created season=%#v", store.createdSeason)
-			}
-		})
+func TestCurrentSeasonReadsOnlyAndPreservesMissingSetup(t *testing.T) {
+	for _, lookupErr := range []error{nil, pgx.ErrNoRows, errors.New("database unavailable")} {
+		store := &memberWorkflowStore{season: dbgen.Season{ID: uuid.New(), Name: "Existente"}, seasonErr: lookupErr}
+		_, err := (Members{Store: store}).currentSeason(t.Context())
+		if !errors.Is(err, lookupErr) {
+			t.Fatalf("lookup error=%v want=%v", err, lookupErr)
+		}
+		if store.createdSeason.Code != "" {
+			t.Fatal("read created a season")
+		}
+	}
+}
+
+func TestMemberDetailWithoutSeasonDoesNotCreateAndMembershipIsActionable(t *testing.T) {
+	memberID, programmeID := uuid.New(), uuid.New()
+	for _, method := range []string{"GET", "POST"} {
+		store := &memberWorkflowStore{member: dbgen.GetMemberForAdminRow{ID: memberID, Name: "Member without season", IsActive: true}, seasonErr: pgx.ErrNoRows, programmes: []dbgen.Programme{{ID: programmeID, NamePt: "Lazer"}}}
+		r := httptest.NewRequest(method, "/admin/membros/"+memberID.String(), strings.NewReader(url.Values{"programme_id": {programmeID.String()}}.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.SetPathValue("id", memberID.String())
+		w := httptest.NewRecorder()
+		h := Members{Store: store}
+		if method == "GET" {
+			h.Detail(w, r)
+		} else {
+			h.Membership(w, r)
+		}
+		want := 200
+		if method == "POST" {
+			want = 422
+		}
+		if w.Code != want || !strings.Contains(w.Body.String(), "/admin/epocas") || !strings.Contains(w.Body.String(), "Member without season") {
+			t.Fatalf("%s status=%d body=%s", method, w.Code, w.Body.String())
+		}
+		if method == "POST" && !strings.Contains(w.Body.String(), `href="#member-classification-title"`) {
+			t.Fatal("missing linked actionable membership error")
+		}
+		if store.createdSeason.Code != "" || store.membership.UserID != uuid.Nil {
+			t.Fatal("missing setup mutated season or membership")
+		}
 	}
 }
 

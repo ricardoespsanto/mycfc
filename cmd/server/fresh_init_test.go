@@ -5,14 +5,17 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db"
 	"github.com/cfcoimbra/mycfc/internal/releasecontract"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestFreshInitCommandDispatchAndConfigurationBoundaries(t *testing.T) {
+	allowDatabaseCommandFakeLifecycle(t)
 	if err := runServerCommand(t.Context(), []string{"fresh-init-db"}); err == nil || !strings.Contains(err.Error(), "--confirm-empty") {
 		t.Fatalf("missing explicit confirmation accepted: %v", err)
 	}
@@ -88,7 +91,7 @@ func (freshReceiptRow) Scan(dest ...any) error {
 	*dest[0].(*bool) = true
 	*dest[1].(*string) = releasecontract.Version
 	*dest[2].(*string) = releasecontract.Candidate
-	*dest[3].(*string) = releasecontract.FinalDigest
+	*dest[3].(*string) = releasecontract.NormalFinalDigest
 	return nil
 }
 
@@ -99,7 +102,66 @@ func (freshLedgerRow) Scan(dest ...any) error {
 
 type freshReceiptReadyConn struct{ *databaseCommandConnectionFake }
 
+func (c freshReceiptReadyConn) Begin(context.Context) (pgx.Tx, error) {
+	return freshReadyInspectionTx{conn: c}, nil
+}
+
+type freshReadyInspectionTx struct {
+	pgx.Tx
+	conn freshReceiptReadyConn
+}
+
+func (freshReadyInspectionTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+func (freshReadyInspectionTx) Rollback(context.Context) error { return nil }
+func (tx freshReadyInspectionTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "session_user::text") {
+		return freshReadyIdentityRow{}
+	}
+	if strings.Contains(sql, "c.oid::pg_catalog.text") {
+		return freshReadyShapeRow{}
+	}
+	return tx.conn.QueryRow(ctx, sql, args...)
+}
+func (freshReadyInspectionTx) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return &freshReadyVersions{versions: db.EmbeddedMigrationInventory()}, nil
+}
+
+type freshReadyIdentityRow struct{}
+
+func (freshReadyIdentityRow) Scan(dest ...any) error {
+	*dest[0].(*string) = "migration"
+	*dest[1].(*string) = "1"
+	*dest[2].(*int32) = 42
+	*dest[3].(*time.Time) = time.Unix(1, 0)
+	*dest[4].(*bool) = true
+	return nil
+}
+
+type freshReadyShapeRow struct{}
+
+func (freshReadyShapeRow) Scan(dest ...any) error { *dest[0].(*string) = "42"; return nil }
+
+type freshReadyVersions struct {
+	pgx.Rows
+	versions []string
+	index    int
+}
+
+func (r *freshReadyVersions) Next() bool { return r.index < len(r.versions) }
+func (r *freshReadyVersions) Scan(dest ...any) error {
+	*dest[0].(*string) = r.versions[r.index]
+	r.index++
+	return nil
+}
+func (*freshReadyVersions) Close()     {}
+func (*freshReadyVersions) Err() error { return nil }
+
 func (freshReceiptReadyConn) QueryRow(_ context.Context, statement string, _ ...any) pgx.Row {
+	if strings.Contains(statement, "FROM training_schedule_control.status()") {
+		return freshAuthoringStatusRow{}
+	}
 	if strings.Contains(statement, "string_agg(version") {
 		return freshLedgerRow{}
 	}
@@ -169,4 +231,15 @@ func TestFreshInitRejectsWrongStampedRuntimeIdentity(t *testing.T) {
 	if err := runServerCommand(t.Context(), []string{"fresh-init-db", "--confirm-empty"}); err == nil || !strings.Contains(err.Error(), "binary/runtime identity mismatch") {
 		t.Fatalf("wrong stamped release accepted: %v", err)
 	}
+}
+
+// Interface-only current fresh-schema fact; actual guards are exercised with PG.
+type freshAuthoringStatusRow struct{}
+
+func (freshAuthoringStatusRow) Scan(dest ...any) error {
+	if len(dest) != 8 {
+		return errors.New("unexpected status")
+	}
+	*dest[1].(*string) = db.TrainingScheduleContractP
+	return nil
 }

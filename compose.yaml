@@ -11,7 +11,7 @@ services:
       PGTZ: Europe/Lisbon
     command: ["postgres", "-c", "timezone=Europe/Lisbon"]
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks: [mycfc]
@@ -85,7 +85,13 @@ services:
     env_file: .env
     environment:
       BASE_URL: http://localhost:8080
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mycfc_test?sslmode=disable
+      DATABASE_URL: ""
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: mycfc_test
+      DB_USER: ${APP_DB_USER:?set APP_DB_USER}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD}
+      DB_SSLMODE: disable
       S3_BUCKET_NAME: mycfc-local
       S3_ENDPOINT: http://minio:9000
       S3_FORCE_PATH_STYLE: "true"
@@ -187,7 +193,13 @@ services:
     env_file: .env
     environment:
       BASE_URL: http://ui-review-app:8080
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/mycfc_ui_review?sslmode=disable
+      DATABASE_URL: ""
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: mycfc_ui_review
+      DB_USER: ${APP_DB_USER:?set APP_DB_USER}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD}
+      DB_SSLMODE: disable
       S3_BUCKET_NAME: mycfc-local
       S3_ENDPOINT: http://minio:9000
       S3_FORCE_PATH_STYLE: "true"

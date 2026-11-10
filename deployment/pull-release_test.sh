@@ -75,7 +75,13 @@ JSON
 		;;
 	rm) ;;
 	run)
-		if [ "${TEST_DISPOSABLE_RELEASE:-false}" = true ] && [ "$4" = disposable-release-contract ]; then
+		if [ "${TEST_NORMAL_RELEASE:-false}" = true ] && [ "$4" = normal-release-contract ]; then
+			final=f24fada25b1f4fe8a7743dcdc58e3154c32dd275df8605d79bae155ed4fdb884
+			if [ "${TEST_NORMAL_BAD_CONTRACT:-false}" = true ]; then final=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; fi
+			printf '%s\n' '{"contract":"mycfc/normal-release/v1","database":"mycfc","version":"v1.25.0","candidate":"3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4","parent_digest":"98de2a416ee0006262398c32d012d81c2b5fcb599c2e607bbb006692919fac84","final_digest":"'"$final"'"}'
+		elif [ "${TEST_NORMAL_RELEASE:-false}" = true ] && [ "$4" = precision-capabilities ]; then
+			printf '%s\n' '{"protocol":1,"version":"v1.25.0","candidate":"3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4","reader_generation":2,"writer_generation":1,"snapshot_read":[1,2],"schema_read":["schedule-c1","schedule-p1"],"write":["INTERVAL","snapshot-v1"]}'
+		elif [ "${TEST_DISPOSABLE_RELEASE:-false}" = true ] && [ "$4" = disposable-release-contract ]; then
 			printf '%s\n' '{"database":"mycfc","version":"v1.25.0","candidate":"3e22b4a8057f99b8cbbb8c37dd189d13f03cabb4","predecessor_digest":"8ad238f2a1e36976bebd8f6950c935c9fa5b72862fe7cb14d2ad1149d37d1a4e","final_digest":"41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7","baseline_digest":"0846ee526863b67e1e3a3dea1cea52d35fb3e0af58994d5f69b0469bc816e98a"}'
 		else exit 1; fi
 		;;
@@ -111,6 +117,9 @@ JSON
 		esac
 		;;
 	compose)
+		if printf '%s\n' "$*" | grep -q ' precision-status$'; then
+			printf '%s\n' '{"contract":"mycfc/training-schedule-status/v1","database_incarnation":"11111111-1111-4111-8111-111111111111","schema_contract":"schedule-c1","state_epoch":0,"required_reader":1,"floor_commit_id":null,"floor_manifest_sha256":null,"partial_v2_enabled":false,"ever_partial_v2_enabled":false}'
+		fi
 		if printf '%s\n' "$*" | grep -q 'guardian-release-bind guardian-release-status'; then
 			printf 'guardian_intake_active=%s\n' "${TEST_GUARDIAN_INTAKE_ACTIVE:-false}"
 		fi
@@ -127,6 +136,23 @@ cat >"$fake_bin/gh" <<'EOF'
 printf '%s\n' "$*" >>"$TEST_GH_LOG"
 [ "${TEST_PROVENANCE_FAILURE:-false}" != true ] || exit 1
 case "$*" in attestation\ verify\ oci://registry.example/mycfc@sha256:*) exit 0 ;; *) exit 1 ;; esac
+EOF
+cat >"$fake_bin/python3" <<'EOF'
+#!/usr/bin/python3
+# Controller control-flow fixture only. Real root/restore/file validation is
+# independently exercised in precision-admission_test.py, never bypassed there.
+import importlib.util,json,os,sys
+spec=importlib.util.spec_from_file_location('ops',sys.argv[1])
+ops=importlib.util.module_from_spec(spec); spec.loader.exec_module(ops)
+args=sys.argv[2:]
+if args[0]=='normal-contract':
+ try:
+  ops.normal_contract(json.load(open(args[args.index('--normal-contract')+1])),json.load(open(args[args.index('--manifest')+1])))
+ except (ValueError,KeyError): sys.exit(1)
+elif args[0]=='check':
+ if os.environ.get('TEST_PRECISION_REJECT')=='true': sys.exit(1)
+ if os.environ.get('TEST_PRECISION_FALLBACK_REJECT')=='true' and 'previous-release-publication' in args[args.index('--release')+1]: sys.exit(1)
+else: sys.exit(1)
 EOF
 cat >"$fake_bin/curl" <<'EOF'
 #!/bin/sh
@@ -220,6 +246,7 @@ run_release() {
 		MYCFC_RUNTIME_DIR="$case_dir/runtime" \
 		MYCFC_RELEASE_AWS_CREDENTIALS_FILE="$case_dir/release-aws/credentials" \
 		MYCFC_GUARDIAN_RELEASE_BIND_ENV_FILE="$case_dir/guardian-release-bind.env" \
+		MYCFC_PRECISION_AUTHORITY="$case_dir/state/training-schedule-host.json" \
 		"$@" \
 		sh "$deployment_dir/pull-release.sh"
 }
@@ -255,13 +282,14 @@ success_case="$work_dir/success"
 disposable_case="$work_dir/disposable-approved"
 setup_case "$disposable_case"
 # This simulated v1.25.0 direct cutover is an immutable 77-marker release,
-# not the current 78-marker candidate. Preserve the pinned digest and reject a
+# independently of later candidate markers. Preserve the pinned digest and reject a
 # candidate inventory mislabeled as the historical signed release.
 current_inventory=$(go run ./cmd/server schema-inventory)
-disposable_inventory=$(printf '%s' "$current_inventory" | jq -c '[.[] | select(. != "202610010003_privacy_attachment_trigger_runtime")]')
+disposable_inventory=$(printf '%s' "$current_inventory" | jq -c '[.[] | select(. == "reset-baseline-v1" or . < "202610010003_privacy_attachment_trigger_runtime")]')
 current_count=$(printf '%s' "$current_inventory" | jq 'length')
 previous_count=$(printf '%s' "$disposable_inventory" | jq 'length')
-test "$((current_count - previous_count))" -eq 1
+test "$previous_count" -eq 77
+test "$current_count" -gt "$previous_count"
 test "$(printf '%s' "$disposable_inventory" | jq -rj 'join("\n")' | sha256sum | cut -d' ' -f1)" = '41eca3f0ca37f6e6ba5279fe1d931ff589de72b2a8586a77e31445e8a8b29ed7'
 mismatched_inventory_case="$work_dir/disposable-inventory-mismatch"
 setup_case "$mismatched_inventory_case"
@@ -453,5 +481,58 @@ if printf '%s\n' "$web_config" | grep -Eq 'POSTGRES_PASSWORD|MIGRATION_DB_PASSWO
 	exit 1
 fi
 grep -q 'DATABASE_CONTROL_ENV_FILE.*database-control.env' "$compose_file"
+
+# Positive normal-forward path is independent of the retired reset allowlist.
+# These fixtures test poller ordering/rollback; real admission files and lock
+# semantics are exercised by the separate Python/shell host rehearsal.
+normal_case="$work_dir/normal-forward"
+setup_case "$normal_case"
+printf 'blue\n' >"$normal_case/state/active-slot"
+run_release "$normal_case" TEST_NORMAL_RELEASE=true >"$normal_case/output" 2>&1
+grep -q 'phase=precision_admission_preflight' "$normal_case/events.log"
+grep -q 'phase=precision_admission_final' "$normal_case/events.log"
+if grep -q 'disposable-release-contract' "$normal_case/docker.log"; then
+	printf '%s\n' 'normal forward consulted the retired reset contract' >&2; exit 1
+fi
+awk '
+ /phase=precision_admission_preflight / { pre=NR }
+ /phase=database_bootstrap / { boot=NR }
+ /phase=database_migrate / { mig=NR }
+ /phase=precision_admission_final / { final=NR }
+ /phase=candidate_start / { candidate=NR }
+ END { exit !(pre < boot && boot < mig && mig < final && final < candidate) }
+' "$normal_case/events.log"
+
+normal_bad="$work_dir/normal-bad-contract"
+setup_case "$normal_bad"
+if run_release "$normal_bad" TEST_NORMAL_RELEASE=true TEST_NORMAL_BAD_CONTRACT=true >"$normal_bad/output" 2>&1; then
+	printf '%s\n' 'mismatched normal metadata was accepted' >&2; exit 1
+fi
+if grep -q 'run --rm db-bootstrap\|run --rm migrate' "$normal_bad/docker.log"; then exit 1; fi
+
+normal_fast="$work_dir/normal-fast-path"
+setup_case "$normal_fast"
+printf 'blue\n' >"$normal_fast/state/active-slot"
+sed -i 's/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/' "$normal_fast/mycfc.env"
+if run_release "$normal_fast" TEST_NORMAL_RELEASE=true TEST_PRECISION_REJECT=true \
+	TEST_ACTIVE_IMAGE=registry.example/mycfc@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >"$normal_fast/output" 2>&1; then
+	printf '%s\n' 'already-current path skipped precision admission' >&2; exit 1
+fi
+if grep -q 'run --rm db-bootstrap\|run --rm migrate\|up -d --no-deps --force-recreate app-' "$normal_fast/docker.log"; then exit 1; fi
+
+normal_fallback="$work_dir/normal-refused-fallback"
+setup_case "$normal_fallback"
+printf 'blue\n' >"$normal_fallback/state/active-slot"
+# Trusted previous-manifest fixture matches the active immutable image.
+cp "$normal_case/state/release-publication.json" "$normal_fallback/state/release-publication.json"
+sed -i 's/sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/' "$normal_fallback/state/release-publication.json"
+if run_release "$normal_fallback" TEST_NORMAL_RELEASE=true TEST_POST_SWITCH_FAILURE=true \
+	TEST_PRECISION_FALLBACK_REJECT=true >"$normal_fallback/output" 2>&1; then
+	printf '%s\n' 'failed normal candidate incorrectly succeeded' >&2; exit 1
+fi
+grep -q 'event=rollback_refused_incompatible' "$normal_fallback/events.log"
+if grep -q 'stop app-green' "$normal_fallback/docker.log"; then exit 1; fi
+grep -q '^MYCFC_IMAGE=.*sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb$' "$normal_fallback/mycfc.env"
+jq -e '.rollback_performed==false and .traffic_switched==true' "$normal_fallback/state/deployment-receipt.json" >/dev/null
 
 printf '%s\n' 'pull-release tests passed'

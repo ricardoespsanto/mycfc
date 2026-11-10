@@ -870,3 +870,25 @@ func TestPolarCredentialsRequireACompleteOptionalConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestMaintenanceDatabaseURLsRefuseAmbiguousExplicitEndpoint(t *testing.T) {
+	for _, endpoint := range []string{
+		"https://db.example.test/mycfc",
+		"postgres:///mycfc",
+		"postgres://db.example.test/mycfc#other",
+		"postgres://db.example.test/mycfc?sslmode=%ZZ",
+		"postgres://db.example.test/mycfc?sslmode=require&HOST=other.example.test",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.DatabaseURL = Secret(endpoint)
+			cfg.PostgresUser, cfg.MigrationDBUser = "bootstrap", "migrator"
+			for _, build := range []func() (string, error){cfg.BootstrapDatabaseURL, cfg.MigrationDatabaseURL} {
+				got, err := build()
+				if err == nil || got != "" {
+					t.Fatal("maintenance authentication accepted an ambiguous endpoint")
+				}
+			}
+		})
+	}
+}

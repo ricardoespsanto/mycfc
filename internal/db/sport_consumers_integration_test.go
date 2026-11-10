@@ -5,7 +5,6 @@ package db
 import (
 	"context"
 	"errors"
-	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -20,7 +19,9 @@ import (
 // that this test exercises the separate publication workflow.
 func TestSportCorrectionsPreserveLegacyTrainingConsumersAndAuthority(t *testing.T) {
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, os.Getenv("TEST_DATABASE_URL"))
+	placementFixture := newPlacementFixture(t)
+	rhythmFloor(t, placementFixture)
+	pool, err := pgxpool.New(ctx, placementFixture.f.url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +33,7 @@ func TestSportCorrectionsPreserveLegacyTrainingConsumersAndAuthority(t *testing.
 		}
 	}
 	admin, member, season, membership := uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	plan, session, document, publication, prescription := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	plan, session, document, publication, prescription, group := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	for _, user := range []uuid.UUID{admin, member} {
 		exec(`INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Consumer test',$2,'hash','1990-01-01')`, user, user.String()+"@example.test")
 	}
@@ -48,11 +49,20 @@ func TestSportCorrectionsPreserveLegacyTrainingConsumersAndAuthority(t *testing.
 	exec(`INSERT INTO seasons(id,code,name,starts_on,ends_on) VALUES($1,$2,'Consumer season',$3,$4)`, season, "SC_"+uuid.NewString()[:8], today.AddDate(0, 0, -10), today.AddDate(0, 0, 10))
 	exec(`INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on) VALUES($1,$2,$3,$4,$5)`, membership, member, season, programme, today.AddDate(0, 0, -5))
 	exec(`INSERT INTO membership_modalities(membership_id,modality_id) VALUES($1,$2)`, membership, legacy)
-	exec(`INSERT INTO training_plans(id,title,programme_id,created_by_id) VALUES($1,'Retained plan',$2,$3)`, plan, programme, admin)
-	exec(`INSERT INTO training_sessions(id,plan_id,title,starts_at,ends_at,modality_id,created_by_id) VALUES($1,$2,'Retained K1 session',$3,$4,$5,$6)`, session, plan, today.Add(-48*time.Hour), today.Add(-47*time.Hour), legacy, admin)
+	// A current publication fixture has explicit season/week and independently
+	// recorded placement. The retained legacy modality FK remains unchanged.
+	exec(`INSERT INTO training_groups(id,name,programme_id,created_by_id) VALUES($1,'Synthetic retained legacy consumer',$2,$3)`, group, programme, admin)
+	placementFixture.actor, placementFixture.subject, placementFixture.programme, placementFixture.season = admin, member, programme, season
+	joined, err := placementFixture.apply(t, placementFixture.input(t, "JOIN", nil, &group, 0, 0))
+	if err != nil {
+		t.Fatal("current consumer placement", err)
+	}
+	scheduled := today.AddDate(0, 0, 1)
+	exec(`INSERT INTO training_plans(id,title,programme_id,training_group_id,season_id,week_start,created_by_id) VALUES($1,'Retained plan',$2,$3,$4,date_trunc('week',$5::timestamptz AT TIME ZONE 'Europe/Lisbon')::date,$6)`, plan, programme, group, season, scheduled, admin)
+	exec(`INSERT INTO training_sessions(id,plan_id,title,starts_at,ends_at,modality_id,created_by_id) VALUES($1,$2,'Retained K1 session',$3,$4,$5,$6)`, session, plan, scheduled, scheduled.Add(time.Hour), legacy, admin)
 	exec(`INSERT INTO competition_documents(id,title,url,source,reviewed_on,modality_id,programme_id,author_id) VALUES($1,'Retained K1 document','https://example.test/results','Synthetic fixture',CURRENT_DATE,$2,$3,$4)`, document, legacy, programme, admin)
 	exec(`INSERT INTO training_plan_publications(id,plan_id,revision,source_updated_at,change_summary,published_by_id) SELECT $1,id,1,updated_at,'Synthetic retained snapshot',$3 FROM training_plans WHERE id=$2`, publication, plan, admin)
-	exec(`INSERT INTO training_prescriptions(id,publication_id,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256) VALUES($1,$2,$3,$4,$5,jsonb_build_object('legacy_modality_id',$6::text,'craft','K1'),repeat('a',64))`, prescription, publication, session, membership, member, legacy.String())
+	exec(`INSERT INTO training_prescriptions(id,publication_id,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256,placement_id) VALUES($1,$2,$3,$4,$5,jsonb_build_object('schema_version',1,'legacy_modality_id',$6::text,'craft','K1'),repeat('a',64),$7)`, prescription, publication, session, membership, member, legacy.String(), joined.DestinationPlacementID)
 	// Compare complete persisted rows, not merely counts or displayed names.
 	fingerprint := func() string {
 		t.Helper()

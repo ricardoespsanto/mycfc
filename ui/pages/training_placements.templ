@@ -1,0 +1,412 @@
+package pages
+
+import (
+ "fmt"
+ "sort"
+ "time"
+ "github.com/cfcoimbra/mycfc/internal/validation"
+ "github.com/cfcoimbra/mycfc/ui/components"
+)
+
+type TrainingPlacementForm struct {
+ GroupID, PersonID, CommandID, HeadRevision string
+ Kind, SeasonID, SourcePlacementID, TargetGroupID, EffectiveOn, TemporaryUntil string
+ ChangeID, CancellationID string
+ Errors validation.FieldErrors
+}
+type TrainingPlacementPerson struct { ID, Name, Status string }
+type TrainingPlacementGroup struct { ID, Name, ScopeName string }
+type TrainingPlacementSeason struct { ID, Name, StartsOn, EndsOn string; Selected bool }
+type TrainingPlacementOption struct { ID, Name, Help string; Selected bool }
+type TrainingPlacementTimelineRow struct {
+ ID, GroupID, Group, StartsOn, EndsOn, Status, Eligibility, Version, CancelURL string
+}
+type TrainingPlacementInstructionRow struct { Title, When, Status string; RequiresPolicy bool }
+type TrainingPlacementReview struct {
+ Kind, Headline, EffectiveOn, TemporaryUntil, ReturnOn, ReturnGroup, Notice string
+ Before, After []TrainingPlacementTimelineRow
+ Instructions []TrainingPlacementInstructionRow
+ Proposal, ReviewToken string
+ CanConfirm bool
+}
+type TrainingPlacementRecovery struct {
+ Active, UnknownCommit bool
+ Message, ReloadURL string
+}
+type TrainingPlacementsPage struct {
+ Meta components.PageMeta
+ CSRFField templ.Component
+ Mode, Title, Outcome string // editor, select-date, review, recovery
+ Person TrainingPlacementPerson
+ ContextGroup TrainingPlacementGroup
+ Form TrainingPlacementForm
+ Seasons []TrainingPlacementSeason
+ Sources, Destinations []TrainingPlacementOption
+ Timeline []TrainingPlacementTimelineRow
+ Review *TrainingPlacementReview
+ Recovery TrainingPlacementRecovery
+ EditorURL, PreviewURL, ConfirmURL, CancelPreviewURL, CancelConfirmURL, ReturnURL, NewTaskURL string
+}
+
+
+func placementPageTitle(page TrainingPlacementsPage) string {
+ if page.Title != "" { return page.Title }
+ return "Colocação no grupo de treino"
+}
+func placementHasErrors(page TrainingPlacementsPage) bool {
+ for _, message := range page.Form.Errors { if message != "" { return true } }
+ return false
+}
+func placementUnknown(page TrainingPlacementsPage) bool {
+ return page.Recovery.UnknownCommit || (page.Mode != "editor" && page.Mode != "select-date" && page.Mode != "review" && page.Mode != "recovery")
+}
+func placementCancellation(page TrainingPlacementsPage) bool { return page.Form.ChangeID != "" || page.Form.Kind == "CANCEL" }
+func placementReviewVisible(page TrainingPlacementsPage) bool { return page.Mode == "review" && page.Review != nil && !page.Recovery.Active && !placementHasErrors(page) }
+func placementCanConfirm(page TrainingPlacementsPage) bool {
+ if !placementReviewVisible(page) || !page.Review.CanConfirm || page.Review.Proposal == "" || page.Review.ReviewToken == "" { return false }
+ for _, row := range page.Review.Instructions { if row.RequiresPolicy { return false } }
+ if placementCancellation(page) { return page.CancelConfirmURL != "" }
+ return page.ConfirmURL != ""
+}
+func placementDateType(value string) string {
+ if value == "" { return "date" }
+ day, err := time.Parse("2006-01-02",value)
+ if err == nil && day.Year() > 0 && day.Format("2006-01-02") == value { return "date" }
+ return "text"
+}
+func placementKindLabel(kind string) string {
+ switch kind { case "JOIN": return "Entrada num grupo"; case "LEAVE": return "Saída de um grupo"; case "MOVE": return "Mudança de grupo"; case "TEMPORARY": return "Mudança temporária"; case "CANCEL": return "Cancelamento de uma alteração" }
+ return "Opção indicada — reveja a seleção"
+}
+func placementKindKnown(kind string) bool { return kind == "JOIN" || kind == "LEAVE" || kind == "MOVE" || kind == "TEMPORARY" }
+func placementOptionKnown(options []TrainingPlacementOption, value string) bool {
+ if value == "" { return true }
+ for _, option := range options { if option.ID == value { return true } }
+ return false
+}
+func placementSeasonKnown(seasons []TrainingPlacementSeason, value string) bool {
+ if value == "" { return true }
+ for _, season := range seasons { if season.ID == value { return true } }
+ return false
+}
+type placementRawField struct { Name, Value string }
+func placementRawFields(form TrainingPlacementForm) []placementRawField {
+ return []placementRawField{{"group_id",form.GroupID},{"person_id",form.PersonID},{"command_id",form.CommandID},{"head_revision",form.HeadRevision},{"kind",form.Kind},{"season_id",form.SeasonID},{"source_placement_id",form.SourcePlacementID},{"target_group_id",form.TargetGroupID},{"effective_on",form.EffectiveOn},{"temporary_until",form.TemporaryUntil},{"change_id",form.ChangeID},{"cancellation_id",form.CancellationID}}
+}
+func placementErrorRefs(page TrainingPlacementsPage) []components.FieldError {
+ keys := make([]string,0,len(page.Form.Errors)); for key := range page.Form.Errors { keys = append(keys,key) }; sort.Strings(keys)
+ out := []components.FieldError{}
+ for _, key := range keys {
+  message := page.Form.Errors[key]; if message == "" { continue }
+  field := ""
+  if page.Mode == "select-date" { if key == "season_id" || key == "effective_on" { field = "placement-"+key } } else if !placementUnknown(page) && !placementReviewVisible(page) && !placementCancellation(page) {
+   switch key { case "kind","season_id","source_placement_id","target_group_id","effective_on","temporary_until": field = "placement-"+key }
+  }
+  out=append(out,components.FieldError{Field:field,Message:message})
+ }
+ return out
+}
+func placementDateLabel(value string) string { if value == "" { return "Por definir" }; return value }
+
+func placementRawLabel(name string) string {
+ switch name {
+ case "group_id": return "Grupo do pedido"
+ case "person_id": return "Pessoa do pedido"
+ case "command_id": return "Identificador do pedido"
+ case "head_revision": return "Versão revista"
+ case "kind": return "Tipo de alteração"
+ case "season_id": return "Época indicada"
+ case "source_placement_id": return "Origem indicada"
+ case "target_group_id": return "Destino indicado"
+ case "effective_on": return "Data de início indicada"
+ case "temporary_until": return "Último dia indicado"
+ case "change_id": return "Alteração a cancelar"
+ case "cancellation_id": return "Identificador do cancelamento"
+ }
+ return "Valor indicado"
+}
+
+templ TrainingPlacements(page TrainingPlacementsPage) {
+ @components.Base(page.Meta, trainingPlacementsContent(page))
+}
+
+templ trainingPlacementsContent(page TrainingPlacementsPage) {
+ <div class="task-route-page">
+  @components.TaskRoute(components.TaskSurfaceConfig{ID:"training-placements-task",TitleID:"training-placements-title",Variant:"modal",Eyebrow:"Treinos · "+page.ContextGroup.Name,Title:placementPageTitle(page),ReturnURL:page.ReturnURL}) {
+   <div class="task-form">
+    @components.ErrorSummary(placementErrorRefs(page))
+    if page.ContextGroup.ScopeName != "" {
+     <p class="record-meta">{ page.ContextGroup.ScopeName }</p>
+    }
+    if page.Outcome != "" {
+     <p role="status">{ page.Outcome }</p>
+    }
+    if page.Mode != "select-date" && page.Person.Name != "" {
+     <section aria-labelledby="placement-person-title">
+      <h2 id="placement-person-title">{ page.Person.Name }</h2>
+      if page.Person.Status != "" {
+       <p>{ page.Person.Status }</p>
+      }
+     </section>
+    }
+    if placementUnknown(page) {
+     <section aria-labelledby="placement-unknown-title" role="status" tabindex="-1" autofocus?={ !placementHasErrors(page) }>
+      <h2 id="placement-unknown-title">Confirme o estado atual antes de continuar</h2>
+      <p>Não foi possível confirmar o resultado deste pedido. Consulte a colocação atual antes de iniciar outra alteração.</p>
+      if page.Recovery.Message != "" {
+       <p>{ page.Recovery.Message }</p>
+      }
+      @placementRecoveryLink(page)
+     </section>
+     @placementRetainedRequest(page)
+    } else if page.Mode == "select-date" {
+     <p>Escolha a época configurada e a data da colocação para consultar a participação aplicável. As datas não são deduzidas do nome da época.</p>
+     if page.EditorURL != "" {
+      <form class="form-layout" method="get" action={ templ.SafeURL(page.EditorURL) }>
+       <input type="hidden" name="group_id" value={ page.Form.GroupID }/>
+       <input type="hidden" name="person_id" value={ page.Form.PersonID }/>
+       @placementSeasonField(page)
+       @placementDateField("effective_on","Data de efeito",page.Form.EffectiveOn,page.Form.Errors["effective_on"],true)
+       <button class="action action--primary" type="submit">Consultar colocação nesta data</button>
+      </form>
+     }
+    } else {
+     if page.Recovery.Active || page.Mode == "recovery" {
+      <section role="alert" tabindex="-1" autofocus?={ !placementHasErrors(page) } aria-labelledby="placement-recovery-title">
+       <h2 id="placement-recovery-title">Reveja a alteração antes de continuar</h2>
+       if page.Recovery.Message != "" {
+        <p>{ page.Recovery.Message }</p>
+       }
+       @placementRecoveryLink(page)
+      </section>
+     }
+     if placementReviewVisible(page) {
+      @placementReviewedChange(page)
+     } else {
+      @placementEditor(page)
+      if page.Recovery.Active || page.Mode == "recovery" {
+       @placementRetainedProof(page)
+      }
+     }
+     if len(page.Timeline) > 0 {
+      @placementTimeline(page.Timeline,"Colocações atuais e agendadas","placement-timeline",true)
+     }
+    }
+    if page.ReturnURL != "" {
+     <p><a class="action action--quiet" href={ templ.SafeURL(page.ReturnURL) }>Voltar ao grupo</a></p>
+    }
+    if !placementUnknown(page) && page.NewTaskURL != "" {
+     <p><a class="action action--quiet" href={ templ.SafeURL(page.NewTaskURL) }>Iniciar outra alteração</a></p>
+    }
+   </div>
+  }
+ </div>
+}
+
+templ placementContextFields(page TrainingPlacementsPage) {
+ <input type="hidden" name="group_id" value={ page.Form.GroupID }/>
+ <input type="hidden" name="person_id" value={ page.Form.PersonID }/>
+ <input type="hidden" name="command_id" value={ page.Form.CommandID }/>
+ <input type="hidden" name="head_revision" value={ page.Form.HeadRevision }/>
+}
+
+templ placementEditor(page TrainingPlacementsPage) {
+ if placementCancellation(page) {
+  if page.CancelPreviewURL != "" {
+   <p>Reveja o cancelamento desta alteração ainda não efetiva. O regresso ao estado anterior será apresentado antes da confirmação.</p>
+   <form class="form-layout" method="post" action={ templ.SafeURL(page.CancelPreviewURL) }>
+    @page.CSRFField
+    for _, field := range placementRawFields(page.Form) {
+     <input type="hidden" name={ field.Name } value={ field.Value }/>
+    }
+    <button class="action action--secondary" type="submit">Rever cancelamento</button>
+   </form>
+  }
+ } else if page.PreviewURL != "" {
+  <form class="form-layout" method="post" action={ templ.SafeURL(page.PreviewURL) }>
+   @page.CSRFField
+   @placementContextFields(page)
+   @components.FieldLabel("placement-kind","Alteração",true)
+   <select id="placement-kind" name="kind" required aria-invalid={ fmt.Sprint(page.Form.Errors["kind"]!="") } aria-describedby="placement-kind-error">
+    <option value="" selected?={ page.Form.Kind=="" }>Selecione a alteração</option>
+    if page.Form.Kind!="" && !placementKindKnown(page.Form.Kind) {
+     <option value={ page.Form.Kind } selected>{ placementKindLabel(page.Form.Kind) }</option>
+    }
+    for _, kind:=range []string{"JOIN","LEAVE","MOVE","TEMPORARY"} {
+     <option value={ kind } selected?={ page.Form.Kind==kind }>{ placementKindLabel(kind) }</option>
+    }
+   </select>
+   @components.FieldErrorMessage("placement-kind",page.Form.Errors["kind"])
+   @placementSeasonField(page)
+   @placementGroupField("source_placement_id","Colocação de origem",page.Form.SourcePlacementID,page.Sources,page.Form.Errors["source_placement_id"],false)
+   @placementGroupField("target_group_id","Grupo de destino",page.Form.TargetGroupID,page.Destinations,page.Form.Errors["target_group_id"],false)
+   @placementDateField("effective_on","Data de efeito",page.Form.EffectiveOn,page.Form.Errors["effective_on"],true)
+   @placementDateField("temporary_until","Último dia da colocação temporária",page.Form.TemporaryUntil,page.Form.Errors["temporary_until"],false)
+   <p class="field-help">As datas são inclusivas. A saída e a mudança exigem uma origem; a entrada e a mudança exigem um destino. Indique o último dia apenas para uma mudança temporária; o regresso ao grupo anterior é apresentado na revisão.</p>
+   <p>Quando a mudança entra em vigor, o acesso às instruções futuras do grupo anterior é retirado. As instruções do destino e do regresso exigem publicação explícita.</p>
+   <button class="action action--primary" type="submit">Rever alteração</button>
+  </form>
+ }
+}
+
+templ placementSeasonField(page TrainingPlacementsPage) {
+ @components.FieldLabel("placement-season_id","Época",true)
+ <select id="placement-season_id" name="season_id" required aria-invalid={ fmt.Sprint(page.Form.Errors["season_id"]!="") } aria-describedby="placement-season_id-error">
+  <option value="" selected?={ page.Form.SeasonID=="" }>Selecione a época</option>
+  if !placementSeasonKnown(page.Seasons,page.Form.SeasonID) {
+   <option value={ page.Form.SeasonID } selected>Época indicada indisponível — reveja a seleção</option>
+  }
+  for _, season:=range page.Seasons {
+   <option value={ season.ID } selected?={ page.Form.SeasonID==season.ID }>{ season.Name } · { placementDateLabel(season.StartsOn) } – { placementDateLabel(season.EndsOn) }</option>
+  }
+ </select>
+ @components.FieldErrorMessage("placement-season_id",page.Form.Errors["season_id"])
+}
+
+templ placementGroupField(name,label,value string, options []TrainingPlacementOption, message string, required bool) {
+ @components.FieldLabel("placement-"+name,label,required)
+ <select id={ "placement-"+name } name={ name } required?={ required } aria-invalid={ fmt.Sprint(message!="") } aria-describedby={ "placement-"+name+"-error" }>
+  <option value="" selected?={ value=="" }>Selecione, se aplicável</option>
+  if !placementOptionKnown(options,value) {
+   <option value={ value } selected>Opção indicada indisponível — reveja a seleção</option>
+  }
+  for _, option:=range options {
+   <option value={ option.ID } selected?={ value==option.ID }>{ option.Name }</option>
+  }
+ </select>
+ @components.FieldErrorMessage("placement-"+name,message)
+ for _, option:=range options {
+  if option.ID==value && option.Help!="" {
+   <p class="field-help">{ option.Help }</p>
+  }
+ }
+}
+
+templ placementDateField(name,label,value,message string, required bool) {
+ @components.FieldLabel("placement-"+name,label,required)
+ <input id={ "placement-"+name } name={ name } type={ placementDateType(value) } value={ value } placeholder="AAAA-MM-DD" required?={ required } aria-invalid={ fmt.Sprint(message!="") } aria-describedby={ "placement-"+name+"-error" }/>
+ @components.FieldErrorMessage("placement-"+name,message)
+}
+
+templ placementReviewedChange(page TrainingPlacementsPage) {
+ <section aria-labelledby="placement-reviewed-title">
+  <h2 id="placement-reviewed-title">{ page.Review.Headline }</h2>
+  <p>{ placementKindLabel(page.Review.Kind) } · { placementDateLabel(page.Review.EffectiveOn) }</p>
+  if page.Review.TemporaryUntil!="" {
+   <p>Último dia da colocação temporária: { page.Review.TemporaryUntil }.</p>
+  }
+  if page.Review.ReturnOn!="" || page.Review.ReturnGroup!="" {
+   <h3>Regresso ao grupo anterior</h3>
+   <p>{ page.Review.ReturnGroup } · { placementDateLabel(page.Review.ReturnOn) }</p>
+  }
+  if page.Review.Notice!="" {
+   <p>{ page.Review.Notice }</p>
+  }
+  if !placementCancellation(page) {
+   <p>As instruções futuras do grupo anterior deixam de estar disponíveis quando a mudança entra em vigor. O destino e o regresso exigem uma nova publicação explícita; as instruções retiradas não reaparecem automaticamente.</p>
+  }
+  @placementTimeline(page.Review.Before,"Antes","placement-before",false)
+  @placementTimeline(page.Review.After,"Depois","placement-after",false)
+  if len(page.Review.Instructions)>0 {
+   <section aria-labelledby="placement-instructions-title">
+    <h3 id="placement-instructions-title">Instruções já publicadas</h3>
+    <ul class="record-list">
+     for _, row:=range page.Review.Instructions {
+      <li class="record-item record-item--stacked"><div class="record-item__copy"><strong>{ row.Title }</strong><p>{ row.When }</p><p>{ row.Status }</p>
+       if row.RequiresPolicy {
+        <p class="notice notice--warning">Esta instrução requer uma decisão antes de continuar.</p>
+       }
+      </div></li>
+     }
+    </ul>
+   </section>
+  }
+ </section>
+ if placementCanConfirm(page) {
+  <form class="form-layout" method="post" action={ templ.SafeURL(placementConfirmURL(page)) }>
+   @page.CSRFField
+   <input type="hidden" name="proposal" value={ page.Review.Proposal }/>
+   <input type="hidden" name="review_token" value={ page.Review.ReviewToken }/>
+   <button class="action action--primary" type="submit">Confirmar alteração</button>
+  </form>
+ } else {
+  <p role="status">Esta alteração precisa de revisão antes de poder ser confirmada.</p>
+ }
+ if page.EditorURL!="" {
+  <form class="form-layout" method="post" action={ templ.SafeURL(page.EditorURL) }>
+   @page.CSRFField
+   for _, field:=range placementRawFields(page.Form) {
+    <input type="hidden" name={ field.Name } value={ field.Value }/>
+   }
+   <input type="hidden" name="proposal" value={ page.Review.Proposal }/>
+   <input type="hidden" name="review_token" value={ page.Review.ReviewToken }/>
+   <button class="action action--secondary" type="submit">Continuar a editar</button>
+  </form>
+ }
+}
+func placementConfirmURL(page TrainingPlacementsPage) string { if placementCancellation(page) { return page.CancelConfirmURL }; return page.ConfirmURL }
+
+templ placementTimeline(rows []TrainingPlacementTimelineRow,title,id string,actions bool) {
+ <section aria-labelledby={ id+"-title" }>
+  if actions {
+   <h2 id={ id+"-title" }>{ title }</h2>
+  } else {
+   <h3 id={ id+"-title" }>{ title }</h3>
+  }
+  if len(rows)==0 {
+   <p>Sem colocação neste período.</p>
+  } else {
+   <ul class="record-list">
+    for _, row:=range rows {
+     <li class="record-item record-item--stacked"><div class="record-item__copy"><strong>{ row.Group }</strong><p>{ placementDateLabel(row.StartsOn) } –
+      if row.EndsOn!="" {
+       { row.EndsOn }
+      } else {
+       Sem fim indicado
+      }
+     </p><p>{ row.Status }</p>
+      if row.Eligibility!="" {
+       <p>{ row.Eligibility }</p>
+      }
+      if actions && row.CancelURL!="" {
+       <a class="action action--quiet" href={ templ.SafeURL(row.CancelURL) }>Rever cancelamento desta alteração</a>
+      }
+     </div></li>
+    }
+   </ul>
+  }
+ </section>
+}
+
+templ placementRecoveryLink(page TrainingPlacementsPage) {
+ if page.Recovery.ReloadURL!="" {
+  <p><a class="action action--secondary" href={ templ.SafeURL(page.Recovery.ReloadURL) }>Recarregar estado atual</a></p>
+ }
+}
+
+templ placementRetainedRequest(page TrainingPlacementsPage) {
+ <details>
+  <summary>Consultar os dados do pedido</summary>
+  <dl class="status-summary">
+   for _, field:=range placementRawFields(page.Form) {
+    if field.Value!="" {
+     <div><dt>{ placementRawLabel(field.Name) }</dt><dd><p>{ field.Value }</p></dd></div>
+    }
+   }
+  </dl>
+  @placementRetainedProof(page)
+ </details>
+}
+
+templ placementRetainedProof(page TrainingPlacementsPage) {
+ if page.Review!=nil && (page.Review.Proposal!=""||page.Review.ReviewToken!="") {
+  <details>
+   <summary>Copiar os dados da revisão anterior</summary>
+   <p>Estes dados conservam o pedido anterior. Recarregar não confirma nem repete a alteração.</p>
+   @components.FieldLabel("placement-retained-proposal","Pedido anterior",false)
+   <textarea id="placement-retained-proposal" readonly rows="3">{ page.Review.Proposal }</textarea>
+   @components.FieldLabel("placement-retained-token","Comprovativo da revisão anterior",false)
+   <textarea id="placement-retained-token" readonly rows="2">{ page.Review.ReviewToken }</textarea>
+  </details>
+ }
+}

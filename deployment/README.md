@@ -37,7 +37,9 @@ After merge, CI and the separate infrastructure decision, use the repository rel
 
 The release contract retains the v1 receipt fields for compatibility. `privacy_worker_active` and `privacy_worker_activation_required` must both be `false`; any other value fails verification. Guardian intake remains independently fail closed until its own activation procedure is approved.
 
-If a candidate fails before traffic switching, the active service is unchanged. A post-switch failure restores the previous route and environment and quarantines the failed digest. Releasing a replacement digest is the normal recovery path.
+Schedule-compatible releases additionally require the root-owned external admission projection and normal-forward contract described in [schedule admission operations](../docs/operations/training-schedule-admission.md). Initial C expansion/reconciliation must precede unattended admission; missing files do not create a safe default. The runtime directory is mounted read-only into web containers and request dispatch remains fenced even though Caddy's process-liveness check stays healthy. The installed controller needs a separately reviewed bounded patch against its actual source hash.
+
+If a candidate fails before traffic switching, the active service is unchanged. A post-switch failure restores the previous route and environment only after any required compatible-fallback admission, and quarantines the failed digest. An incompatible fallback or failed Caddy reload retains the candidate and reports failure. Releasing a replacement digest is the normal recovery path.
 
 Useful status commands:
 
