@@ -3,6 +3,7 @@ package pages
 import (
 	"fmt"
 	"net/url"
+ "strconv"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"strings"
@@ -42,19 +43,28 @@ type StructuredGymExercise struct {
 	Position, Sets, Repetitions, DurationSeconds, DistanceMetres, RecoverySeconds int
 }
 type StructuredWaterStep struct {
+	IntensityCode string `json:",omitempty"`
+	CadenceSPM *int32 `json:",omitempty"`
 	ID, ParentID, Kind, Name, Prescription, Intensity, Drill, Instructions string
 	Position, Repeats, Recovery                                            int
 	DurationSeconds, DistanceMetres                                        int
 	DurationCertainty, DistanceCertainty                                   string
 }
 type StructuredWaterProfile struct {
+	CraftCode string `json:",omitempty"`
 	ID, Name, Craft, Notes string
 	Revision               int
 	Zones                   []StructuredWaterZone
 }
-type StructuredWaterZone struct{ Code, Label, Cadence, Meaning string }
+type StructuredWaterZone struct {
+ Code, Label, Cadence, Meaning string
+ ID string `json:",omitempty"`
+ Position int `json:",omitempty"`
+ CadenceMin, CadenceMax *int32 `json:",omitempty"`
+}
 type StructuredWaterTotal struct{ Label, Value, Certainty string }
 type StructuredTrainingBlock struct {
+	WaterReference *StructuredWaterProfile `json:",omitempty"`
 	ID, Purpose, Title, Instructions, GymStructure, GymObjective, WaterMethod, WaterTarget, WaterProfile string
 	WaterTargetDistanceMetres                                                             int
 	WaterTargetCertainty                                                                  string
@@ -162,6 +172,9 @@ type StructuredTrainingPage struct {
 	VariationMembers                                           []StructuredVariationMemberChoice
 	VariationTargets                                           []StructuredVariationTargetChoice
 	VariationSubjects                                          []StructuredVariationSubjectChoice
+	VariationProfiles []StructuredWaterProfile
+	VariationValues url.Values
+	VariationErrors validation.FieldErrors
 	VariationGroups                                            []StructuredVariationGroup
 	VariationPreviews                                          []StructuredVariationPreview
 	Publications                                               []StructuredPublicationState
@@ -467,6 +480,9 @@ templ structuredWorkoutInstructionActivitiesLevel(page StructuredTrainingPage, s
 						</strong>
 					</p>
 					<p class="preserve-lines">{ block.Instructions }</p>
+					if block.WaterReference != nil {
+						@structuredWaterRhythmReference(*block.WaterReference)
+					}
 					if block.GymStructure != "" {
 						<p class="record-meta">
 							{ gymStructureLabel(block.GymStructure) } · { trainingObjectiveLabel(block.GymObjective) } · { fmt.Sprintf("%d voltas", block.GymRounds) }
@@ -508,7 +524,7 @@ templ structuredWorkoutInstructionActivitiesLevel(page StructuredTrainingPage, s
 					if block.WaterMethod != "" {
 						<p class="record-meta">
 							{ block.WaterMethod }
-							if block.WaterProfile != "" {
+							if block.WaterProfile != "" && block.WaterReference == nil {
 								<span>· { block.WaterProfile }</span>
 							}
 							if block.WaterTarget != "" {
@@ -1037,43 +1053,226 @@ templ structuredVariationManagement(page StructuredTrainingPage) {
 	</section>
 }
 
-templ structuredVariationForm(page StructuredTrainingPage) {
-			<form class="form-layout" method="post" action="/admin/treinos/estruturados/variacoes">
-<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+func structuredVariationValue(page StructuredTrainingPage, name string) string {
+ if page.VariationValues.Has(name) { return page.VariationValues.Get(name) }
+ if name=="plan_id" && page.OpenForm=="variation" { return page.SelectedWeekID }
+ if name=="operation" { return "OVERRIDE" }
+ return ""
+}
+func structuredVariationChoiceKnown(page StructuredTrainingPage,name,value string) bool {
+ if value=="" { return true }
+ switch name {
+ case "plan_id": for _, choice:=range page.Weeks { if choice.ID==value { return true } }
+ case "target": for _, choice:=range page.VariationTargets { if choice.Value==value { return true } }
+ case "subject": for _, choice:=range page.VariationSubjects { if choice.Value==value && (page.OpenForm!="variation"||choice.PlanID==page.SelectedWeekID) { return true } }
+ case "operation": return value=="OVERRIDE"||value=="OMIT"||value=="REPLACE"||value=="ADD"
+ case "modality": for _, option:=range []string{"WATER","GYM","RUN","BIKE","ERGOMETER","FLEXIBILITY","SPORTS_GAMES","OTHER"} { if value==option { return true } }
+ }
+ return false
+}
+// These data attributes retain only the caller's own unavailable values while
+// the existing client-side filter runs. They do not grant scope or eligibility.
+func structuredVariationContextGroup(page StructuredTrainingPage) string {
+ for _, choice:=range page.Weeks { if choice.ID==structuredVariationValue(page,"plan_id") { return choice.GroupID } }
+ for _, choice:=range page.Weeks { if choice.ID==page.SelectedWeekID { return choice.GroupID } }
+ return page.SelectedGroupID
+}
+func structuredVariationNumberType(value string) string { if value!="" { if _,err:=strconv.ParseInt(value,10,64);err!=nil { return "text" } }; return "number" }
 
-				@page.CSRFField
-				@components.FieldLabel("variation-plan", "Semana", true)
-				<select id="variation-plan" name="plan_id" required><option value="">Selecione</option>
-					for _, choice := range page.Weeks {
-						<option value={ choice.ID } data-group={ choice.GroupID } selected?={ page.OpenForm == "variation" && choice.ID == page.SelectedWeekID }>{ choice.Name }</option>
-					}
-				</select>
-				@components.FieldLabel("variation-target", "Quem recebe", true)<select id="variation-target" name="target" required><option value="">Selecione</option>
-					for _, target := range page.VariationTargets {
-						<option value={ target.Value } data-group={ target.GroupID }>{ target.Name }</option>
-					}
-				</select>
-				@components.FieldLabel("variation-subject", "Item que muda", true)<select id="variation-subject" name="subject" required><option value="">Selecione</option>
-					for _, subject := range page.VariationSubjects {
-						if page.OpenForm != "variation" || subject.PlanID == page.SelectedWeekID {
-							<option value={ subject.Value } data-plan={ subject.PlanID }>{ subject.Name }</option>
-						}
-					}
-				</select>
-				@components.FieldLabel("variation-operation", "Alteração", true)<select id="variation-operation" name="operation" required><option value="OVERRIDE">Alterar campos</option><option value="OMIT">Omitir este item</option><option value="REPLACE">Substituir este item</option><option value="ADD">Adicionar alternativa após este item</option></select>
-				@components.FieldLabel("variation-summary", "Resumo legível", true)<textarea id="variation-summary" name="change_summary" required minlength="2" maxlength="500" placeholder="Ex.: fazer o retorno à calma no ergómetro"></textarea>
-				<p class="field-help">Preencha apenas os campos estruturados que mudam. O resumo continua obrigatório e não deve conter informação médica.</p>
-				<div class="form-grid"><div>@components.FieldLabel("variation-title", "Novo título", false)<input id="variation-title" name="title" maxlength="180"/></div><div>@components.FieldLabel("variation-modality", "Nova modalidade", false)<select id="variation-modality" name="modality"><option value="">Manter</option>
-					for _, value := range []string{"WATER", "GYM", "RUN", "BIKE", "ERGOMETER", "FLEXIBILITY", "SPORTS_GAMES", "OTHER"} {
-						<option value={ value }>{ structuredModalityLabel(value) }</option>
-					}
-				</select></div></div>
-				@components.FieldLabel("variation-instructions", "Novas instruções", false)<textarea id="variation-instructions" name="instructions" maxlength="4000"></textarea>
-				<div class="form-grid form-grid--three"><div>@components.FieldLabel("variation-repeats", "Repetições", false)<input id="variation-repeats" name="repeats" type="number" min="1" max="10000"/></div><div>@components.FieldLabel("variation-duration", "Duração (s)", false)<input id="variation-duration" name="duration_seconds" type="number" min="1" max="86400"/></div><div>@components.FieldLabel("variation-distance", "Distância (m)", false)<input id="variation-distance" name="distance_metres" type="number" min="1" max="200000"/></div></div>
-				<div class="form-grid form-grid--three"><div>@components.FieldLabel("variation-recovery", "Recuperação (s)", false)<input id="variation-recovery" name="recovery_seconds" type="number" min="1" max="86400"/></div><div>@components.FieldLabel("variation-intensity", "Intensidade", false)<input id="variation-intensity" name="intensity_code" maxlength="20" placeholder="Ex.: R4"/></div><div>@components.FieldLabel("variation-sets", "Séries", false)<input id="variation-sets" name="sets" type="number" min="1" max="100"/></div></div>
-				<div class="form-grid"><div>@components.FieldLabel("variation-repetitions", "Repetições do exercício", false)<input id="variation-repetitions" name="exercise_repetitions" type="number" min="1" max="10000"/></div><div>@components.FieldLabel("variation-resistance", "Carga ou instrução", false)<input id="variation-resistance" name="resistance" maxlength="180" placeholder="Ex.: 70 kg, peso corporal ou elástico forte"/></div></div>
-				<button type="submit">Guardar variação</button>
-			</form>
+func structuredVariationHasProfile(page StructuredTrainingPage, id string) bool {
+ for _, profile:=range page.VariationProfiles { if id!="" && profile.ID==id { return true } }
+ return false
+}
+func structuredVariationProfile(page StructuredTrainingPage) *StructuredWaterProfile {
+ id:=page.VariationValues.Get("intensity_profile_id")
+ for _, profile:=range page.VariationProfiles { if id!="" && profile.ID==id { return &profile } }
+ return nil
+}
+func structuredVariationErrorField(key string) string {
+ switch key {
+ case "plan_id": return "variation-plan"
+ case "target": return "variation-target"
+ case "subject": return "variation-subject"
+ case "operation": return "variation-operation"
+ case "change_summary": return "variation-summary"
+ case "title": return "variation-title"
+ case "modality": return "variation-modality"
+ case "instructions": return "variation-instructions"
+ case "repeats": return "variation-repeats"
+ case "duration_seconds": return "variation-duration"
+ case "distance_metres": return "variation-distance"
+ case "recovery_seconds": return "variation-recovery"
+ case "intensity_code": return "variation-intensity"
+ case "sets": return "variation-sets"
+ case "exercise_repetitions": return "variation-repetitions"
+ case "resistance": return "variation-resistance"
+ case "intensity_profile_id": return "variation-profile"
+ }
+ return ""
+}
+func structuredVariationErrorList(page StructuredTrainingPage) []components.FieldError {
+ out:=[]components.FieldError{}
+ keys:=[]string{"form","plan_id","target","subject","operation","change_summary","title","modality","instructions","repeats","duration_seconds","distance_metres","recovery_seconds","intensity_code","sets","exercise_repetitions","resistance","intensity_profile_id"}
+ for _, key:=range keys { if message:=page.VariationErrors[key];message!="" { out=append(out,components.FieldError{Field:structuredVariationErrorField(key),Message:message}) } }
+ return out
+}
+func structuredVariationTextareaValue(value string) string { if strings.HasPrefix(value,"\n") { return "\n"+value }; return value }
+
+templ structuredVariationErrors(page StructuredTrainingPage) {
+ if len(structuredVariationErrorList(page))>0 {
+  <section class="error-summary" aria-labelledby="variation-errors-title" role="alert" tabindex="-1" autofocus>
+   <h2 id="variation-errors-title">Reveja a variação</h2>
+   <ul>
+    for _, item:=range structuredVariationErrorList(page) {
+     <li>
+      if item.Field!="" {
+       <a href={ "#"+item.Field }>{ item.Message }</a>
+      } else {
+       <span>{ item.Message }</span>
+      }
+     </li>
+    }
+   </ul>
+  </section>
+ }
+}
+
+templ structuredVariationForm(page StructuredTrainingPage) {
+ <form class="form-layout" method="post" action="/admin/treinos/estruturados/variacoes">
+  <input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
+  @page.CSRFField
+  @structuredVariationErrors(page)
+  @components.FieldLabel("variation-plan","Semana",true)
+  <select id="variation-plan" name="plan_id" required aria-invalid={ fmt.Sprint(page.VariationErrors["plan_id"]!="") } aria-describedby="variation-plan-error">
+   <option value="" selected?={ structuredVariationValue(page,"plan_id")=="" }>Selecione</option>
+   if value:=structuredVariationValue(page,"plan_id");value!=""&&!structuredVariationChoiceKnown(page,"plan_id",value) {
+    <option value={ value } data-group={ structuredVariationContextGroup(page) } selected>Valor indicado indisponível — reveja a seleção</option>
+   }
+   for _, choice:=range page.Weeks {
+    <option value={ choice.ID } data-group={ choice.GroupID } selected?={ choice.ID==structuredVariationValue(page,"plan_id") }>{ choice.Name }</option>
+   }
+  </select>
+  @components.FieldErrorMessage("variation-plan",page.VariationErrors["plan_id"])
+  @components.FieldLabel("variation-target","Quem recebe",true)
+  <select id="variation-target" name="target" required aria-invalid={ fmt.Sprint(page.VariationErrors["target"]!="") } aria-describedby="variation-target-error">
+   <option value="" selected?={ structuredVariationValue(page,"target")=="" }>Selecione</option>
+   if value:=structuredVariationValue(page,"target");value!=""&&!structuredVariationChoiceKnown(page,"target",value) {
+    <option value={ value } data-group={ structuredVariationContextGroup(page) } selected>Valor indicado indisponível — reveja a seleção</option>
+   }
+   for _, target:=range page.VariationTargets {
+    <option value={ target.Value } data-group={ target.GroupID } selected?={ target.Value==structuredVariationValue(page,"target") }>{ target.Name }</option>
+   }
+  </select>
+  @components.FieldErrorMessage("variation-target",page.VariationErrors["target"])
+  @components.FieldLabel("variation-subject","Item que muda",true)
+  <select id="variation-subject" name="subject" required aria-invalid={ fmt.Sprint(page.VariationErrors["subject"]!="") } aria-describedby="variation-subject-error">
+   <option value="" selected?={ structuredVariationValue(page,"subject")=="" }>Selecione</option>
+   if value:=structuredVariationValue(page,"subject");value!=""&&!structuredVariationChoiceKnown(page,"subject",value) {
+    <option value={ value } data-plan={ structuredVariationValue(page,"plan_id") } selected>Valor indicado indisponível — reveja a seleção</option>
+   }
+   for _, subject:=range page.VariationSubjects {
+    if page.OpenForm!="variation" || subject.PlanID==page.SelectedWeekID {
+     <option value={ subject.Value } data-plan={ subject.PlanID } selected?={ subject.Value==structuredVariationValue(page,"subject") }>{ subject.Name }</option>
+    }
+   }
+  </select>
+  @components.FieldErrorMessage("variation-subject",page.VariationErrors["subject"])
+  @components.FieldLabel("variation-operation","Alteração",true)
+  <select id="variation-operation" name="operation" required aria-invalid={ fmt.Sprint(page.VariationErrors["operation"]!="") } aria-describedby="variation-operation-error">
+   if value:=structuredVariationValue(page,"operation");!structuredVariationChoiceKnown(page,"operation",value)||page.VariationValues.Has("operation")&&value=="" {
+    <option value={ value } selected>Valor indicado indisponível — reveja a seleção</option>
+   }
+   for _, operation:=range []StructuredWorkoutChoice{{"OVERRIDE","Alterar campos"},{"OMIT","Omitir este item"},{"REPLACE","Substituir este item"},{"ADD","Adicionar alternativa após este item"}} {
+    <option value={ operation.Value } selected?={ operation.Value==structuredVariationValue(page,"operation") }>{ operation.Label }</option>
+   }
+  </select>
+  @components.FieldErrorMessage("variation-operation",page.VariationErrors["operation"])
+  @components.FieldLabel("variation-summary","Resumo legível",true)
+  <textarea id="variation-summary" name="change_summary" required minlength="2" maxlength="500" placeholder="Ex.: fazer o retorno à calma no ergómetro" aria-invalid={ fmt.Sprint(page.VariationErrors["change_summary"]!="") } aria-describedby="variation-summary-error">{ structuredVariationTextareaValue(structuredVariationValue(page,"change_summary")) }</textarea>
+  @components.FieldErrorMessage("variation-summary",page.VariationErrors["change_summary"])
+  <p class="field-help">Preencha apenas os campos estruturados que mudam. O resumo continua obrigatório e não deve conter informação médica.</p>
+  @components.FieldLabel("variation-profile","Referência de ritmos para este bloco de água",false)
+  <select id="variation-profile" name="intensity_profile_id" aria-invalid={ fmt.Sprint(page.VariationErrors["intensity_profile_id"]!="") } aria-describedby="variation-profile-help variation-profile-error">
+   <option value="" selected?={ structuredVariationValue(page,"intensity_profile_id")=="" }>Manter a referência do bloco</option>
+   if value:=structuredVariationValue(page,"intensity_profile_id");value!=""&&!structuredVariationHasProfile(page,value) {
+    <option value={ value } selected>Referência indicada indisponível — reveja a seleção</option>
+   }
+   for _, profile:=range page.VariationProfiles {
+    <option value={ profile.ID } selected?={ profile.ID==structuredVariationValue(page,"intensity_profile_id") }>{ profile.Name } · { structuredWaterCraftLabel(profile.Craft) } · revisão { fmt.Sprint(profile.Revision) }</option>
+   }
+  </select>
+  @components.FieldHelp("variation-profile-help","Use Alterar campos num bloco de água. A prescrição comum mantém-se: muda apenas a referência escolhida para a pessoa, subgrupo ou tripulação. Se houver mais de uma embarcação possível, escolha a referência explicitamente; não é deduzida do nome do grupo ou da idade.")
+  @components.FieldErrorMessage("variation-profile",page.VariationErrors["intensity_profile_id"])
+  if profile:=structuredVariationProfile(page);profile!=nil {
+   @structuredWaterRhythmReference(*profile)
+  }
+  <div class="form-grid"><div>
+   @components.FieldLabel("variation-title","Novo título",false)
+   <input id="variation-title" name="title" value={ structuredVariationValue(page,"title") } maxlength="180"/>
+  </div><div>
+   @components.FieldLabel("variation-modality","Nova modalidade",false)
+   <select id="variation-modality" name="modality"><option value="" selected?={ structuredVariationValue(page,"modality")=="" }>Manter</option>
+    if value:=structuredVariationValue(page,"modality");value!=""&&!structuredVariationChoiceKnown(page,"modality",value) {
+     <option value={ value } selected>Valor indicado indisponível — reveja a seleção</option>
+    }
+    for _, value:=range []string{"WATER","GYM","RUN","BIKE","ERGOMETER","FLEXIBILITY","SPORTS_GAMES","OTHER"} {
+     <option value={ value } selected?={ value==structuredVariationValue(page,"modality") }>{ structuredModalityLabel(value) }</option>
+    }
+   </select>
+  </div></div>
+  @components.FieldLabel("variation-instructions","Novas instruções",false)
+  <textarea id="variation-instructions" name="instructions" maxlength="4000">{ structuredVariationTextareaValue(structuredVariationValue(page,"instructions")) }</textarea>
+  <div class="form-grid form-grid--three"><div>
+   @components.FieldLabel("variation-repeats","Repetições",false)<input id="variation-repeats" name="repeats" type={ structuredVariationNumberType(structuredVariationValue(page,"repeats")) } min="1" max="10000" value={ structuredVariationValue(page,"repeats") }/>
+  </div><div>
+   @components.FieldLabel("variation-duration","Duração (s)",false)<input id="variation-duration" name="duration_seconds" type={ structuredVariationNumberType(structuredVariationValue(page,"duration_seconds")) } min="1" max="86400" value={ structuredVariationValue(page,"duration_seconds") }/>
+  </div><div>
+   @components.FieldLabel("variation-distance","Distância (m)",false)<input id="variation-distance" name="distance_metres" type={ structuredVariationNumberType(structuredVariationValue(page,"distance_metres")) } min="1" max="200000" value={ structuredVariationValue(page,"distance_metres") }/>
+  </div></div>
+  <div class="form-grid form-grid--three"><div>
+   @components.FieldLabel("variation-recovery","Recuperação (s)",false)<input id="variation-recovery" name="recovery_seconds" type={ structuredVariationNumberType(structuredVariationValue(page,"recovery_seconds")) } min="1" max="86400" value={ structuredVariationValue(page,"recovery_seconds") }/>
+  </div><div>
+   @components.FieldLabel("variation-intensity","Intensidade",false)<input id="variation-intensity" name="intensity_code" maxlength="20" placeholder="Ex.: R4" value={ structuredVariationValue(page,"intensity_code") }/>
+  </div><div>
+   @components.FieldLabel("variation-sets","Séries",false)<input id="variation-sets" name="sets" type={ structuredVariationNumberType(structuredVariationValue(page,"sets")) } min="1" max="100" value={ structuredVariationValue(page,"sets") }/>
+  </div></div>
+  <div class="form-grid"><div>
+   @components.FieldLabel("variation-repetitions","Repetições do exercício",false)<input id="variation-repetitions" name="exercise_repetitions" type={ structuredVariationNumberType(structuredVariationValue(page,"exercise_repetitions")) } min="1" max="10000" value={ structuredVariationValue(page,"exercise_repetitions") }/>
+  </div><div>
+   @components.FieldLabel("variation-resistance","Carga ou instrução",false)<input id="variation-resistance" name="resistance" maxlength="180" placeholder="Ex.: 70 kg, peso corporal ou elástico forte" value={ structuredVariationValue(page,"resistance") }/>
+  </div></div>
+  <button type="submit">Guardar variação</button>
+ </form>
+}
+
+func structuredWaterCraftLabel(craft string) string { switch craft { case "KAYAK": return "Kayak"; case "CANOE": return "Canoa" }; return craft }
+
+templ structuredWaterRhythmReference(profile StructuredWaterProfile) {
+ <section aria-label="Referência de ritmos selecionada">
+  <p><strong>{ profile.Name }</strong> · { structuredWaterCraftLabel(profile.Craft) } · revisão { fmt.Sprint(profile.Revision) }</p>
+  if profile.Notes!="" {
+   <p class="preserve-lines">{ profile.Notes }</p>
+  }
+  <p class="field-help">Os intervalos podem sobrepor-se intencionalmente. Mantêm-se os valores da referência escolhida; não são ajustados automaticamente.</p>
+  if len(profile.Zones)==0 {
+   <p>Esta referência ainda não tem zonas indicadas.</p>
+  } else {
+   <dl class="training-profile-zones">
+    for _, zone:=range profile.Zones {
+     <div><dt><strong>{ zone.Code } · { zone.Label }</strong></dt><dd>
+      if zone.Cadence!="" {
+       <p>{ zone.Cadence }</p>
+      } else {
+       <p>Sem valor indicado</p>
+      }
+      if zone.Meaning!="" && zone.Meaning!=zone.Cadence {
+       <p>{ zone.Meaning }</p>
+      }
+     </dd></div>
+    }
+   </dl>
+  }
+ </section>
 }
 
 templ structuredRoutineLibrary(page StructuredTrainingPage) {
@@ -1576,7 +1775,7 @@ templ structuredWaterProfileManagement(page StructuredTrainingPage) {
 	<section id="training-intensity-profiles" class="module" aria-labelledby="water-profiles-title" data-tab-panel>
 		@components.SectionHeading("", "Perfis de intensidade", "Defina a linguagem do clube para kayak e canoa. Cada gravação com o mesmo nome e embarcação cria uma revisão nova; os treinos antigos não mudam.")
 		<div class="notice notice--info" role="note">
-			<p><strong>Limites do clube, não uma norma universal.</strong> A cadência é orientação. R7 deve descrever o ritmo de prova sustentável para a duração ou distância prescrita. O limite inferior de R5 em kayak continua por confirmar e não é preenchido automaticamente.</p>
+			<p><strong>Limites do clube, não uma norma universal.</strong> A cadência é orientação. R7 deve descrever o ritmo de prova sustentável para a duração ou distância prescrita. Os intervalos confirmados pelo treinador podem sobrepor-se intencionalmente. As referências de kayak e canoa mantêm os limites e as revisões escolhidos, sem os ajustar automaticamente.</p>
 		</div>
 		<button class="action" type="button" data-dialog-open="add-water-profile">Criar perfil ou nova revisão</button>
 		<dialog id="add-water-profile" class="task-dialog" data-task-dialog aria-labelledby="add-water-profile-title">
@@ -1587,7 +1786,7 @@ templ structuredWaterProfileManagement(page StructuredTrainingPage) {
 				@page.CSRFField
 				@components.FieldLabel("water-profile-name", "Nome", true)<input id="water-profile-name" name="name" required minlength="2" maxlength="120"/>
 				@components.FieldHelp("water-profile-name-help", "Para rever um perfil, use exatamente o mesmo nome e a mesma embarcação.")
-				@components.FieldLabel("water-profile-craft", "Embarcação", true)<select id="water-profile-craft" name="craft" required><option value="KAYAK">Kayak</option><option value="CANOE">Canoa</option></select>
+				@components.FieldLabel("water-profile-craft", "Embarcação", true)<select id="water-profile-craft" name="craft" required><option value="">Selecione a embarcação</option><option value="KAYAK">Kayak</option><option value="CANOE">Canoa</option></select>
 				@components.FieldLabel("water-profile-notes", "Notas (opcional)", false)<textarea id="water-profile-notes" name="notes" maxlength="1000"></textarea>
 				<button type="submit">Guardar perfil</button>
 			</form>

@@ -16,14 +16,14 @@ import (
 )
 
 func (s PostgresStructuredTrainingStore) AuthorizePublication(ctx context.Context, actor, plan uuid.UUID) (publicationPlanHeader, error) {
-	if _, err := db.VerifyTrainingPlacementRuntime(ctx, s.Pool, publicationRuntimeCapabilities()); err != nil {
+	if _, err := db.VerifyTrainingRhythmRuntime(ctx, s.Pool, publicationRuntimeCapabilities()); err != nil {
 		return publicationPlanHeader{}, err
 	}
 	row, err := s.queries().PublicationPlanForReview(ctx, dbgen.PublicationPlanForReviewParams{ActorID: actor, PlanID: plan})
 	return publicationPlanHeader(row), err
 }
 func (s PostgresStructuredTrainingStore) ReadPublicationSource(ctx context.Context, actor, plan uuid.UUID) (publicationSourceEnvelope, error) {
-	state, err := db.VerifyTrainingPlacementRuntime(ctx, s.Pool, publicationRuntimeCapabilities())
+	state, err := db.VerifyTrainingRhythmRuntime(ctx, s.Pool, publicationRuntimeCapabilities())
 	if err != nil {
 		return publicationSourceEnvelope{}, err
 	}
@@ -49,6 +49,17 @@ func (s PostgresStructuredTrainingStore) ReadPublicationSource(ctx context.Conte
 	source, err := decodePublicationSource(row.Envelope, publicationSourceBudget{row.SourceBytes, row.RawTupleCount, row.LatestTupleCount, row.Overflow}, plan)
 	if err != nil {
 		return publicationSourceEnvelope{}, err
+	}
+	source.Rhythm, err = readPublicationRhythm(ctx, q, actor, source, false)
+	if err != nil {
+		return publicationSourceEnvelope{}, err
+	}
+	actual, err := q.PublicationPlanForReview(ctx, dbgen.PublicationPlanForReviewParams{ActorID: actor, PlanID: plan})
+	if err != nil {
+		return publicationSourceEnvelope{}, err
+	}
+	if !samePublicationRhythmHeader(source.Header, publicationPlanHeader(actual)) {
+		return publicationSourceEnvelope{}, errStructuredTrainingPublicationConflict
 	}
 	if err = validatePublicationScheduleWriteState(source, state); err != nil {
 		return publicationSourceEnvelope{}, err
@@ -117,7 +128,7 @@ func (q publicationPostgresQueries) AdmitScheduleWrites(ctx context.Context) (bo
 			return false, trainingScheduleWriteError(err)
 		}
 	}
-	actual, err := db.VerifyTrainingPlacementRuntime(ctx, q.commands, publicationRuntimeCapabilities())
+	actual, err := db.VerifyTrainingRhythmRuntime(ctx, q.commands, publicationRuntimeCapabilities())
 	if err != nil {
 		return false, err
 	}
@@ -130,7 +141,7 @@ func (q publicationPostgresQueries) CheckArtifactSizes(ctx context.Context, inpu
 	return checkPublicationArtifactSizes(ctx, q.commands, inputs)
 }
 func (q publicationPostgresQueries) VerifyRuntime(ctx context.Context) error {
-	_, err := db.VerifyTrainingPlacementRuntime(ctx, q.commands, publicationRuntimeCapabilities())
+	_, err := db.VerifyTrainingRhythmRuntime(ctx, q.commands, publicationRuntimeCapabilities())
 	return err
 }
 func (q publicationPostgresQueries) LockActor(ctx context.Context, actor uuid.UUID) error {
@@ -225,4 +236,8 @@ func decodePublicationTuples(raw []byte, target any) error {
 		return errPublicationSourceUnavailable
 	}
 	return nil
+}
+
+func (q publicationPostgresQueries) ReadRhythm(ctx context.Context, actor uuid.UUID, source publicationSourceEnvelope) (*publicationRhythmFacts, error) {
+	return readPublicationRhythm(ctx, q.queries, actor, source, true)
 }

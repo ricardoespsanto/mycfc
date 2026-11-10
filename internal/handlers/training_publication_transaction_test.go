@@ -37,6 +37,9 @@ func (q *publicationTransactionFake) step(s string) error {
 func (q *publicationTransactionFake) AdmitScheduleWrites(context.Context) (bool, error) {
 	return q.partialEnabled, q.step("admission")
 }
+func (q *publicationTransactionFake) ReadRhythm(_ context.Context, _ uuid.UUID, _ publicationSourceEnvelope) (*publicationRhythmFacts, error) {
+	return q.source.Rhythm, q.step("rhythm")
+}
 func (q *publicationTransactionFake) CheckArtifactSizes(context.Context, []StructuredPrescriptionInput) error {
 	return q.step("artifacts")
 }
@@ -154,7 +157,7 @@ func TestPublicationTransactionOrdersPostAdmissionChecksAndOwnSuccessor(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := []string{"admission", "runtime", "actor", "guard", "plan", "budget", "candidates", "placement-heads", "memberships", "events", "users", "source", "artifacts", "insert publication", "insert prescription", "final"}
+	expected := []string{"admission", "runtime", "actor", "guard", "plan", "budget", "candidates", "placement-heads", "memberships", "events", "users", "source", "rhythm", "artifacts", "insert publication", "insert prescription", "final"}
 	if !reflect.DeepEqual(q.steps, expected) {
 		t.Fatalf("wrong ordering: %v", q.steps)
 	}
@@ -165,7 +168,7 @@ func TestPublicationTransactionOrdersPostAdmissionChecksAndOwnSuccessor(t *testi
 }
 
 func TestPublicationTransactionStaleLatestAndRuntimeFailBeforeMutation(t *testing.T) {
-	for _, step := range []string{"admission", "runtime", "actor", "guard", "plan", "budget", "candidates", "placement-heads", "memberships", "events", "users", "source", "artifacts"} {
+	for _, step := range []string{"admission", "runtime", "actor", "guard", "plan", "budget", "candidates", "placement-heads", "memberships", "events", "users", "source", "rhythm", "artifacts"} {
 		t.Run(step, func(t *testing.T) {
 			q, input, now := publicationTransactionFixture(t)
 			sentinel := errors.New("refused")

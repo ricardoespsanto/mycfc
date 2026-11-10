@@ -12,7 +12,7 @@ func TestAuthoringBinaryDeclaresImplementedSchedulesAndArtifactWrites(t *testing
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, expected := range []string{`"reader_generation":4`, `"writer_generation":2`, `"snapshot_read":[1,2]`, `"schema_read":["schedule-c1","schedule-p1"]`, `"write":["INTERVAL","START_ONLY","DAY","BAND","snapshot-v1","snapshot-v2"]`} {
+	for _, expected := range []string{`"reader_generation":5`, `"writer_generation":2`, `"snapshot_read":[1,2]`, `"schema_read":["schedule-c1","schedule-p1"]`, `"write":["INTERVAL","START_ONLY","DAY","BAND","snapshot-v1","snapshot-v2"]`} {
 		if !strings.Contains(string(raw), expected) {
 			t.Fatalf("missing %s: %s", expected, raw)
 		}

@@ -16,6 +16,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
+	"github.com/cfcoimbra/mycfc/internal/trainingcompat"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -81,7 +82,7 @@ func newPublicationDomainFixture(t *testing.T) *publicationDomainFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.low.Exec(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,4)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New(), strings.Repeat("a", 64)); err != nil {
+	if _, err = f.low.Exec(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,$5)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New(), strings.Repeat("a", 64), trainingcompat.ReaderGeneration); err != nil {
 		t.Fatal(err)
 	}
 	u, _ := url.Parse(raw)

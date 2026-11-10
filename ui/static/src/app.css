@@ -839,9 +839,10 @@ body.task-surface-open { overflow: hidden; }
   flex: none;
 }
 
-/* Group task actions keep readable labels when the detail header wraps. */
+/* Group and week task actions retain readable labels on narrow screens. */
 @media (max-width: 40rem) {
-  .training-group-header .page-actions .action {
+  .training-group-header .page-actions .action,
+  .week-workspace .page-actions .action {
     flex: 1 1 8rem;
     min-inline-size: 0;
   }

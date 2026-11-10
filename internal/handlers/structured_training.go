@@ -17,6 +17,7 @@ import (
 	csrf "filippo.io/csrf/gorilla"
 	"github.com/a-h/templ"
 	"github.com/alexedwards/scs/v2"
+	"github.com/cfcoimbra/mycfc/internal/db"
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/validation"
@@ -142,6 +143,7 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		page.WaterProfiles = structuredWaterProfiles(profiles)
+		page.VariationProfiles = page.WaterProfiles
 		memberships, err := h.Store.ListEligibleTrainingGroupMemberships(ctx, dbgen.ListEligibleTrainingGroupMembershipsParams{IsAdmin: user.IsAdmin, UserID: user.ID})
 		if err != nil {
 			h.System.InternalError(w, r)
@@ -228,6 +230,18 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 	page.Meta = h.meta(r, user, page.Management)
 	if page.Management {
 		requestedGroupID, requestedWeekID, requestedSessionID := r.URL.Query().Get("group_id"), r.URL.Query().Get("week_id"), r.URL.Query().Get("session_id")
+		if page.OpenForm == "variation" && page.VariationValues.Get("plan_id") != "" {
+			for _, audience := range page.Audiences {
+				for _, week := range audience.Weeks {
+					if week.ID == page.VariationValues.Get("plan_id") {
+						requestedGroupID = audience.GroupID
+						requestedWeekID = week.ID
+						requestedSessionID = ""
+						page.PlannerReturnURL = structuredPlannerURL(requestedGroupID, requestedWeekID, "")
+					}
+				}
+			}
+		}
 		if returnGroupID, returnWeekID, returnSessionID := structuredPlannerContextFromReturn(page.PlannerReturnURL); returnGroupID != "" {
 			requestedGroupID, requestedWeekID, requestedSessionID = returnGroupID, returnWeekID, returnSessionID
 		}
@@ -1959,6 +1973,14 @@ func (h StructuredTraining) CreateVariationGroup(w http.ResponseWriter, r *http.
 		EffectiveFrom: pgtype.Date{Time: effectiveFrom, Valid: true}, EffectiveUntil: effectiveUntil,
 		CompetitionEventID: competitionID, OpenEndedException: openEnded, CreatedByID: user.ID,
 	}, MembershipIDs: membershipIDs})
+	if errors.Is(err, db.ErrCommitOutcomeUnknown) {
+		h.System.render(w, r, 503, "Estado do pedido", "Confirme o alvo atual", "Não foi possível confirmar se o alvo ficou guardado. Consulte o grupo antes de continuar; o pedido não será repetido automaticamente.", "")
+		return
+	}
+	if errors.Is(err, errStructuredTrainingPublicationConflict) {
+		h.System.render(w, r, 409, "Grupo alterado", "Reveja os atletas e as datas", "Os atletas ou as colocações mudaram durante o pedido. Reabra o grupo antes de continuar.", "")
+		return
+	}
 	if errors.Is(err, errStructuredVariationMemberScope) || errors.Is(err, errStructuredVariationCrewCapacity) || isUniqueViolation(err) {
 		h.System.RequestRejected(w, r)
 		return
@@ -1975,41 +1997,12 @@ func (h StructuredTraining) CreateVariationGroup(w http.ResponseWriter, r *http.
 
 func (h StructuredTraining) CreateVariation(w http.ResponseWriter, r *http.Request) {
 	user, _ := CurrentUserFromContext(r.Context())
-	if err := r.ParseForm(); err != nil {
+	if r.ParseForm() != nil {
 		h.System.RequestRejected(w, r)
 		return
 	}
 	planID, planErr := uuid.Parse(r.PostForm.Get("plan_id"))
-	targetKind, targetRaw, targetOK := strings.Cut(r.PostForm.Get("target"), ":")
-	targetID, targetErr := uuid.Parse(targetRaw)
-	subjectRawKind, subjectRawID, subjectOK := strings.Cut(r.PostForm.Get("subject"), ":")
-	subjectID, subjectErr := uuid.Parse(subjectRawID)
-	subjectKind := dbgen.TrainingVariationSubjectKind(subjectRawKind)
-	operation := dbgen.TrainingVariationOperation(r.PostForm.Get("operation"))
-	summary := strings.TrimSpace(r.PostForm.Get("change_summary"))
-	if planErr != nil || !targetOK || targetErr != nil || !subjectOK || subjectErr != nil || !validTrainingVariationSubject(subjectKind) || !validTrainingVariationOperation(operation) || !validTrainingText(summary, 2, 500) {
-		h.System.RequestRejected(w, r)
-		return
-	}
-	patch, err := parseTrainingVariationPatch(r, subjectKind)
-	if err != nil || (operation == dbgen.TrainingVariationOperationOMIT && len(patch) != 0) || (operation != dbgen.TrainingVariationOperationOMIT && len(patch) == 0) {
-		h.System.RequestRejected(w, r)
-		return
-	}
-	encodedPatch, err := json.Marshal(patch)
-	if err != nil {
-		if !h.writeTrainingScheduleError(w, r, err) {
-			h.System.InternalError(w, r)
-		}
-		return
-	}
-	params := dbgen.CreateTrainingVariationParams{PlanID: planID, SubjectKind: subjectKind, SubjectID: subjectID, Operation: operation, ChangeSummary: summary, Patch: encodedPatch, CreatedByID: user.ID}
-	switch targetKind {
-	case "ATHLETE":
-		params.TargetMembershipID = &targetID
-	case "GROUP":
-		params.TargetGroupID = &targetID
-	default:
+	if planErr != nil || planID == uuid.Nil {
 		h.System.RequestRejected(w, r)
 		return
 	}
@@ -2018,12 +2011,73 @@ func (h StructuredTraining) CreateVariation(w http.ResponseWriter, r *http.Reque
 	if !h.canManageWeek(ctx, user, planID, w, r) {
 		return
 	}
-	if _, err := h.Store.CreateTrainingVariation(ctx, params); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) || isUniqueViolation(err) {
+	fail := func(status int, field, message string) {
+		if !h.canManageWeek(ctx, user, planID, w, r) {
+			return
+		}
+		values := cloneFocusedValues(r.PostForm)
+		delete(values, "gorilla.csrf.Token")
+		h.renderIndex(w, r, status, pages.StructuredTrainingPage{OpenForm: "variation", SelectedWeekID: planID.String(), VariationValues: values, VariationErrors: validation.FieldErrors{field: message}})
+	}
+	for _, key := range []string{"plan_id", "target", "subject", "operation", "change_summary", "intensity_profile_id"} {
+		if len(r.PostForm[key]) > 1 {
+			fail(422, "form", "O formulário contém campos repetidos. Reveja a adaptação.")
+			return
+		}
+	}
+	targetKind, targetRaw, targetOK := strings.Cut(r.PostForm.Get("target"), ":")
+	targetID, targetErr := uuid.Parse(targetRaw)
+	subjectRawKind, subjectRawID, subjectOK := strings.Cut(r.PostForm.Get("subject"), ":")
+	subjectID, subjectErr := uuid.Parse(subjectRawID)
+	subjectKind := dbgen.TrainingVariationSubjectKind(subjectRawKind)
+	operation := dbgen.TrainingVariationOperation(r.PostForm.Get("operation"))
+	summary := strings.TrimSpace(r.PostForm.Get("change_summary"))
+	if !targetOK || targetErr != nil || targetID == uuid.Nil || !subjectOK || subjectErr != nil || subjectID == uuid.Nil || !validTrainingVariationSubject(subjectKind) || !validTrainingVariationOperation(operation) || !validTrainingText(summary, 2, 500) {
+		fail(422, "form", "Selecione o alvo, o item e a alteração e indique o motivo.")
+		return
+	}
+	patch, e := parseTrainingVariationPatch(r, subjectKind)
+	if e != nil || (r.PostForm.Get("intensity_profile_id") != "" && operation != dbgen.TrainingVariationOperationOVERRIDE) || (operation == dbgen.TrainingVariationOperationOMIT && len(patch) != 0) || (operation != dbgen.TrainingVariationOperationOMIT && len(patch) == 0) {
+		field := "form"
+		if r.PostForm.Get("intensity_profile_id") != "" {
+			field = "intensity_profile_id"
+		}
+		fail(422, field, "Escolha uma referência válida apenas para um bloco de água ou reveja os campos da adaptação.")
+		return
+	}
+	encoded, e := json.Marshal(patch)
+	if e != nil {
+		h.System.InternalError(w, r)
+		return
+	}
+	params := dbgen.CreateTrainingVariationParams{PlanID: planID, SubjectKind: subjectKind, SubjectID: subjectID, Operation: operation, ChangeSummary: summary, Patch: encoded, CreatedByID: user.ID}
+	switch targetKind {
+	case "ATHLETE":
+		params.TargetMembershipID = &targetID
+	case "GROUP":
+		params.TargetGroupID = &targetID
+	default:
+		fail(422, "target", "Selecione um atleta ou uma tripulação permitida.")
+		return
+	}
+	if _, e = h.Store.CreateTrainingVariation(ctx, params); e != nil {
+		if errors.Is(e, db.ErrCommitOutcomeUnknown) {
+			h.System.render(w, r, 503, "Estado do pedido", "Confirme a adaptação atual", "Não foi possível confirmar se a adaptação ficou guardada. Consulte o plano antes de continuar; o pedido não será repetido automaticamente.", "")
+			return
+		}
+		if errors.Is(e, errStructuredTrainingPublicationConflict) {
+			fail(409, "form", "O plano ou os atletas mudaram durante o pedido. Reveja a adaptação antes de continuar.")
+			return
+		}
+		if r.PostForm.Get("intensity_profile_id") == "" && (errors.Is(e, pgx.ErrNoRows) || isUniqueViolation(e)) {
 			h.System.RequestRejected(w, r)
 			return
 		}
-		if !h.writeTrainingScheduleError(w, r, err) {
+		if errors.Is(e, pgx.ErrNoRows) || errors.Is(e, errPublicationRhythmReference) || isUniqueViolation(e) || isStructuredCopyRejection(e) {
+			fail(422, "form", "Não foi possível guardar esta adaptação. Reveja o alvo, o bloco e a referência ativa.")
+			return
+		}
+		if !h.writeTrainingScheduleError(w, r, e) {
 			h.System.InternalError(w, r)
 		}
 		return
@@ -2062,6 +2116,11 @@ func (h StructuredTraining) RetireVariation(w http.ResponseWriter, r *http.Reque
 	}
 	rows, err := h.Store.RetireTrainingVariation(ctx, dbgen.RetireTrainingVariationParams{RetiredByID: &user.ID, ID: id, Version: int32(version64)})
 	if err != nil {
+		if errors.Is(err, db.ErrCommitOutcomeUnknown) {
+			h.System.render(w, r, 503, "Estado do pedido", "Confirme a adaptação atual", "Não foi possível confirmar se a adaptação foi retirada. Consulte o plano antes de continuar; o pedido não será repetido automaticamente.", "")
+			return
+		}
+
 		if !h.writeTrainingScheduleError(w, r, err) {
 			h.System.InternalError(w, r)
 		}
@@ -2316,9 +2375,19 @@ func parseTrainingVariationPatch(r *http.Request, subject dbgen.TrainingVariatio
 			patch[field.key] = *value
 		}
 	}
+	if raw := r.PostForm.Get("intensity_profile_id"); raw != "" {
+		if len(r.PostForm["intensity_profile_id"]) != 1 {
+			return nil, errPublicationRhythmReference
+		}
+		id, e := canonicalRhythmProfileID(raw)
+		if e != nil {
+			return nil, e
+		}
+		patch["intensity_profile_id"] = id.String()
+	}
 	allowed := map[dbgen.TrainingVariationSubjectKind]map[string]bool{
 		dbgen.TrainingVariationSubjectKindSEGMENT:     {"title": true, "modality": true, "instructions": true},
-		dbgen.TrainingVariationSubjectKindBLOCK:       {"title": true, "instructions": true},
+		dbgen.TrainingVariationSubjectKindBLOCK:       {"title": true, "instructions": true, "intensity_profile_id": true},
 		dbgen.TrainingVariationSubjectKindWATERSTEP:   {"title": true, "instructions": true, "repeats": true, "duration_seconds": true, "distance_metres": true, "recovery_seconds": true, "intensity_code": true},
 		dbgen.TrainingVariationSubjectKindGYMEXERCISE: {"title": true, "instructions": true, "sets": true, "repetitions": true, "duration_seconds": true, "distance_metres": true, "recovery_seconds": true, "resistance": true},
 	}[subject]
@@ -2945,7 +3014,7 @@ func trainingVariationPatchLabel(encoded []byte) string {
 	if len(encoded) == 0 || json.Unmarshal(encoded, &values) != nil {
 		return ""
 	}
-	labels := map[string]string{"title": "título", "modality": "modalidade", "instructions": "instruções", "repeats": "repetições", "duration_seconds": "duração (s)", "distance_metres": "distância (m)", "recovery_seconds": "recuperação (s)", "intensity_code": "intensidade", "sets": "séries", "repetitions": "repetições do exercício", "resistance": "carga"}
+	labels := map[string]string{"title": "título", "modality": "modalidade", "instructions": "instruções", "repeats": "repetições", "duration_seconds": "duração (s)", "distance_metres": "distância (m)", "recovery_seconds": "recuperação (s)", "intensity_code": "intensidade", "sets": "séries", "repetitions": "repetições do exercício", "resistance": "carga", "intensity_profile_id": "perfil de ritmo"}
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
@@ -3104,6 +3173,9 @@ func buildStructuredPrescriptionInputs(planID uuid.UUID, audience pages.Structur
 }
 
 func buildStructuredPrescriptionInputsWithSchedules(planID uuid.UUID, audience pages.StructuredTrainingAudience, week pages.StructuredTrainingWeek, recipients []dbgen.ListStructuredTrainingPublicationMembersRow, matches []dbgen.ListTrainingVariationMatchesForManagerRow, schedules map[uuid.UUID]TrainingSessionSchedule) ([]StructuredPrescriptionInput, error) {
+	return buildStructuredPrescriptionInputsResolved(planID, audience, week, recipients, matches, schedules, nil)
+}
+func buildStructuredPrescriptionInputsResolved(planID uuid.UUID, audience pages.StructuredTrainingAudience, week pages.StructuredTrainingWeek, recipients []dbgen.ListStructuredTrainingPublicationMembersRow, matches []dbgen.ListTrainingVariationMatchesForManagerRow, schedules map[uuid.UUID]TrainingSessionSchedule, resolve func(*pages.StructuredTrainingSession, dbgen.ListStructuredTrainingPublicationMembersRow) error) ([]StructuredPrescriptionInput, error) {
 	sessions := map[uuid.UUID]pages.StructuredTrainingSession{}
 	for _, session := range week.Sessions {
 		if session.Schedule.Known && session.Schedule.Unavailable {
@@ -3154,6 +3226,11 @@ func buildStructuredPrescriptionInputsWithSchedules(planID uuid.UUID, audience p
 		session = independent
 		if err = resolveStructuredPrescription(&session, matches, planID, recipient.SessionID, recipient.MembershipID); err != nil {
 			return nil, err
+		}
+		if resolve != nil {
+			if err = resolve(&session, recipient); err != nil {
+				return nil, err
+			}
 		}
 		snapshot := structuredPrescriptionSnapshot{SchemaVersion: structuredPrescriptionSchemaVersion, PlanID: planID.String(), PlanTitle: week.Title, GroupName: audience.GroupName, WeekTitle: week.Title, WeekDescription: week.Description, Season: week.Season, DateRange: week.DateRange, PlannedLoad: week.PlannedLoad, Session: session}
 		encoded, err = marshalPublicationPrescription(snapshot, schedules[recipient.SessionID])
@@ -3228,6 +3305,17 @@ func applyStructuredPrescriptionVariation(session *pages.StructuredTrainingSessi
 					session.Segments[segmentIndex].Blocks = append(session.Segments[segmentIndex].Blocks[:blockIndex], session.Segments[segmentIndex].Blocks[blockIndex+1:]...)
 				} else if row.Operation != dbgen.TrainingVariationOperationADD {
 					applyPrescriptionTextPatch(patch, &block.Title, nil, &block.Instructions)
+					if raw, exists := patch["intensity_profile_id"]; exists {
+						text, ok := raw.(string)
+						if !ok || block.WaterMethod == "" || row.Operation != dbgen.TrainingVariationOperationOVERRIDE {
+							return errPublicationRhythmReference
+						}
+						id, e := canonicalRhythmProfileID(text)
+						if e != nil {
+							return e
+						}
+						block.WaterReference = &pages.StructuredWaterProfile{ID: id.String()}
+					}
 				}
 				break
 			}
@@ -3251,6 +3339,7 @@ func applyStructuredPrescriptionVariation(session *pages.StructuredTrainingSessi
 						applyPrescriptionIntPatch(patch, "recovery_seconds", &step.Recovery)
 						if value, ok := patch["intensity_code"].(string); ok {
 							step.Intensity = value
+							step.IntensityCode = value
 						}
 						step.Prescription = structuredPrescriptionWaterStep(*step)
 					}
@@ -3900,14 +3989,14 @@ func structuredWaterProfiles(rows []dbgen.ListActiveWaterIntensityProfilesRow) [
 	profiles := []pages.StructuredWaterProfile{}
 	for _, row := range rows {
 		if len(profiles) == 0 || profiles[len(profiles)-1].ID != row.ID.String() {
-			profiles = append(profiles, pages.StructuredWaterProfile{ID: row.ID.String(), Name: row.Name, Craft: paddlingCraftLabel(string(row.Craft)), Notes: row.Notes, Revision: int(row.Revision)})
+			profiles = append(profiles, pages.StructuredWaterProfile{ID: row.ID.String(), Name: row.Name, Craft: paddlingCraftLabel(string(row.Craft)), CraftCode: string(row.Craft), Notes: row.Notes, Revision: int(row.Revision)})
 		}
 		if row.ZoneID != nil {
 			cadence := "Sem cadência fixa"
 			if row.CadenceMin != nil || row.CadenceMax != nil {
 				cadence = fmt.Sprintf("%s–%s remadas/min", optionalIntLabel(row.CadenceMin), optionalIntLabel(row.CadenceMax))
 			}
-			profiles[len(profiles)-1].Zones = append(profiles[len(profiles)-1].Zones, pages.StructuredWaterZone{Code: stringValue(row.Code), Label: stringValue(row.Label), Cadence: cadence, Meaning: stringValue(row.Meaning)})
+			profiles[len(profiles)-1].Zones = append(profiles[len(profiles)-1].Zones, pages.StructuredWaterZone{ID: row.ZoneID.String(), Position: intValue(row.Position), CadenceMin: row.CadenceMin, CadenceMax: row.CadenceMax, Code: stringValue(row.Code), Label: stringValue(row.Label), Cadence: cadence, Meaning: stringValue(row.Meaning)})
 		}
 	}
 	return profiles

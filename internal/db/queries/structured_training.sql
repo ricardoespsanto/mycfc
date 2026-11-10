@@ -104,6 +104,7 @@ SET planned_load_percentage = sqlc.narg(planned_load_percentage),
     updated_at = clock_timestamp()
 WHERE plan.id = sqlc.arg(plan_id)
   AND plan.training_group_id IS NOT NULL
+  AND public.training_placement_actor_scope(sqlc.arg(user_id)::uuid,plan.training_group_id)
   AND (
       sqlc.arg(is_admin)::boolean
       OR EXISTS (
@@ -793,23 +794,27 @@ WHERE session.plan_id = sqlc.arg(plan_id) AND session.status = 'ACTIVE'
 ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at),session.starts_at NULLS LAST, session.id;
 
 -- name: ListManagedTrainingGroupMembers :many
-SELECT group_row.id AS training_group_id, group_row.name AS training_group_name,
-       membership.id AS membership_id, subject.name AS athlete_name
-FROM training_groups group_row
-JOIN training_group_members group_member ON group_member.group_id = group_row.id
-JOIN user_memberships membership ON membership.id = group_member.membership_id
-JOIN users subject ON subject.id = membership.user_id AND subject.is_active
-WHERE membership.starts_on <= CURRENT_DATE
-  AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
-  AND (sqlc.arg(is_admin)::boolean
-   OR EXISTS (
-       SELECT 1 FROM staff_grants grant_row
-       WHERE grant_row.user_id = sqlc.arg(user_id)
-         AND grant_row.capability = 'COACH'
-         AND grant_row.revoked_at IS NULL
-         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
-   ))
-ORDER BY group_row.name, subject.name, membership.id;
+WITH actual_dates AS (
+ SELECT plan.training_group_id AS group_id,plan.season_id,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
+ FROM public.training_plans plan JOIN public.training_sessions session ON session.plan_id=plan.id
+ WHERE plan.training_group_id IS NOT NULL AND session.status='ACTIVE'
+ UNION
+ SELECT placement.group_id,membership.season_id,(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date
+ FROM public.training_group_placements placement JOIN public.user_memberships membership
+ ON membership.user_id=placement.subject_user_id AND membership.programme_id=placement.programme_id
+)
+SELECT DISTINCT group_row.id AS training_group_id,group_row.name AS training_group_name,
+ membership.id AS membership_id,subject.name AS athlete_name
+FROM actual_dates date_row JOIN public.training_groups group_row ON group_row.id=date_row.group_id
+JOIN public.training_group_placements placement ON placement.group_id=group_row.id
+JOIN public.users subject ON subject.id=placement.subject_user_id AND subject.is_active AND subject.erased_at IS NULL
+CROSS JOIN LATERAL public.training_placement_resolve(subject.id,group_row.id,date_row.season_id,date_row.session_on) resolved
+JOIN public.user_memberships membership ON membership.id=resolved.membership_id AND resolved.placement_id=placement.id
+WHERE sqlc.arg(is_admin)::boolean IS NOT NULL
+ AND public.training_placement_actor_scope(sqlc.arg(user_id)::uuid,group_row.id)
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ORDER BY group_row.name,subject.name,membership.id;
 
 -- name: ListStructuredCrewModalities :many
 SELECT code, name_pt
@@ -860,18 +865,22 @@ VALUES (sqlc.arg(training_group_id), sqlc.arg(name), sqlc.arg(kind)::training_va
 RETURNING *;
 
 -- name: AddTrainingVariationGroupMember :execrows
-INSERT INTO training_variation_group_members (variation_group_id, membership_id, added_by_id)
-SELECT variation_group.id, group_member.membership_id, sqlc.arg(added_by_id)
-FROM training_variation_groups variation_group
-JOIN training_group_members group_member ON group_member.group_id = variation_group.training_group_id
-JOIN user_memberships membership ON membership.id = group_member.membership_id
-WHERE variation_group.id = sqlc.arg(variation_group_id)
-  AND group_member.membership_id = sqlc.arg(membership_id)
-  AND membership.starts_on <= variation_group.effective_from
-  AND (membership.ends_on IS NULL OR membership.ends_on >= COALESCE(variation_group.effective_until, (SELECT (event_row.starts_at AT TIME ZONE 'Europe/Lisbon')::date FROM events event_row WHERE event_row.id = variation_group.competition_event_id), variation_group.effective_from))
-  AND (SELECT group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id FROM training_groups group_row WHERE group_row.id = variation_group.training_group_id)
-  AND (SELECT group_row.team_id IS NULL OR group_row.team_id = membership.team_id FROM training_groups group_row WHERE group_row.id = variation_group.training_group_id)
-ON CONFLICT (variation_group_id, membership_id) DO NOTHING;
+INSERT INTO training_variation_group_members(variation_group_id,membership_id,added_by_id)
+SELECT variation_group.id,membership.id,sqlc.arg(added_by_id)
+FROM public.training_variation_groups variation_group
+JOIN public.user_memberships membership ON membership.id=sqlc.arg(membership_id)::uuid
+JOIN public.users subject ON subject.id=membership.user_id AND subject.is_active AND subject.erased_at IS NULL
+JOIN public.seasons season ON season.id=membership.season_id
+CROSS JOIN LATERAL public.training_placement_resolve(subject.id,variation_group.training_group_id,membership.season_id,variation_group.effective_from) resolved
+JOIN public.training_group_placements placement ON placement.id=resolved.placement_id AND resolved.membership_id=membership.id
+CROSS JOIN LATERAL(SELECT COALESCE(variation_group.effective_until,(SELECT(event_row.starts_at AT TIME ZONE 'Europe/Lisbon')::date FROM public.events event_row WHERE event_row.id=variation_group.competition_event_id),variation_group.effective_from) AS required_until) period
+WHERE variation_group.id=sqlc.arg(variation_group_id)::uuid
+ AND public.training_placement_actor_scope(sqlc.arg(added_by_id)::uuid,variation_group.training_group_id)
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ AND membership.starts_on<=variation_group.effective_from AND(membership.ends_on IS NULL OR membership.ends_on>=period.required_until)
+ AND placement.starts_on<=variation_group.effective_from AND(placement.ends_on IS NULL OR placement.ends_on>=period.required_until)
+ AND period.required_until<=season.ends_on
+ON CONFLICT(variation_group_id,membership_id) DO NOTHING;
 
 -- name: ListManagedTrainingVariationGroups :many
 SELECT variation_group.id, variation_group.training_group_id, group_row.name AS training_group_name,
@@ -885,15 +894,17 @@ JOIN training_groups group_row ON group_row.id = variation_group.training_group_
 LEFT JOIN events event_row ON event_row.id = variation_group.competition_event_id
 JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
 JOIN user_memberships membership ON membership.id = variation_member.membership_id
-JOIN users subject ON subject.id = membership.user_id
-WHERE sqlc.arg(is_admin)::boolean
+JOIN users subject ON subject.id = membership.user_id AND subject.is_active AND subject.erased_at IS NULL
+WHERE public.training_placement_actor_scope(sqlc.arg(user_id)::uuid,group_row.id)
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ AND(sqlc.arg(is_admin)::boolean
    OR EXISTS (
        SELECT 1 FROM staff_grants grant_row
        WHERE grant_row.user_id = sqlc.arg(user_id)
          AND grant_row.capability = 'COACH'
          AND grant_row.revoked_at IS NULL
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
-   )
+   ))
 ORDER BY group_row.name, variation_group.name, subject.name, membership.id;
 
 -- name: CreateTrainingVariation :one
@@ -935,14 +946,15 @@ JOIN subject_plan subject ON subject.plan_id = plan.id
                          AND subject.subject_kind = sqlc.arg(subject_kind)::training_variation_subject_kind
 WHERE plan.id = sqlc.arg(plan_id)
   AND plan.training_group_id IS NOT NULL
+  AND public.training_placement_actor_scope(sqlc.arg(created_by_id)::uuid,plan.training_group_id)
   AND (
       (sqlc.narg(target_membership_id)::uuid IS NOT NULL AND EXISTS (
-          SELECT 1 FROM training_group_members group_member
-          JOIN user_memberships membership ON membership.id = group_member.membership_id
-          WHERE group_member.group_id = plan.training_group_id
-            AND group_member.membership_id = sqlc.narg(target_membership_id)
-            AND membership.starts_on <= subject.session_date
-            AND (membership.ends_on IS NULL OR membership.ends_on >= subject.session_date)
+          SELECT 1 FROM public.user_memberships membership
+          JOIN public.users athlete ON athlete.id=membership.user_id AND athlete.is_active AND athlete.erased_at IS NULL
+          CROSS JOIN LATERAL public.training_placement_resolve(athlete.id,plan.training_group_id,plan.season_id,subject.session_date) resolved
+          WHERE membership.id=sqlc.narg(target_membership_id)::uuid AND resolved.membership_id=membership.id
+            AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+            AND(NOT athlete.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=athlete.id AND public.guardian_authority_current(relationship.guardian_user_id,athlete.id)))
       ))
       OR
       (sqlc.narg(target_group_id)::uuid IS NOT NULL AND EXISTS (
@@ -1036,11 +1048,11 @@ JOIN subject_details details ON details.plan_id = variation.plan_id
                             AND details.subject_kind = variation.subject_kind
 JOIN target_members targets ON targets.variation_id = variation.id
 JOIN user_memberships membership ON membership.id = targets.membership_id
-JOIN training_group_members current_group_member
-  ON current_group_member.group_id = plan.training_group_id
- AND current_group_member.membership_id = targets.membership_id
+CROSS JOIN LATERAL public.training_placement_resolve(membership.user_id,plan.training_group_id,plan.season_id,details.session_on) current_placement
 JOIN users athlete ON athlete.id = membership.user_id
 WHERE variation.is_active
+  AND current_placement.membership_id=membership.id
+  AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
   AND athlete.is_active AND athlete.erased_at IS NULL AND (NOT athlete.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=athlete.id AND guardian_authority_current(relationship.guardian_user_id,athlete.id)))
   AND membership.starts_on <= details.session_on
   AND (membership.ends_on IS NULL OR membership.ends_on >= details.session_on)

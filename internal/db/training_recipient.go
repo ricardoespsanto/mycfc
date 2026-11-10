@@ -106,6 +106,7 @@ func trainingRecipientInventory(digest string) ([]string, RecipientSchemaPhase) 
 		excluded[TrainingPartialAuthoringMigration] = true
 		excluded[TrainingWorkoutGraphIntegrityMigration] = true
 		excluded[TrainingDatedPlacementsMigration] = true
+		excluded[TrainingRhythmReferencesMigration] = true
 	}
 	var inventory []string
 	for _, version := range EmbeddedMigrationInventory() {

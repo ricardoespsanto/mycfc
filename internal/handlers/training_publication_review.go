@@ -43,6 +43,7 @@ type trainingPublicationReturnContext struct {
 }
 
 type trainingPublicationReviewMetadata struct {
+	referenceSHA256     [sha256.Size]byte
 	ActorID, PlanID     uuid.UUID
 	SourceUpdatedAt     time.Time
 	LatestPublicationID uuid.UUID // Nil and revision zero explicitly mean none.
@@ -277,6 +278,7 @@ func trainingPublicationReviewBinding(input trainingPublicationReviewInput) (tra
 	h := sha256.New()
 	publicationReviewWriteField(h, []byte(trainingPublicationReviewPurpose+"/set"))
 	_, _ = h.Write(metadataDigest[:])
+	_, _ = h.Write(input.referenceSHA256[:])
 	publicationReviewWriteUint64(h, uint64(len(tuples)))
 	for i, t := range tuples {
 		if i > 0 && tuples[i-1].session == t.session && tuples[i-1].membership == t.membership {

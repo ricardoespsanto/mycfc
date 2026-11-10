@@ -19,6 +19,7 @@ func inspectPublication(source publicationSourceEnvelope, claims trainingPublica
 		return publicationPreviewState{}, err
 	}
 	current := publicationCurrentReviewInput(publicationConfirmInput{ActorID: claims.metadata.ActorID, PlanID: claims.metadata.PlanID, Review: claims}, source.Header, material.Prescriptions)
+	current.referenceSHA256 = material.referenceSHA256
 	if err := claims.matches(current, now); err != nil {
 		return publicationPreviewState{}, err
 	}

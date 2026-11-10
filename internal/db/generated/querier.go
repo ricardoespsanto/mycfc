@@ -298,6 +298,9 @@ type Querier interface {
 	ListPersonSportingModalities(ctx context.Context, userID uuid.UUID) ([]SportingModality, error)
 	ListPhotoAlbumAuditEvents(ctx context.Context, albumID uuid.UUID) ([]ListPhotoAlbumAuditEventsRow, error)
 	ListProgrammes(ctx context.Context) ([]Programme, error)
+	// Complete explicit references for canonical #402 publication; bounded sentinel rows.
+	ListPublicationRhythmProfiles(ctx context.Context, arg ListPublicationRhythmProfilesParams) ([]WaterIntensityProfile, error)
+	ListPublicationRhythmZones(ctx context.Context, arg ListPublicationRhythmZonesParams) ([]WaterIntensityZone, error)
 	ListPublishedNews(ctx context.Context, rowLimit int32) ([]NewsItem, error)
 	ListRecentPerformanceMetrics(ctx context.Context, arg ListRecentPerformanceMetricsParams) ([]PerformanceMetric, error)
 	ListRecentSyncedActivitiesForUser(ctx context.Context, arg ListRecentSyncedActivitiesForUserParams) ([]SyncedActivity, error)
@@ -354,7 +357,9 @@ type Querier interface {
 	LockPublicationCandidateUsers(ctx context.Context, arg LockPublicationCandidateUsersParams) ([]uuid.UUID, error)
 	LockPublicationPlacementHeads(ctx context.Context, arg LockPublicationPlacementHeadsParams) ([]TrainingPlacementHead, error)
 	LockPublicationPlan(ctx context.Context, arg LockPublicationPlanParams) (LockPublicationPlanRow, error)
+	LockPublicationRecipientCrafts(ctx context.Context, arg LockPublicationRecipientCraftsParams) ([]LockPublicationRecipientCraftsRow, error)
 	LockPublicationReferencedEvents(ctx context.Context, arg LockPublicationReferencedEventsParams) ([]LockPublicationReferencedEventsRow, error)
+	LockPublicationRhythmProfiles(ctx context.Context, arg LockPublicationRhythmProfilesParams) ([]WaterIntensityProfile, error)
 	LockReusePinnedProfiles(ctx context.Context, arg LockReusePinnedProfilesParams) ([]WaterIntensityProfile, error)
 	LockReuseRoutine(ctx context.Context, arg LockReuseRoutineParams) (LockReuseRoutineRow, error)
 	LockReuseTargetContext(ctx context.Context, arg LockReuseTargetContextParams) (LockReuseTargetContextRow, error)
@@ -381,6 +386,7 @@ type Querier interface {
 	// Shared projections are intentionally repeated for independently authorized statements.
 	PublicationPlanForReview(ctx context.Context, arg PublicationPlanForReviewParams) (PublicationPlanForReviewRow, error)
 	PublicationRawSource(ctx context.Context, arg PublicationRawSourceParams) (PublicationRawSourceRow, error)
+	PublicationRecipientCrafts(ctx context.Context, arg PublicationRecipientCraftsParams) ([]PublicationRecipientCraftsRow, error)
 	PublicationSourceBudget(ctx context.Context, arg PublicationSourceBudgetParams) (PublicationSourceBudgetRow, error)
 	PublicationStructuralCandidates(ctx context.Context, arg PublicationStructuralCandidatesParams) ([]PublicationStructuralCandidatesRow, error)
 	PublicationVariationMatches(ctx context.Context, arg PublicationVariationMatchesParams) ([]PublicationVariationMatchesRow, error)

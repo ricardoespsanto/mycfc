@@ -9,6 +9,7 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/cfcoimbra/mycfc/ui/pages"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -86,6 +87,7 @@ type publicationHashTuple struct {
 }
 
 type publicationSourceEnvelope struct {
+	Rhythm               *publicationRhythmFacts                             `json:"-"`
 	Contract             string                                              `json:"contract"`
 	Header               publicationPlanHeader                               `json:"header"`
 	Overview             []dbgen.ListStructuredTrainingOverviewForManagerRow `json:"overview"`
@@ -104,6 +106,7 @@ type publicationSourceBudget struct {
 }
 
 type publicationMaterialization struct {
+	referenceSHA256                    [32]byte
 	Source                             publicationSourceEnvelope
 	Prescriptions                      []StructuredPrescriptionInput
 	PlanTitle, GroupName, WeekLabel    string
@@ -245,7 +248,21 @@ func materializePublicationSource(source publicationSourceEnvelope, location *ti
 	if err != nil {
 		return result, err
 	}
-	prescriptions, err := buildStructuredPrescriptionInputsWithSchedules(source.Header.PlanID, audience, week, source.EligibleRecipients, matches, schedules)
+	referenceDigest := [32]byte{}
+	if source.Rhythm != nil {
+		if err := validatePublicationRhythmFacts(source, *source.Rhythm); err != nil {
+			return result, err
+		}
+	}
+	if source.Rhythm != nil {
+		referenceDigest, err = publicationRhythmDigest(*source.Rhythm)
+		if err != nil {
+			return result, err
+		}
+	}
+	prescriptions, err := buildStructuredPrescriptionInputsResolved(source.Header.PlanID, audience, week, source.EligibleRecipients, matches, schedules, func(session *pages.StructuredTrainingSession, r dbgen.ListStructuredTrainingPublicationMembersRow) error {
+		return applyPublicationRhythm(session, r, source)
+	})
 	if err != nil {
 		return result, err
 	}
@@ -262,7 +279,7 @@ func materializePublicationSource(source publicationSourceEnvelope, location *ti
 		}
 		totalBytes += len(p.Snapshot)
 	}
-	result = publicationMaterialization{Source: source, Prescriptions: prescriptions, PlanTitle: week.Title, GroupName: audience.GroupName, WeekLabel: week.DateRange}
+	result = publicationMaterialization{referenceSHA256: referenceDigest, Source: source, Prescriptions: prescriptions, PlanTitle: week.Title, GroupName: audience.GroupName, WeekLabel: week.DateRange}
 	previous := map[[2]uuid.UUID]publicationHashTuple{}
 	for _, p := range source.LatestPrescriptions {
 		previous[[2]uuid.UUID{p.SessionID, p.MembershipID}] = p

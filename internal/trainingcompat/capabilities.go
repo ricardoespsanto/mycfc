@@ -5,7 +5,7 @@ package trainingcompat
 
 import "github.com/cfcoimbra/mycfc/internal/releasecontract"
 
-const ReaderGeneration int32 = 4
+const ReaderGeneration int32 = 5
 const WriterGeneration int32 = 2
 
 type Capabilities struct {

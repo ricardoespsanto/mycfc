@@ -1194,8 +1194,15 @@ func TestPostgresStructuredTrainingStorePropagatesDirectDatabaseFailures(t *test
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.call(); !errors.Is(err, want) {
-				t.Fatalf("error=%v want=%v", err, want)
+			expected := want
+			if tc.name == "create variation" {
+				expected = errPublicationSourceUnavailable
+			}
+			if tc.name == "retire variation" {
+				expected = pgx.ErrNoRows
+			}
+			if err := tc.call(); !errors.Is(err, expected) {
+				t.Fatalf("error=%v want=%v", err, expected)
 			}
 		})
 	}
@@ -1239,8 +1246,12 @@ func TestPostgresStructuredTrainingStorePropagatesTransactionStartFailures(t *te
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := tc.call(); !errors.Is(err, want) {
-				t.Fatalf("error=%v want=%v", err, want)
+			expected := want
+			if tc.name == "create variation group" {
+				expected = errPublicationSourceUnavailable // Requires the pinned admission/transaction helper.
+			}
+			if err := tc.call(); !errors.Is(err, expected) {
+				t.Fatalf("error=%v want=%v", err, expected)
 			}
 		})
 	}
@@ -1434,6 +1445,9 @@ func TestPostgresStructuredTrainingStorePropagatesFirstTransactionalOperationFai
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expected := want
+			if tc.name == "create variation group" {
+				expected = errPublicationSourceUnavailable // No fake transaction may bypass admission.
+			}
 			if err := tc.call(); !errors.Is(err, expected) {
 				t.Fatalf("error=%v want=%v", err, expected)
 			}
@@ -1552,26 +1566,11 @@ func TestPostgresStructuredTrainingStoreCommitsEmptyDayAndWeekCopies(t *testing.
 	}
 }
 
-func TestPostgresStructuredTrainingStoreCreatesVariationGroupsAtomically(t *testing.T) {
-	ctx := context.Background()
-	for _, tc := range []struct {
-		name string
-		call func(PostgresStructuredTrainingStore) error
-	}{
-		{"variation subgroup", func(store PostgresStructuredTrainingStore) error {
-			group, err := store.CreateTrainingVariationGroup(ctx, StructuredVariationGroupInput{Params: dbgen.CreateTrainingVariationGroupParams{CreatedByID: uuid.New(), Kind: dbgen.TrainingVariationGroupKindSUBGROUP}, MembershipIDs: []uuid.UUID{uuid.New()}})
-			if group.ID == uuid.Nil {
-				return errors.New("missing variation group ID")
-			}
-			return err
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tx := &structuredTrainingSuccessTransactionFake{}
-			if err := tc.call(PostgresStructuredTrainingStore{Pool: structuredTrainingDBFake{tx: tx}}); err != nil || !tx.committed {
-				t.Fatalf("committed=%v error=%v", tx.committed, err)
-			}
-		})
+func TestPostgresStructuredTrainingStoreVariationGroupsRequirePinnedTransaction(t *testing.T) {
+	tx := &structuredTrainingSuccessTransactionFake{}
+	group, err := (PostgresStructuredTrainingStore{Pool: structuredTrainingDBFake{tx: tx}}).CreateTrainingVariationGroup(t.Context(), StructuredVariationGroupInput{Params: dbgen.CreateTrainingVariationGroupParams{CreatedByID: uuid.New(), Kind: dbgen.TrainingVariationGroupKindSUBGROUP}, MembershipIDs: []uuid.UUID{uuid.New()}})
+	if !errors.Is(err, errPublicationSourceUnavailable) || group.ID != uuid.Nil || tx.committed {
+		t.Fatalf("group=%v committed=%v error=%v", group.ID, tx.committed, err)
 	}
 }
 

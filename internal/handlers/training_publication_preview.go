@@ -39,6 +39,8 @@ func makePublicationPreview(source publicationSourceEnvelope, actor uuid.UUID, s
 	if err != nil {
 		return state, err
 	}
+	normalized.referenceSHA256 = state.Materialization.referenceSHA256
+	state.Metadata = normalized
 	state.Token, err = trainingPublicationReviews.sign(trainingPublicationReviewInput{normalized, state.Materialization.Prescriptions}, now)
 	if err != nil {
 		return state, err

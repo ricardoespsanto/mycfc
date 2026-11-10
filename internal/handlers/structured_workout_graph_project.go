@@ -94,7 +94,9 @@ func projectFocusedGraph(p focusedWorkoutGraph) (pages.StructuredTrainingSession
 	if len(audiences) != 1 || len(audiences[0].Weeks) != 1 || len(audiences[0].Weeks[0].Sessions) != 1 {
 		return pages.StructuredTrainingSession{}, errFocusedWorkoutInvalid
 	}
-	return audiences[0].Weeks[0].Sessions[0], nil
+	session := audiences[0].Weeks[0].Sessions[0]
+	attachFocusedRhythmReferences(&session, p)
+	return session, nil
 }
 func focusedGraphRows(p focusedWorkoutGraph, base structuredTrainingRow) []structuredTrainingRow {
 	profiles := map[uuid.UUID]dbgen.WaterIntensityProfile{}

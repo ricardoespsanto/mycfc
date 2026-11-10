@@ -1,0 +1,954 @@
+{
+  "public.person_canoe_craft_classes": {
+    "columns": {
+      "user_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "craft_code": [
+        "pg_catalog",
+        "varchar",
+        6,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "modality_code": [
+        "pg_catalog",
+        "varchar",
+        24,
+        true,
+        true,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "person_canoe_craft_classes_pkey": [
+        "CREATE UNIQUE INDEX person_canoe_craft_classes_pkey ON person_canoe_craft_classes USING btree (user_id, craft_code)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "person_canoe_craft_classes_rhythm_witness": [
+        "touch_training_rhythm_sporting_permissions()",
+        31,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "person_canoe_craft_classes_pkey": [
+        "PRIMARY KEY (user_id, craft_code)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "person_canoe_craft_classes_craft_code_fkey": [
+        "FOREIGN KEY (craft_code) REFERENCES canoe_craft_classes(code) ON UPDATE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "person_canoe_craft_classes_modality_code_check": [
+        "CHECK (((modality_code)::text = 'CANOEING'::text))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "person_canoe_craft_classes_user_id_modality_code_fkey": [
+        "FOREIGN KEY (user_id, modality_code) REFERENCES person_sporting_modalities(user_id, modality_code) ON DELETE CASCADE",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.person_sporting_modalities": {
+    "columns": {
+      "user_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "modality_code": [
+        "pg_catalog",
+        "varchar",
+        24,
+        true,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "person_sporting_modalities_pkey": [
+        "CREATE UNIQUE INDEX person_sporting_modalities_pkey ON person_sporting_modalities USING btree (user_id, modality_code)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "person_sporting_modalities_rhythm_witness": [
+        "touch_training_rhythm_sporting_permissions()",
+        31,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "person_sporting_modalities_pkey": [
+        "PRIMARY KEY (user_id, modality_code)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "person_sporting_modalities_user_id_fkey": [
+        "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "person_sporting_modalities_modality_code_fkey": [
+        "FOREIGN KEY (modality_code) REFERENCES sporting_modalities(code) ON UPDATE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.training_variations": {
+    "columns": {
+      "id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "patch": [
+        "pg_catalog",
+        "jsonb",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "plan_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "version": [
+        "pg_catalog",
+        "int4",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "is_active": [
+        "pg_catalog",
+        "bool",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "operation": [
+        "public",
+        "training_variation_operation",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "retired_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "subject_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "updated_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "subject_kind": [
+        "public",
+        "training_variation_subject_kind",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "created_by_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "retired_by_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "change_summary": [
+        "pg_catalog",
+        "varchar",
+        504,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "target_group_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "target_membership_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "training_variations_pkey": [
+        "CREATE UNIQUE INDEX training_variations_pkey ON training_variations USING btree (id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "training_variations_plan_idx": [
+        "CREATE INDEX training_variations_plan_idx ON training_variations USING btree (plan_id, is_active, subject_kind, subject_id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "training_variations_active_group_subject_idx": [
+        "CREATE UNIQUE INDEX training_variations_active_group_subject_idx ON training_variations USING btree (plan_id, target_group_id, subject_kind, subject_id) WHERE (is_active AND (target_group_id IS NOT NULL))",
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true
+      ],
+      "training_variations_active_athlete_subject_idx": [
+        "CREATE UNIQUE INDEX training_variations_active_athlete_subject_idx ON training_variations USING btree (plan_id, target_membership_id, subject_kind, subject_id) WHERE (is_active AND (target_membership_id IS NOT NULL))",
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "training_variations_touch_plan": [
+        "touch_structured_training_plan()",
+        29,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_variations_sealed_history": [
+        "prevent_sealed_membership_history_mutation()",
+        31,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "training_variations_rhythm_profile_guard": [
+        "guard_training_rhythm_variation()",
+        23,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "training_variations_pkey": [
+        "PRIMARY KEY (id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_variations_patch_valid": [
+        "CHECK (((jsonb_typeof(patch) = 'object'::text) AND (octet_length((patch)::text) \u003c= 8000)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_variations_plan_id_fkey": [
+        "FOREIGN KEY (plan_id) REFERENCES training_plans(id) ON DELETE CASCADE",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_variations_target_valid": [
+        "CHECK ((num_nonnulls(target_membership_id, target_group_id) = 1))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_variations_summary_valid": [
+        "CHECK ((((change_summary)::text = btrim((change_summary)::text)) AND ((char_length((change_summary)::text) \u003e= 2) AND (char_length((change_summary)::text) \u003c= 500))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_variations_version_valid": [
+        "CHECK ((version \u003e 0))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_variations_lifecycle_valid": [
+        "CHECK (((is_active AND (retired_at IS NULL) AND (retired_by_id IS NULL)) OR ((NOT is_active) AND (retired_at IS NOT NULL) AND (retired_by_id IS NOT NULL))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_variations_created_by_id_fkey": [
+        "FOREIGN KEY (created_by_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_variations_retired_by_id_fkey": [
+        "FOREIGN KEY (retired_by_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_variations_target_group_id_fkey": [
+        "FOREIGN KEY (target_group_id) REFERENCES training_variation_groups(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "training_variations_target_membership_id_fkey": [
+        "FOREIGN KEY (target_membership_id) REFERENCES user_memberships(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.water_intensity_profiles": {
+    "columns": {
+      "id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "name": [
+        "pg_catalog",
+        "varchar",
+        124,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "craft": [
+        "public",
+        "paddling_craft",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "notes": [
+        "pg_catalog",
+        "varchar",
+        1004,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "revision": [
+        "pg_catalog",
+        "int4",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "is_active": [
+        "pg_catalog",
+        "bool",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "created_at": [
+        "pg_catalog",
+        "timestamptz",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "created_by_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "supersedes_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "water_intensity_profiles_pkey": [
+        "CREATE UNIQUE INDEX water_intensity_profiles_pkey ON water_intensity_profiles USING btree (id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "water_intensity_profiles_active_unique": [
+        "CREATE UNIQUE INDEX water_intensity_profiles_active_unique ON water_intensity_profiles USING btree (name, craft) WHERE is_active",
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true
+      ],
+      "water_intensity_profiles_revision_unique": [
+        "CREATE UNIQUE INDEX water_intensity_profiles_revision_unique ON water_intensity_profiles USING btree (name, craft, revision)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "water_intensity_profiles_rhythm_delete_guard": [
+        "guard_training_rhythm_profile_delete()",
+        11,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "water_intensity_profiles_rhythm_plan_witness": [
+        "touch_training_rhythm_profile_plans()",
+        29,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "water_intensity_profiles_pkey": [
+        "PRIMARY KEY (id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_profiles_name_valid": [
+        "CHECK ((((name)::text = btrim((name)::text)) AND ((char_length((name)::text) \u003e= 2) AND (char_length((name)::text) \u003c= 120))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_profiles_notes_valid": [
+        "CHECK ((((notes)::text = btrim((notes)::text)) AND (char_length((notes)::text) \u003c= 1000)))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_profiles_revision_valid": [
+        "CHECK ((revision \u003e 0))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_profiles_revision_unique": [
+        "UNIQUE (name, craft, revision)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_profiles_created_by_id_fkey": [
+        "FOREIGN KEY (created_by_id) REFERENCES users(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_profiles_supersedes_id_fkey": [
+        "FOREIGN KEY (supersedes_id) REFERENCES water_intensity_profiles(id) ON DELETE RESTRICT",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  },
+  "public.water_intensity_zones": {
+    "columns": {
+      "id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        true,
+        "",
+        "",
+        0
+      ],
+      "code": [
+        "pg_catalog",
+        "varchar",
+        24,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "label": [
+        "pg_catalog",
+        "varchar",
+        124,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "meaning": [
+        "pg_catalog",
+        "varchar",
+        504,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "position": [
+        "pg_catalog",
+        "int4",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "profile_id": [
+        "pg_catalog",
+        "uuid",
+        -1,
+        true,
+        false,
+        "",
+        "",
+        0
+      ],
+      "cadence_max": [
+        "pg_catalog",
+        "int4",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ],
+      "cadence_min": [
+        "pg_catalog",
+        "int4",
+        -1,
+        false,
+        false,
+        "",
+        "",
+        0
+      ]
+    },
+    "indexes": {
+      "water_intensity_zones_pkey": [
+        "CREATE UNIQUE INDEX water_intensity_zones_pkey ON water_intensity_zones USING btree (id)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "water_intensity_zones_code_unique": [
+        "CREATE UNIQUE INDEX water_intensity_zones_code_unique ON water_intensity_zones USING btree (profile_id, code)",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "water_intensity_zones_profile_idx": [
+        "CREATE INDEX water_intensity_zones_profile_idx ON water_intensity_zones USING btree (profile_id, \"position\")",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "water_intensity_zones_position_unique": [
+        "CREATE UNIQUE INDEX water_intensity_zones_position_unique ON water_intensity_zones USING btree (profile_id, \"position\")",
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "ordinary": true,
+    "triggers": {
+      "water_intensity_zones_touch_plan": [
+        "touch_structured_training_plan()",
+        29,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ],
+      "water_intensity_zones_rhythm_parent_witness": [
+        "lock_training_rhythm_zone_parent()",
+        31,
+        true,
+        "",
+        [],
+        true,
+        true,
+        true
+      ]
+    },
+    "constraints": {
+      "water_intensity_zones_pkey": [
+        "PRIMARY KEY (id)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_zones_code_valid": [
+        "CHECK ((((code)::text = btrim((code)::text)) AND ((char_length((code)::text) \u003e= 1) AND (char_length((code)::text) \u003c= 20))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_zones_code_unique": [
+        "UNIQUE (profile_id, code)",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_zones_label_valid": [
+        "CHECK ((((label)::text = btrim((label)::text)) AND ((char_length((label)::text) \u003e= 2) AND (char_length((label)::text) \u003c= 120))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_zones_cadence_valid": [
+        "CHECK ((((cadence_min IS NULL) OR ((cadence_min \u003e= 0) AND (cadence_min \u003c= 300))) AND ((cadence_max IS NULL) OR ((cadence_max \u003e= 0) AND (cadence_max \u003c= 300))) AND ((cadence_min IS NULL) OR (cadence_max IS NULL) OR (cadence_min \u003c= cadence_max))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_zones_meaning_valid": [
+        "CHECK ((((meaning)::text = btrim((meaning)::text)) AND ((char_length((meaning)::text) \u003e= 2) AND (char_length((meaning)::text) \u003c= 500))))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_zones_position_valid": [
+        "CHECK ((\"position\" \u003e 0))",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_zones_position_unique": [
+        "UNIQUE (profile_id, \"position\")",
+        true,
+        false,
+        false,
+        true,
+        0
+      ],
+      "water_intensity_zones_profile_id_fkey": [
+        "FOREIGN KEY (profile_id) REFERENCES water_intensity_profiles(id) ON DELETE CASCADE",
+        true,
+        false,
+        false,
+        true,
+        0
+      ]
+    },
+    "builtin_expressions": true
+  }
+}

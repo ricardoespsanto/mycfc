@@ -16,6 +16,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/ui/pages"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -319,6 +320,24 @@ func (h StructuredWorkout) graphPage(r *http.Request, user CurrentUser, c Focuse
 		}
 		if len(choices) == 0 {
 			base.ProfilesMessage = "Ainda não há perfis configurados. Pode escrever as instruções sem escolher um perfil."
+		}
+	}
+	ids := map[uuid.UUID]bool{}
+	for _, activity := range base.Activities {
+		for _, phase := range activity.Phases {
+			raw := d.Values.Get(focusedGraphPhasePrefix(activity.Key, phase.Key) + ".water.profile_id")
+			if id, e := canonicalRhythmProfileID(raw); e == nil {
+				ids[id] = true
+			}
+		}
+	}
+	if len(ids) > 0 && len(ids) <= 32 {
+		selected := make([]uuid.UUID, 0, len(ids))
+		for id := range ids {
+			selected = append(selected, id)
+		}
+		if reference, e := h.Store.ReadFocusedGraphPreview(r.Context(), FocusedWorkoutRequest{c.ActorID, c.PlanID, c.Day}, selected); e == nil {
+			base.ProfileReferences = rhythmFocusedProfileReferences(reference.References)
 		}
 	}
 	return base

@@ -913,19 +913,19 @@ func TestTrainingPlacementFreshProductionBootstrap(t *testing.T) {
 	recipientStampedFixture(t)
 	f := newRecipientSchemaFixture(t, true)
 	if err := FreshInitializeDatabase(t.Context(), f.root, "mycfc", f.roles); err != nil {
-		t.Fatal("fresh83 production initialization", err)
+		t.Fatal("fresh84 production initialization", err)
 	}
 	f.low = f.connectLow(t)
 	if err := ApplyBaselineAndHarden(t.Context(), f.low, "mycfc", f.roles); err != nil {
-		t.Fatal("fresh83 admission/hardening", err)
+		t.Fatal("fresh84 admission/hardening", err)
 	}
 	recipientReceiptMatches(t, f, true)
 	if err := VerifyTrainingRecipientMigrationFinal(t.Context(), f.low); err != nil {
-		t.Fatal("fresh83 final schema definitions", err)
+		t.Fatal("fresh84 final schema definitions", err)
 	}
 	var count int
-	if err := f.low.QueryRow(t.Context(), `SELECT count(*) FROM mycfc_meta.schema_migrations`).Scan(&count); err != nil || count != 83 {
-		t.Fatalf("fresh83 ledger count %d: %v", count, err)
+	if err := f.low.QueryRow(t.Context(), `SELECT count(*) FROM mycfc_meta.schema_migrations`).Scan(&count); err != nil || count != 84 {
+		t.Fatalf("fresh84 ledger count %d: %v", count, err)
 	}
 }
 

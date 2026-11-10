@@ -41,6 +41,7 @@ type StructuredWorkoutTaskPage struct {
 	Removed                                                                                   []StructuredWorkoutRemoval
 	Profiles, StartOccurrences, EndOccurrences                                                []StructuredWorkoutChoice
 	PinnedProfiles                                                                            map[string]StructuredWorkoutChoice
+	ProfileReferences map[string]StructuredWaterProfile
 	ProfilesMessage, Message, ProposalJSON, ReviewToken                                       string
 	Editing, ReadOnly, Reviewing, WaterCreateOnly                                             bool
 }
@@ -765,6 +766,11 @@ templ structuredWorkoutWater(page StructuredWorkoutTaskPage, a StructuredWorkout
 		<summary>Detalhar intervalos de água</summary>
 		@structuredWorkoutSelect(page, workoutPrefix(a.Key, p.Key)+".water.method", "Método", []StructuredWorkoutChoice{{"CONTINUOUS", "Contínuo"}, {"INTERVALS", "Intervalado"}, {"FARTLEK", "Fartlek"}, {"TECHNIQUE", "Técnica"}, {"STARTS", "Partidas"}, {"RACE_SIMULATION", "Simulação de prova"}, {"TACTICAL_DRILL", "Tático"}, {"CUSTOM", "Personalizado"}}, page.Values.Get(workoutPrefix(a.Key, p.Key)+".detail_mode") == "WATER", "")
 		@structuredWorkoutSelect(page, workoutPrefix(a.Key, p.Key)+".water.profile_id", "Perfil de intensidade (opcional)", workoutProfileOptions(page, workoutPrefix(a.Key, p.Key)+".water.profile_id"), false, "Escolha uma revisão apenas quando estiver confirmada. Não é escolhido um perfil automaticamente.")
+		if reference:=workoutSelectedProfileReference(page,workoutPrefix(a.Key,p.Key)+".water.profile_id");reference!=nil {
+			@structuredWaterRhythmReference(*reference)
+		} else if page.Values.Get(workoutPrefix(a.Key,p.Key)+".water.profile_id")!="" {
+			<p>Não foi possível mostrar a referência selecionada. Reveja a escolha antes de guardar.</p>
+		}
 		if page.ProfilesMessage!="" {
 			<p>{ page.ProfilesMessage }</p>
 		}
@@ -914,4 +920,12 @@ templ structuredWorkoutReview(page StructuredWorkoutTaskPage) {
 		}
 		@structuredWorkoutRecovery(page)
 	</section>
+}
+
+func workoutSelectedProfileReference(page StructuredWorkoutTaskPage, field string) *StructuredWaterProfile {
+ id:=page.Values.Get(field)
+ if id=="" || !workoutHasOption(workoutProfileOptions(page,field),id) { return nil }
+ reference,ok:=page.ProfileReferences[id]
+ if !ok || reference.ID!=id { return nil }
+ return &reference
 }

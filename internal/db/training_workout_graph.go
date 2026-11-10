@@ -31,7 +31,7 @@ func verifyTrainingWorkoutGraphDefinition(ctx context.Context, q TrainingSchedul
  AND NOT relation.relispartition AND NOT relation.relrowsecurity AND NOT relation.relforcerowsecurity AND NOT owner.rolsuper AND relation.relowner OPERATOR(pg_catalog.=) namespace.nspowner
  AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_inherits inheritance WHERE inheritance.inhrelid OPERATOR(pg_catalog.=) relation.oid OR inheritance.inhparent OPERATOR(pg_catalog.=) relation.oid)
  AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_rewrite rewrite WHERE rewrite.ev_class OPERATOR(pg_catalog.=) relation.oid)
- AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_trigger trigger_row WHERE trigger_row.tgrelid OPERATOR(pg_catalog.=) relation.oid AND NOT trigger_row.tgisinternal AND (trigger_row.tgtype OPERATOR(pg_catalog.&) 16::pg_catalog.int2) OPERATOR(pg_catalog.<>) 0::pg_catalog.int2)
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_trigger trigger_row WHERE trigger_row.tgrelid OPERATOR(pg_catalog.=) relation.oid AND NOT trigger_row.tgisinternal AND (trigger_row.tgtype OPERATOR(pg_catalog.&) 16::pg_catalog.int2) OPERATOR(pg_catalog.<>) 0::pg_catalog.int2 AND trigger_row.tgname OPERATOR(pg_catalog.<>) 'water_intensity_profiles_rhythm_plan_witness'::pg_catalog.name)
  AND EXISTS(SELECT 1 FROM pg_catalog.pg_attribute attribute WHERE attribute.attrelid OPERATOR(pg_catalog.=) relation.oid AND attribute.attname OPERATOR(pg_catalog.=) 'is_active'::pg_catalog.name AND attribute.atttypid OPERATOR(pg_catalog.=) 'pg_catalog.bool'::pg_catalog.regtype AND attribute.attnotnull AND NOT attribute.attisdropped AND attribute.attgenerated OPERATOR(pg_catalog.=) ''::pg_catalog."char")
  AND EXISTS(SELECT 1 FROM pg_catalog.pg_attribute attribute WHERE attribute.attrelid OPERATOR(pg_catalog.=) relation.oid AND attribute.attname OPERATOR(pg_catalog.=) 'id'::pg_catalog.name AND attribute.atttypid OPERATOR(pg_catalog.=) 'pg_catalog.uuid'::pg_catalog.regtype AND attribute.attnotnull AND NOT attribute.attisdropped)
  )`).Scan(&valid)
@@ -51,5 +51,5 @@ func verifyTrainingWorkoutGraphDefinition(ctx context.Context, q TrainingSchedul
 	if err != nil || !valid {
 		return errors.New("workout current snapshot order contract mismatch")
 	}
-	return nil
+	return verifyTrainingRhythmDefinition(ctx, q)
 }

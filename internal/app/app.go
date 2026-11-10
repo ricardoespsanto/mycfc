@@ -61,7 +61,7 @@ var (
 		if err := db.VerifyDatedParticipationRuntime(ctx, pool); err != nil {
 			return err
 		}
-		_, err := db.VerifyTrainingPlacementRuntime(ctx, pool, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
+		_, err := db.VerifyTrainingRhythmRuntime(ctx, pool, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
 		return err
 	}
 	loadApplicationAWS = awsconfig.LoadDefaultConfig

@@ -107,28 +107,32 @@ func (q *Queries) AddTrainingCycleTarget(ctx context.Context, arg AddTrainingCyc
 }
 
 const addTrainingVariationGroupMember = `-- name: AddTrainingVariationGroupMember :execrows
-INSERT INTO training_variation_group_members (variation_group_id, membership_id, added_by_id)
-SELECT variation_group.id, group_member.membership_id, $1
-FROM training_variation_groups variation_group
-JOIN training_group_members group_member ON group_member.group_id = variation_group.training_group_id
-JOIN user_memberships membership ON membership.id = group_member.membership_id
-WHERE variation_group.id = $2
-  AND group_member.membership_id = $3
-  AND membership.starts_on <= variation_group.effective_from
-  AND (membership.ends_on IS NULL OR membership.ends_on >= COALESCE(variation_group.effective_until, (SELECT (event_row.starts_at AT TIME ZONE 'Europe/Lisbon')::date FROM events event_row WHERE event_row.id = variation_group.competition_event_id), variation_group.effective_from))
-  AND (SELECT group_row.programme_id IS NULL OR group_row.programme_id = membership.programme_id FROM training_groups group_row WHERE group_row.id = variation_group.training_group_id)
-  AND (SELECT group_row.team_id IS NULL OR group_row.team_id = membership.team_id FROM training_groups group_row WHERE group_row.id = variation_group.training_group_id)
-ON CONFLICT (variation_group_id, membership_id) DO NOTHING
+INSERT INTO training_variation_group_members(variation_group_id,membership_id,added_by_id)
+SELECT variation_group.id,membership.id,$1
+FROM public.training_variation_groups variation_group
+JOIN public.user_memberships membership ON membership.id=$2::uuid
+JOIN public.users subject ON subject.id=membership.user_id AND subject.is_active AND subject.erased_at IS NULL
+JOIN public.seasons season ON season.id=membership.season_id
+CROSS JOIN LATERAL public.training_placement_resolve(subject.id,variation_group.training_group_id,membership.season_id,variation_group.effective_from) resolved
+JOIN public.training_group_placements placement ON placement.id=resolved.placement_id AND resolved.membership_id=membership.id
+CROSS JOIN LATERAL(SELECT COALESCE(variation_group.effective_until,(SELECT(event_row.starts_at AT TIME ZONE 'Europe/Lisbon')::date FROM public.events event_row WHERE event_row.id=variation_group.competition_event_id),variation_group.effective_from) AS required_until) period
+WHERE variation_group.id=$3::uuid
+ AND public.training_placement_actor_scope($1::uuid,variation_group.training_group_id)
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ AND membership.starts_on<=variation_group.effective_from AND(membership.ends_on IS NULL OR membership.ends_on>=period.required_until)
+ AND placement.starts_on<=variation_group.effective_from AND(placement.ends_on IS NULL OR placement.ends_on>=period.required_until)
+ AND period.required_until<=season.ends_on
+ON CONFLICT(variation_group_id,membership_id) DO NOTHING
 `
 
 type AddTrainingVariationGroupMemberParams struct {
 	AddedByID        uuid.UUID `json:"added_by_id"`
-	VariationGroupID uuid.UUID `json:"variation_group_id"`
 	MembershipID     uuid.UUID `json:"membership_id"`
+	VariationGroupID uuid.UUID `json:"variation_group_id"`
 }
 
 func (q *Queries) AddTrainingVariationGroupMember(ctx context.Context, arg AddTrainingVariationGroupMemberParams) (int64, error) {
-	result, err := q.db.Exec(ctx, addTrainingVariationGroupMember, arg.AddedByID, arg.VariationGroupID, arg.MembershipID)
+	result, err := q.db.Exec(ctx, addTrainingVariationGroupMember, arg.AddedByID, arg.MembershipID, arg.VariationGroupID)
 	if err != nil {
 		return 0, err
 	}
@@ -936,14 +940,15 @@ JOIN subject_plan subject ON subject.plan_id = plan.id
                          AND subject.subject_kind = $3::training_variation_subject_kind
 WHERE plan.id = $9
   AND plan.training_group_id IS NOT NULL
+  AND public.training_placement_actor_scope($8::uuid,plan.training_group_id)
   AND (
       ($1::uuid IS NOT NULL AND EXISTS (
-          SELECT 1 FROM training_group_members group_member
-          JOIN user_memberships membership ON membership.id = group_member.membership_id
-          WHERE group_member.group_id = plan.training_group_id
-            AND group_member.membership_id = $1
-            AND membership.starts_on <= subject.session_date
-            AND (membership.ends_on IS NULL OR membership.ends_on >= subject.session_date)
+          SELECT 1 FROM public.user_memberships membership
+          JOIN public.users athlete ON athlete.id=membership.user_id AND athlete.is_active AND athlete.erased_at IS NULL
+          CROSS JOIN LATERAL public.training_placement_resolve(athlete.id,plan.training_group_id,plan.season_id,subject.session_date) resolved
+          WHERE membership.id=$1::uuid AND resolved.membership_id=membership.id
+            AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
+            AND(NOT athlete.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=athlete.id AND public.guardian_authority_current(relationship.guardian_user_id,athlete.id)))
       ))
       OR
       ($2::uuid IS NOT NULL AND EXISTS (
@@ -2129,23 +2134,27 @@ func (q *Queries) ListManagedTrainingCycles(ctx context.Context, arg ListManaged
 }
 
 const listManagedTrainingGroupMembers = `-- name: ListManagedTrainingGroupMembers :many
-SELECT group_row.id AS training_group_id, group_row.name AS training_group_name,
-       membership.id AS membership_id, subject.name AS athlete_name
-FROM training_groups group_row
-JOIN training_group_members group_member ON group_member.group_id = group_row.id
-JOIN user_memberships membership ON membership.id = group_member.membership_id
-JOIN users subject ON subject.id = membership.user_id AND subject.is_active
-WHERE membership.starts_on <= CURRENT_DATE
-  AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
-  AND ($1::boolean
-   OR EXISTS (
-       SELECT 1 FROM staff_grants grant_row
-       WHERE grant_row.user_id = $2
-         AND grant_row.capability = 'COACH'
-         AND grant_row.revoked_at IS NULL
-         AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
-   ))
-ORDER BY group_row.name, subject.name, membership.id
+WITH actual_dates AS (
+ SELECT plan.training_group_id AS group_id,plan.season_id,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on
+ FROM public.training_plans plan JOIN public.training_sessions session ON session.plan_id=plan.id
+ WHERE plan.training_group_id IS NOT NULL AND session.status='ACTIVE'
+ UNION
+ SELECT placement.group_id,membership.season_id,(clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date
+ FROM public.training_group_placements placement JOIN public.user_memberships membership
+ ON membership.user_id=placement.subject_user_id AND membership.programme_id=placement.programme_id
+)
+SELECT DISTINCT group_row.id AS training_group_id,group_row.name AS training_group_name,
+ membership.id AS membership_id,subject.name AS athlete_name
+FROM actual_dates date_row JOIN public.training_groups group_row ON group_row.id=date_row.group_id
+JOIN public.training_group_placements placement ON placement.group_id=group_row.id
+JOIN public.users subject ON subject.id=placement.subject_user_id AND subject.is_active AND subject.erased_at IS NULL
+CROSS JOIN LATERAL public.training_placement_resolve(subject.id,group_row.id,date_row.season_id,date_row.session_on) resolved
+JOIN public.user_memberships membership ON membership.id=resolved.membership_id AND resolved.placement_id=placement.id
+WHERE $1::boolean IS NOT NULL
+ AND public.training_placement_actor_scope($2::uuid,group_row.id)
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ORDER BY group_row.name,subject.name,membership.id
 `
 
 type ListManagedTrainingGroupMembersParams struct {
@@ -2264,21 +2273,23 @@ JOIN training_groups group_row ON group_row.id = variation_group.training_group_
 LEFT JOIN events event_row ON event_row.id = variation_group.competition_event_id
 JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
 JOIN user_memberships membership ON membership.id = variation_member.membership_id
-JOIN users subject ON subject.id = membership.user_id
-WHERE $1::boolean
+JOIN users subject ON subject.id = membership.user_id AND subject.is_active AND subject.erased_at IS NULL
+WHERE public.training_placement_actor_scope($1::uuid,group_row.id)
+ AND(NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
+ AND($2::boolean
    OR EXISTS (
        SELECT 1 FROM staff_grants grant_row
-       WHERE grant_row.user_id = $2
+       WHERE grant_row.user_id = $1
          AND grant_row.capability = 'COACH'
          AND grant_row.revoked_at IS NULL
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
-   )
+   ))
 ORDER BY group_row.name, variation_group.name, subject.name, membership.id
 `
 
 type ListManagedTrainingVariationGroupsParams struct {
-	IsAdmin bool      `json:"is_admin"`
 	UserID  uuid.UUID `json:"user_id"`
+	IsAdmin bool      `json:"is_admin"`
 }
 
 type ListManagedTrainingVariationGroupsRow struct {
@@ -2298,7 +2309,7 @@ type ListManagedTrainingVariationGroupsRow struct {
 }
 
 func (q *Queries) ListManagedTrainingVariationGroups(ctx context.Context, arg ListManagedTrainingVariationGroupsParams) ([]ListManagedTrainingVariationGroupsRow, error) {
-	rows, err := q.db.Query(ctx, listManagedTrainingVariationGroups, arg.IsAdmin, arg.UserID)
+	rows, err := q.db.Query(ctx, listManagedTrainingVariationGroups, arg.UserID, arg.IsAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -3361,11 +3372,11 @@ JOIN subject_details details ON details.plan_id = variation.plan_id
                             AND details.subject_kind = variation.subject_kind
 JOIN target_members targets ON targets.variation_id = variation.id
 JOIN user_memberships membership ON membership.id = targets.membership_id
-JOIN training_group_members current_group_member
-  ON current_group_member.group_id = plan.training_group_id
- AND current_group_member.membership_id = targets.membership_id
+CROSS JOIN LATERAL public.training_placement_resolve(membership.user_id,plan.training_group_id,plan.season_id,details.session_on) current_placement
 JOIN users athlete ON athlete.id = membership.user_id
 WHERE variation.is_active
+  AND current_placement.membership_id=membership.id
+  AND(plan.programme_id IS NULL OR membership.programme_id=plan.programme_id) AND(plan.team_id IS NULL OR membership.team_id=plan.team_id)
   AND athlete.is_active AND athlete.erased_at IS NULL AND (NOT athlete.is_dependent OR EXISTS(SELECT 1 FROM guardian_authority_relationships relationship WHERE relationship.subject_user_id=athlete.id AND guardian_authority_current(relationship.guardian_user_id,athlete.id)))
   AND membership.starts_on <= details.session_on
   AND (membership.ends_on IS NULL OR membership.ends_on >= details.session_on)
@@ -3803,12 +3814,13 @@ SET planned_load_percentage = $1,
     updated_at = clock_timestamp()
 WHERE plan.id = $2
   AND plan.training_group_id IS NOT NULL
+  AND public.training_placement_actor_scope($3::uuid,plan.training_group_id)
   AND (
-      $3::boolean
+      $4::boolean
       OR EXISTS (
           SELECT 1 FROM staff_grants grant_row
           JOIN training_groups group_row ON group_row.id = plan.training_group_id
-          WHERE grant_row.user_id = $4
+          WHERE grant_row.user_id = $3
             AND grant_row.capability = 'COACH'
             AND grant_row.revoked_at IS NULL
             AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
@@ -3819,16 +3831,16 @@ WHERE plan.id = $2
 type UpdateStructuredTrainingWeekLoadParams struct {
 	PlannedLoadPercentage *int16    `json:"planned_load_percentage"`
 	PlanID                uuid.UUID `json:"plan_id"`
-	IsAdmin               bool      `json:"is_admin"`
 	UserID                uuid.UUID `json:"user_id"`
+	IsAdmin               bool      `json:"is_admin"`
 }
 
 func (q *Queries) UpdateStructuredTrainingWeekLoad(ctx context.Context, arg UpdateStructuredTrainingWeekLoadParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateStructuredTrainingWeekLoad,
 		arg.PlannedLoadPercentage,
 		arg.PlanID,
-		arg.IsAdmin,
 		arg.UserID,
+		arg.IsAdmin,
 	)
 	if err != nil {
 		return 0, err

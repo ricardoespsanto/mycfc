@@ -250,6 +250,9 @@ func (h StructuredTraining) publicationFailure(w http.ResponseWriter, r *http.Re
 	case errors.Is(err, errStructuredTrainingPublicationVariationConflict):
 		page.Error = "Existem variações em conflito. Regresse ao planeamento e reveja-as antes de publicar."
 		status = 422
+	case errors.Is(err, errPublicationRhythmReference) || errors.Is(err, errPublicationRhythmPermission) || errors.Is(err, errPublicationRhythmZone):
+		page.Error = err.Error()
+		status = 422
 	case errors.Is(err, errPublicationFirstEmpty):
 		page.Error = "Ainda não existem sessões com destinatários elegíveis para uma primeira publicação. Reveja a semana e os atletas do grupo."
 		status = 422

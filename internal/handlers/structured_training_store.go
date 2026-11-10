@@ -1074,80 +1074,8 @@ func (s PostgresStructuredTrainingStore) ListManagedStructuredCompetitionEvents(
 	return s.queries().ListManagedStructuredCompetitionEvents(ctx, params)
 }
 
-func (s PostgresStructuredTrainingStore) CreateTrainingVariationGroup(ctx context.Context, input StructuredVariationGroupInput) (group dbgen.TrainingVariationGroup, err error) {
-	defer func() { err = trainingScheduleWriteError(err) }()
-	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return group, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	queries := dbgen.New(tx)
-	if input.Params.Kind == dbgen.TrainingVariationGroupKindCREW {
-		var programmeID, teamID *uuid.UUID
-		if err := tx.QueryRow(ctx, `SELECT programme_id, team_id FROM training_groups WHERE id=$1 FOR SHARE`, input.Params.TrainingGroupID).Scan(&programmeID, &teamID); err != nil {
-			return group, err
-		}
-		var grantID uuid.UUID
-		grantErr := tx.QueryRow(ctx, `SELECT id FROM staff_grants WHERE user_id=$1 AND capability='COACH' AND revoked_at IS NULL
-			AND (programme_id=$2 OR team_id=$3) LIMIT 1 FOR SHARE`, input.Params.CreatedByID, programmeID, teamID).Scan(&grantID)
-		if grantErr != nil {
-			var admin bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_platform_roles role JOIN platform_roles definition ON definition.id=role.role_id WHERE role.user_id=$1 AND definition.code='ADMIN')`, input.Params.CreatedByID).Scan(&admin); err != nil {
-				return group, err
-			}
-			if !admin {
-				return group, errStructuredVariationMemberScope
-			}
-		}
-		seenMemberships := make(map[uuid.UUID]bool, len(input.MembershipIDs))
-		seenAthletes := make(map[uuid.UUID]bool, len(input.MembershipIDs))
-		orderedMembers := append([]uuid.UUID(nil), input.MembershipIDs...)
-		sort.Slice(orderedMembers, func(i, j int) bool { return orderedMembers[i].String() < orderedMembers[j].String() })
-		for _, membershipID := range orderedMembers {
-			if seenMemberships[membershipID] {
-				return group, errStructuredVariationMemberScope
-			}
-			seenMemberships[membershipID] = true
-			var athleteID uuid.UUID
-			if err := tx.QueryRow(ctx, `SELECT membership.user_id FROM training_group_members group_member
-				JOIN user_memberships membership ON membership.id=group_member.membership_id
-				WHERE group_member.group_id=$1 AND membership.id=$2 FOR SHARE OF group_member, membership`, input.Params.TrainingGroupID, membershipID).Scan(&athleteID); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return group, errStructuredVariationMemberScope
-				}
-				return group, err
-			}
-			if seenAthletes[athleteID] {
-				return group, errStructuredVariationMemberScope
-			}
-			seenAthletes[athleteID] = true
-		}
-		modalities, listErr := queries.ListStructuredCrewModalities(ctx)
-		if listErr != nil {
-			return group, listErr
-		}
-		capacity, valid := structuredCrewSize(modalities, input.Params.CraftCode)
-		if !valid || capacity != len(input.MembershipIDs) {
-			return group, errStructuredVariationCrewCapacity
-		}
-	}
-	group, err = queries.CreateTrainingVariationGroup(ctx, input.Params)
-	if err != nil {
-		return group, err
-	}
-	for _, membershipID := range input.MembershipIDs {
-		rows, addErr := queries.AddTrainingVariationGroupMember(ctx, dbgen.AddTrainingVariationGroupMemberParams{VariationGroupID: group.ID, MembershipID: membershipID, AddedByID: input.Params.CreatedByID})
-		if addErr != nil {
-			return group, addErr
-		}
-		if rows != 1 {
-			return group, errStructuredVariationMemberScope
-		}
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return group, err
-	}
-	return group, nil
+func (s PostgresStructuredTrainingStore) CreateTrainingVariationGroup(ctx context.Context, input StructuredVariationGroupInput) (dbgen.TrainingVariationGroup, error) {
+	return s.createDatedVariationGroup(ctx, input)
 }
 
 func (s PostgresStructuredTrainingStore) ListManagedTrainingVariationGroups(ctx context.Context, params dbgen.ListManagedTrainingVariationGroupsParams) ([]dbgen.ListManagedTrainingVariationGroupsRow, error) {
@@ -1155,7 +1083,7 @@ func (s PostgresStructuredTrainingStore) ListManagedTrainingVariationGroups(ctx 
 }
 
 func (s PostgresStructuredTrainingStore) CreateTrainingVariation(ctx context.Context, params dbgen.CreateTrainingVariationParams) (dbgen.TrainingVariation, error) {
-	return withTrainingSchedulePlan(ctx, s, params.CreatedByID, params.PlanID, func(q *dbgen.Queries) (dbgen.TrainingVariation, error) { return q.CreateTrainingVariation(ctx, params) })
+	return s.createModernTrainingVariation(ctx, params)
 }
 
 func (s PostgresStructuredTrainingStore) ListTrainingVariationMatchesForManager(ctx context.Context, params dbgen.ListTrainingVariationMatchesForManagerParams) ([]dbgen.ListTrainingVariationMatchesForManagerRow, error) {
@@ -1167,5 +1095,5 @@ func (s PostgresStructuredTrainingStore) GetTrainingVariationPlanID(ctx context.
 }
 
 func (s PostgresStructuredTrainingStore) RetireTrainingVariation(ctx context.Context, params dbgen.RetireTrainingVariationParams) (int64, error) {
-	return withTrainingScheduleTarget(ctx, s, trainingWriteActor(ctx), "VARIATION", params.ID, func(q *dbgen.Queries) (int64, error) { return q.RetireTrainingVariation(ctx, params) })
+	return s.retireModernTrainingVariation(ctx, params)
 }

@@ -109,3 +109,23 @@ acceptance remain outstanding.
 Temporary placements return to the previous group; exact season dates remain
 unknown and configurable. No destructive database operation is needed or
 authorized for this local increment. GitHub and release actions remain separate.
+
+## Disposable acceptance data: latest owner clarification
+
+On 10 November 2026 the owner explicitly said: **“you do not need to
+preserve any data!”** In the current local acceptance exercise, fixtures are
+disposable. Historical-data preservation, conversion, backfill and upgrade
+compatibility are not delivery requirements. Stop constructing historical
+sentinels or treating their preservation checks as acceptance gates. Existing
+work remains saved; authentication, privacy and enforced application protections
+remain in place. No unrelated production operation is implied or needed.
+
+Required work is the fresh feature schema, its query/UI/publication integration,
+and proportionate acceptance of the two weekly plans, craft-specific rhythm
+guidance and temporary group return. Overlapping rhythm ranges are intentional;
+the prescribed workout content is shared while the applicable kayak/canoe
+guidance differs. Both plans may replay in the synthetic week 16–22 November
+2026, preserving their original 9–15 November reference dates and weekdays in
+the evidence. Synthetic season dates are test configuration, not approved club
+boundaries. Actual season dates remain unknown and configurable. Temporary
+placements return to the exact previous group when they end.

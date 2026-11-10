@@ -60,6 +60,7 @@ type publicationTransactionQueries interface {
 	LockEvents(context.Context, uuid.UUID, uuid.UUID) ([]publicationEvent, error)
 	LockUsers(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error)
 	RawSource(context.Context, uuid.UUID, uuid.UUID) ([]byte, publicationSourceBudget, error)
+	ReadRhythm(context.Context, uuid.UUID, publicationSourceEnvelope) (*publicationRhythmFacts, error)
 	CheckArtifactSizes(context.Context, []StructuredPrescriptionInput) error
 	InsertPublication(context.Context, uuid.UUID, publicationPlanHeader, string) (dbgen.TrainingPlanPublication, error)
 	InsertPrescription(context.Context, uuid.UUID, uuid.UUID, StructuredPrescriptionInput) error
@@ -151,6 +152,10 @@ func savePublicationInTransaction(ctx context.Context, q publicationTransactionQ
 	if !publicationReturnMatchesSource(input.Review.metadata.Return, source) {
 		return result, pgx.ErrNoRows
 	}
+	source.Rhythm, err = q.ReadRhythm(ctx, input.ActorID, source)
+	if err != nil {
+		return result, err
+	}
 	materialized, err := materializePublicationSource(source, location)
 	if err != nil {
 		return result, err
@@ -159,6 +164,7 @@ func savePublicationInTransaction(ctx context.Context, q publicationTransactionQ
 		return result, err
 	}
 	current := publicationCurrentReviewInput(input, source.Header, materialized.Prescriptions)
+	current.referenceSHA256 = materialized.referenceSHA256
 	if err := input.Review.matches(current, now()); err != nil {
 		return result, err
 	}

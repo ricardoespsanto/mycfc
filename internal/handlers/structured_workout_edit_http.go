@@ -89,6 +89,14 @@ func (h StructuredWorkout) editPage(r *http.Request, user CurrentUser, source fo
 			}
 		}
 	}
+	if page.ProfileReferences == nil {
+		page.ProfileReferences = map[string]pages.StructuredWaterProfile{}
+	}
+	for id, ref := range rhythmFocusedProfileReferences(source.Graph.References) {
+		if _, exists := page.ProfileReferences[id]; !exists {
+			page.ProfileReferences[id] = ref
+		}
+	}
 	return page
 }
 func focusedRetainEditContext(page *pages.StructuredWorkoutTaskPage, values url.Values) {
