@@ -137,8 +137,35 @@ receipt() {
 		'{contract:$contract,version:$version,git_sha:$sha,image:{repository:$repository,digest:$digest},release_tag:$tag,schema_migration_digest:$schema,publication_manifest_sha256:$manifest,result:$result,slot:$slot,failure_phase:(if $phase == "" then null else $phase end),traffic_switched:$switched,rollback_performed:$rolled_back,actual_gates:{guardian_intake:$guardian,privacy_worker:$privacy},privacy_worker_activation_required:$activation_required,started_at:$started,finished_at:$finished}'
 }
 
+# Publisher-side metadata validation reuses the host's strict contract rules.
+# It neither opens a database nor creates host admission or reset authority.
+normal_contract() {
+	for name in NORMAL_RELEASE_CONTRACT NORMAL_RELEASE_CAPABILITIES RELEASE_PUBLICATION_MANIFEST; do
+		require_value "$name"
+	done
+	script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+	python3 - "$script_dir/../deployment/precision-admission.py" "$NORMAL_RELEASE_CONTRACT" \
+		"$NORMAL_RELEASE_CAPABILITIES" "$RELEASE_PUBLICATION_MANIFEST" <<'PYTHON'
+import importlib.util
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location('admission', sys.argv[1])
+ops = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ops)
+try:
+    contract, cap, manifest = [ops.decode(Path(name).read_bytes()) for name in sys.argv[2:]]
+    ops.normal_contract(contract, manifest)
+    ops.manifest_image(manifest, ops.capabilities(cap))
+except (OSError, ops.Refused):
+    raise SystemExit('normal release contract rejected')
+print('normal_release_contract=accepted')
+PYTHON
+}
+
 case "${1:-}" in
 	publication) publication ;;
 	receipt) receipt ;;
-	*) printf 'usage: %s publication|receipt\n' "$0" >&2; exit 2 ;;
+	normal-contract) normal_contract ;;
+	*) printf 'usage: %s publication|receipt|normal-contract\n' "$0" >&2; exit 2 ;;
 esac
