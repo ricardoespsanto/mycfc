@@ -28,7 +28,10 @@ parser.add_argument('--full-create', action='store_true', help='Also run the thr
 parser.add_argument('--edit-workouts', action='store_true', help='Also run the saved-workout edit/cancellation journeys on extended synthetic fixtures')
 parser.add_argument('--reuse-workouts', action='store_true', help='Also run contextual week/routine reuse on extended synthetic fixtures')
 parser.add_argument('--partial-publication', action='store_true', help='Also run native mixed-week publication and private recipient reads')
+parser.add_argument('--dated-placements', action='store_true', help='Run only the dated-placement journeys on a fresh schema83 fixture')
 args = parser.parse_args()
+if args.dated_placements and any([args.full_create, args.edit_workouts, args.reuse_workouts, args.partial_publication]):
+    parser.error('--dated-placements is a standalone focused journey, not an authoring regression selector')
 if args.edit_workouts and not args.full_create:
     parser.error('--edit-workouts requires --full-create for the shared regression fixture')
 if args.reuse_workouts and not args.edit_workouts:
@@ -86,7 +89,7 @@ def sql(query, variables=()):
 
 def facts():
     # One read-only SQL statement gives a consistent snapshot. No mutation endpoint.
-    return json.loads(sql("""
+    query = """
 SELECT jsonb_build_object(
  'plans',(SELECT jsonb_object_agg(p.id::text,to_jsonb(p)||jsonb_build_object('updated_at',p.updated_at,'xmin',p.xmin::text,'sessions',
    COALESCE((SELECT jsonb_agg(to_jsonb(s)||jsonb_build_object(
@@ -115,7 +118,15 @@ SELECT jsonb_build_object(
  'guardian_relationships',COALESCE((SELECT jsonb_agg(to_jsonb(g) ORDER BY g.id) FROM guardian_authority_relationships g),'[]'::jsonb),
  'profiles',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM water_intensity_profiles p),'[]'::jsonb),
  'zones',COALESCE((SELECT jsonb_agg(to_jsonb(z) ORDER BY z.profile_id,z.position,z.id) FROM water_intensity_zones z),'[]'::jsonb));
-"""))
+"""
+    if args.dated_placements:
+        query = "SELECT baseline || jsonb_build_object(" + """
+          'placement_heads',COALESCE((SELECT jsonb_agg(to_jsonb(h) ORDER BY h.subject_user_id,h.programme_id) FROM training_placement_heads h),'[]'::jsonb),
+          'placements',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM training_group_placements p),'[]'::jsonb),
+          'placement_changes',COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM training_placement_changes c),'[]'::jsonb),
+          'withdrawals',COALESCE((SELECT jsonb_agg(to_jsonb(w) ORDER BY w.prescription_id,w.change_id,w.leg) FROM training_prescription_withdrawals w),'[]'::jsonb)
+        ) FROM (""" + query.strip().removesuffix(';') + ") AS captured(baseline)"
+    return json.loads(sql(query))
 
 
 def runtime_hashes():
@@ -156,6 +167,10 @@ def test_hashes():
     if args.partial_publication:
         result.update({f: hashlib.sha256((root / f).read_bytes()).hexdigest() for f in [
             'e2e/partial-publication-authoring.spec.mjs', 'e2e/partial-publication-authoring-seed.sql', 'e2e/run-partial-publication-authoring.py'
+        ]})
+    if args.dated_placements:
+        result.update({f: hashlib.sha256((root / f).read_bytes()).hexdigest() for f in [
+            'e2e/dated-placements.spec.mjs', 'e2e/dated-placements-seed.sql', 'e2e/run-dated-placements.py'
         ]})
     return result
 
@@ -201,10 +216,17 @@ try:
                S3_ENDPOINT='http://127.0.0.1:1', DATA_RIGHTS_CONTACT='privacy@example.test', TRAINING_SCHEDULE_ADMISSION_FILE='')
     for key in ['CONSENT_TERMS_URL', 'CONSENT_IMAGE_URL', 'CONSENT_MINOR_URL', 'PRIVACY_NOTICE_URL', 'COOKIE_NOTICE_URL', 'GALLERY_URL']:
         env[key] = env[key].replace('http://localhost:8080', base)
+    run([str(out / 'server'), 'precision-capabilities'], 'compiled-capabilities.json', env=env)
+    capabilities = json.loads((out / 'compiled-capabilities.json').read_text())
+    assert isinstance(capabilities['reader_generation'], int) and capabilities['reader_generation'] > 0
+    if args.dated_placements:
+        assert capabilities['reader_generation'] >= 4
     dsn = lambda user, password: f'postgres://{user}:{password}@127.0.0.1:{args.pg_port}/mycfc?sslmode=disable'
     for command, user, password in [('bootstrap-db', 'authoring_bootstrap', 'synthetic-bootstrap'), ('migrate', 'authoring_migration', 'synthetic-migration'),
                                     ('prepare-local-recipient-floor', 'authoring_migration', 'synthetic-migration'), ('harden-db', 'authoring_bootstrap', 'synthetic-bootstrap')]:
         run([str(out / 'server'), command], command + '.log', env=dict(env, DATABASE_URL=dsn(user, password)))
+    if args.dated_placements and sql('SELECT CURRENT_DATE').strip() != args.fixture_date.isoformat():
+        raise RuntimeError('placement fixture date must equal actual Lisbon database date; no simulated clock')
     week = args.fixture_date + datetime.timedelta(days=7 - args.fixture_date.weekday())
     params = {'fixture_date': args.fixture_date.isoformat(), 'fixture_start': (args.fixture_date - datetime.timedelta(days=365)).isoformat(),
               'fixture_end': (args.fixture_date + datetime.timedelta(days=400)).isoformat(), 'fixture_week': week.isoformat()}
@@ -218,12 +240,14 @@ try:
         seed += '\n' + (root / 'e2e/reuse-authoring-seed.sql').read_text()
     if args.partial_publication:
         seed += '\n' + (root / 'e2e/partial-publication-authoring-seed.sql').read_text()
+    if args.dated_placements:
+        seed += '\n' + (root / 'e2e/dated-placements-seed.sql').read_text()
     (out / 'seed.log').write_text(sql(seed, variables))
     (out / 'fixture.json').write_text(json.dumps({'days': [(week + datetime.timedelta(days=i * 7)).isoformat() for i in range(9 if args.edit_workouts else 6 if args.full_create else 3)], 'synthetic_dates': params, 'actual_club_season_dates': 'unknown, configurable', 'full_create': args.full_create, 'edit_workouts': args.edit_workouts, 'synthetic_profile': '39139900-0000-0000-0000-000000000900', 'reuse': ({'source_week': (week + datetime.timedelta(weeks=10)).isoformat(), 'copy_week': (week + datetime.timedelta(weeks=11)).isoformat(), 'routine_week': (week + datetime.timedelta(weeks=13)).isoformat(), 'stale_week': (week + datetime.timedelta(weeks=14)).isoformat(), 'synthetic_only': True, 'real_plan_transcriptions': 'unconfirmed:33 entries across16+17,17 timed appointments+16 rest bands; not replayed'} if args.reuse_workouts else None), 'publication': ({'copy_week': (week + datetime.timedelta(weeks=15)).isoformat(), 'guardian_state': 'synthetic initial VERIFIED versus SUSPENDED controls; dynamic revocation not a browser claim'} if args.partial_publication else None)}))
     state = json.loads(sql("SELECT json_build_object('ledger_count',(SELECT count(*) FROM mycfc_meta.schema_migrations),'ledger_versions',(SELECT json_agg(version ORDER BY version) FROM mycfc_meta.schema_migrations),'floor',(SELECT required_reader FROM training_schedule_control.state),'schema',(SELECT schema_contract FROM training_schedule_control.state),'partial_enabled',(SELECT partial_v2_enabled FROM training_schedule_control.state),'database',current_database())"))
     # Match actual source go:embed migrations/*.sql plus the explicit baseline marker.
     expected_versions = sorted(['reset-baseline-v1', *[path.stem for path in (root / 'internal/db/migrations').glob('*.sql')]])
-    assert state['floor'] == 3 and state['schema'] == 'schedule-p1' and state['partial_enabled'] is True
+    assert state['floor'] == capabilities['reader_generation'] and state['schema'] == 'schedule-p1' and state['partial_enabled'] is True
     assert state['ledger_count'] == len(expected_versions) and state['ledger_versions'] == expected_versions
     state['expected_source_inventory'] = expected_versions
     (out / 'prepared-state.json').write_text(json.dumps(state))
@@ -271,12 +295,14 @@ try:
         specs.append('e2e/reuse-authoring.spec.mjs')
     if args.partial_publication:
         specs.append('e2e/partial-publication-authoring.spec.mjs')
+    if args.dated_placements:
+        specs = ['e2e/dated-placements.spec.mjs']
     for relative in specs:
         shutil.copyfile(root / relative, source / relative)
     run(['npm', 'ci', '--ignore-scripts', '--prefix', str(source)], 'dependencies.log')
     run(['docker', 'run', '--rm', '--name', browser, '--cidfile', str(out / 'browser.cid'), '--label', label + '=' + name, '--network', 'host',
          '--user', f'{os.getuid()}:{os.getgid()}', '-e', 'HOME=/tmp', '-e', 'E2E_BASE_URL=' + base, '-e', 'E2E_FOCUSED_WATER_AUTHORING=1',
-         '-e', 'E2E_FOCUSED_WATER_EVIDENCE=/evidence', '-e', 'E2E_FULL_WORKOUT_AUTHORING=' + ('1' if args.full_create else '0'), '-e', 'E2E_WORKOUT_EDIT_AUTHORING=' + ('1' if args.edit_workouts else '0'), '-e', 'E2E_REUSE_AUTHORING=' + ('1' if args.reuse_workouts else '0'), '-e', 'E2E_PARTIAL_PUBLICATION=' + ('1' if args.partial_publication else '0'), '-e', 'E2E_JSON_OUTPUT=/evidence/browser.json',
+         '-e', 'E2E_FOCUSED_WATER_EVIDENCE=/evidence', '-e', 'E2E_FULL_WORKOUT_AUTHORING=' + ('1' if args.full_create else '0'), '-e', 'E2E_WORKOUT_EDIT_AUTHORING=' + ('1' if args.edit_workouts else '0'), '-e', 'E2E_REUSE_AUTHORING=' + ('1' if args.reuse_workouts else '0'), '-e', 'E2E_PARTIAL_PUBLICATION=' + ('1' if args.partial_publication else '0'), '-e', 'E2E_DATED_PLACEMENTS=' + ('1' if args.dated_placements else '0'), '-e', 'E2E_JSON_OUTPUT=/evidence/browser.json',
          '-v', str(source) + ':/src:ro', '-v', str(out) + ':/evidence', '-w', '/src', 'mcr.microsoft.com/playwright:v1.63.0-noble',
          'node', 'node_modules/@playwright/test/cli.js', 'test', *specs, '--workers=1', '--retries=0', '--output=/evidence/artifacts'], 'browser.log')
     assert runtime == runtime_hashes()
