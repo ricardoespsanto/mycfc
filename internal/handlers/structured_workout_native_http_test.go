@@ -158,3 +158,21 @@ func TestWorkoutNativeConfirmUsesRenderedProofAndContainsSaveOutcomes(t *testing
 		})
 	}
 }
+
+func TestWorkoutNativeDraftCommandsRequireFreshContext(t *testing.T) {
+	store, handler, path, values := workoutNativeFixture(t)
+	values.Set("command", "phase_add:a_1")
+	values.Set("source_digest", "stale-review-context")
+	stale := publicationPost(t, handler, path+"/rascunho", values)
+	if stale.Code != 409 || !strings.Contains(stale.Body.String(), "A semana mudou.") || !strings.Contains(stale.Body.String(), "stale-review-context") {
+		t.Fatalf("stale draft returned status %d without retained context", stale.Code)
+	}
+	values.Set("source_digest", store.source.Digest())
+	valid := publicationPost(t, handler, path+"/rascunho", values)
+	if valid.Code != 200 || !strings.Contains(valid.Body.String(), `name="activities[a_1].phase_order" value="p_2"`) {
+		t.Fatalf("fresh draft returned status %d without added phase", valid.Code)
+	}
+	if store.previewCalls != 0 || store.saves != 0 {
+		t.Fatal("editing draft performed review or save")
+	}
+}
