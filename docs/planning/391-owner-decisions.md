@@ -72,9 +72,9 @@ legacy upgrade controllers and upgrade rehearsals are dropped from required
 
 The current #401 draft copy/routine-reuse increment requires no additional DDL.
 Its scoped queries, native coach UI and authenticated integration are locally
-verified, including the combined twelve-case browser run. The next bounded
-integration is mixed-schedule review/publication followed by actual native
-copy → edit → publish evidence. This does not establish full #401/#391 acceptance.
+verified, including the combined twelve-case browser run. Mixed-schedule review/publication and the native copy → edit → publish path
+are now locally verified too. Dated placement/return/access integration is next;
+this does not establish full #391 acceptance or release.
 Later dated placements still need fresh-schema placement/return/access-withdrawal
 definitions, generated queries and all affected read/publication integration.
 Those are feature requirements, not a request to convert existing records.

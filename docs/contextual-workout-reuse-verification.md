@@ -1,8 +1,9 @@
 # Contextual copy and routine reuse: local verification
 
 This is the bounded draft-reuse increment of #401 under #391. It is not a
-release or full-ticket acceptance record. Copy → edit → publish still requires
-mixed-schedule publication and the later placement/craft integration.
+release or full-ticket acceptance record. The native copy → edit → publish path now also has local browser proof; see
+`docs/mixed-schedule-publication-verification.md`. Later placement/craft and
+full-epic acceptance remain separate.
 
 ## Implemented behavior
 

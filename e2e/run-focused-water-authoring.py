@@ -27,11 +27,14 @@ parser.add_argument('--fixture-date', type=datetime.date.fromisoformat, default=
 parser.add_argument('--full-create', action='store_true', help='Also run the three generic full-CREATE cases on extended synthetic fixtures')
 parser.add_argument('--edit-workouts', action='store_true', help='Also run the saved-workout edit/cancellation journeys on extended synthetic fixtures')
 parser.add_argument('--reuse-workouts', action='store_true', help='Also run contextual week/routine reuse on extended synthetic fixtures')
+parser.add_argument('--partial-publication', action='store_true', help='Also run native mixed-week publication and private recipient reads')
 args = parser.parse_args()
 if args.edit_workouts and not args.full_create:
     parser.error('--edit-workouts requires --full-create for the shared regression fixture')
 if args.reuse_workouts and not args.edit_workouts:
     parser.error('--reuse-workouts requires --edit-workouts and its prior full-CREATE fixtures')
+if args.partial_publication and not args.reuse_workouts:
+    parser.error('--partial-publication requires --reuse-workouts and its prior fixtures')
 root = pathlib.Path(__file__).resolve().parents[1]
 out = args.evidence.resolve()
 if not re.fullmatch(r'mycfc-authoring-browser-[a-z0-9]{12,32}', args.name):
@@ -109,6 +112,7 @@ SELECT jsonb_build_object(
  'variations',COALESCE((SELECT jsonb_agg(to_jsonb(v) ORDER BY v.id) FROM training_variations v),'[]'::jsonb),
  'variation_groups',COALESCE((SELECT jsonb_agg(to_jsonb(v) ORDER BY v.id) FROM training_variation_groups v),'[]'::jsonb),
  'variation_group_members',COALESCE((SELECT jsonb_agg(to_jsonb(v) ORDER BY v.variation_group_id,v.membership_id) FROM training_variation_group_members v),'[]'::jsonb),
+ 'guardian_relationships',COALESCE((SELECT jsonb_agg(to_jsonb(g) ORDER BY g.id) FROM guardian_authority_relationships g),'[]'::jsonb),
  'profiles',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM water_intensity_profiles p),'[]'::jsonb),
  'zones',COALESCE((SELECT jsonb_agg(to_jsonb(z) ORDER BY z.profile_id,z.position,z.id) FROM water_intensity_zones z),'[]'::jsonb));
 """))
@@ -148,6 +152,10 @@ def test_hashes():
     if args.reuse_workouts:
         result.update({f: hashlib.sha256((root / f).read_bytes()).hexdigest() for f in [
             'e2e/reuse-authoring.spec.mjs', 'e2e/reuse-authoring-seed.sql', 'e2e/run-reuse-authoring.py'
+        ]})
+    if args.partial_publication:
+        result.update({f: hashlib.sha256((root / f).read_bytes()).hexdigest() for f in [
+            'e2e/partial-publication-authoring.spec.mjs', 'e2e/partial-publication-authoring-seed.sql', 'e2e/run-partial-publication-authoring.py'
         ]})
     return result
 
@@ -208,8 +216,10 @@ try:
         seed += '\n' + (root / 'e2e/workout-edit-authoring-seed.sql').read_text()
     if args.reuse_workouts:
         seed += '\n' + (root / 'e2e/reuse-authoring-seed.sql').read_text()
+    if args.partial_publication:
+        seed += '\n' + (root / 'e2e/partial-publication-authoring-seed.sql').read_text()
     (out / 'seed.log').write_text(sql(seed, variables))
-    (out / 'fixture.json').write_text(json.dumps({'days': [(week + datetime.timedelta(days=i * 7)).isoformat() for i in range(9 if args.edit_workouts else 6 if args.full_create else 3)], 'synthetic_dates': params, 'actual_club_season_dates': 'unknown, configurable', 'full_create': args.full_create, 'edit_workouts': args.edit_workouts, 'synthetic_profile': '39139900-0000-0000-0000-000000000900', 'reuse': ({'source_week': (week + datetime.timedelta(weeks=10)).isoformat(), 'copy_week': (week + datetime.timedelta(weeks=11)).isoformat(), 'routine_week': (week + datetime.timedelta(weeks=13)).isoformat(), 'stale_week': (week + datetime.timedelta(weeks=14)).isoformat(), 'synthetic_only': True, 'real_plan_transcriptions': 'unconfirmed:33 entries across16+17,17 timed appointments+16 rest bands; not replayed'} if args.reuse_workouts else None)}))
+    (out / 'fixture.json').write_text(json.dumps({'days': [(week + datetime.timedelta(days=i * 7)).isoformat() for i in range(9 if args.edit_workouts else 6 if args.full_create else 3)], 'synthetic_dates': params, 'actual_club_season_dates': 'unknown, configurable', 'full_create': args.full_create, 'edit_workouts': args.edit_workouts, 'synthetic_profile': '39139900-0000-0000-0000-000000000900', 'reuse': ({'source_week': (week + datetime.timedelta(weeks=10)).isoformat(), 'copy_week': (week + datetime.timedelta(weeks=11)).isoformat(), 'routine_week': (week + datetime.timedelta(weeks=13)).isoformat(), 'stale_week': (week + datetime.timedelta(weeks=14)).isoformat(), 'synthetic_only': True, 'real_plan_transcriptions': 'unconfirmed:33 entries across16+17,17 timed appointments+16 rest bands; not replayed'} if args.reuse_workouts else None), 'publication': ({'copy_week': (week + datetime.timedelta(weeks=15)).isoformat(), 'guardian_state': 'synthetic initial VERIFIED versus SUSPENDED controls; dynamic revocation not a browser claim'} if args.partial_publication else None)}))
     state = json.loads(sql("SELECT json_build_object('ledger_count',(SELECT count(*) FROM mycfc_meta.schema_migrations),'ledger_versions',(SELECT json_agg(version ORDER BY version) FROM mycfc_meta.schema_migrations),'floor',(SELECT required_reader FROM training_schedule_control.state),'schema',(SELECT schema_contract FROM training_schedule_control.state),'partial_enabled',(SELECT partial_v2_enabled FROM training_schedule_control.state),'database',current_database())"))
     # Match actual source go:embed migrations/*.sql plus the explicit baseline marker.
     expected_versions = sorted(['reset-baseline-v1', *[path.stem for path in (root / 'internal/db/migrations').glob('*.sql')]])
@@ -259,12 +269,14 @@ try:
         specs.append('e2e/workout-edit-authoring.spec.mjs')
     if args.reuse_workouts:
         specs.append('e2e/reuse-authoring.spec.mjs')
+    if args.partial_publication:
+        specs.append('e2e/partial-publication-authoring.spec.mjs')
     for relative in specs:
         shutil.copyfile(root / relative, source / relative)
     run(['npm', 'ci', '--ignore-scripts', '--prefix', str(source)], 'dependencies.log')
     run(['docker', 'run', '--rm', '--name', browser, '--cidfile', str(out / 'browser.cid'), '--label', label + '=' + name, '--network', 'host',
          '--user', f'{os.getuid()}:{os.getgid()}', '-e', 'HOME=/tmp', '-e', 'E2E_BASE_URL=' + base, '-e', 'E2E_FOCUSED_WATER_AUTHORING=1',
-         '-e', 'E2E_FOCUSED_WATER_EVIDENCE=/evidence', '-e', 'E2E_FULL_WORKOUT_AUTHORING=' + ('1' if args.full_create else '0'), '-e', 'E2E_WORKOUT_EDIT_AUTHORING=' + ('1' if args.edit_workouts else '0'), '-e', 'E2E_REUSE_AUTHORING=' + ('1' if args.reuse_workouts else '0'), '-e', 'E2E_JSON_OUTPUT=/evidence/browser.json',
+         '-e', 'E2E_FOCUSED_WATER_EVIDENCE=/evidence', '-e', 'E2E_FULL_WORKOUT_AUTHORING=' + ('1' if args.full_create else '0'), '-e', 'E2E_WORKOUT_EDIT_AUTHORING=' + ('1' if args.edit_workouts else '0'), '-e', 'E2E_REUSE_AUTHORING=' + ('1' if args.reuse_workouts else '0'), '-e', 'E2E_PARTIAL_PUBLICATION=' + ('1' if args.partial_publication else '0'), '-e', 'E2E_JSON_OUTPUT=/evidence/browser.json',
          '-v', str(source) + ':/src:ro', '-v', str(out) + ':/evidence', '-w', '/src', 'mcr.microsoft.com/playwright:v1.63.0-noble',
          'node', 'node_modules/@playwright/test/cli.js', 'test', *specs, '--workers=1', '--retries=0', '--output=/evidence/artifacts'], 'browser.log')
     assert runtime == runtime_hashes()
