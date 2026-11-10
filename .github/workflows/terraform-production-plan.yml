@@ -87,7 +87,7 @@ jobs:
         if: inputs.operation != 'discover-inputs'
         run: make terraform-check
       # aws-actions/configure-aws-credentials v6.2.4
-      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
         with:
           role-to-assume: ${{ vars.AWS_INFRA_PLAN_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
