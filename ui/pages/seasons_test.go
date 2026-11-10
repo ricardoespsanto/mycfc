@@ -136,3 +136,39 @@ func TestSeasonWeekGuidanceUsesOnlyProvidedAdminLink(t *testing.T) {
 		}
 	}
 }
+
+func TestSeasonTypedSetupOriginSurvivesCreatePreviewAndConflict(t *testing.T) {
+	for _, state := range []string{"create", "invalid", "preview", "conflict"} {
+		p := SeasonsPage{Mode: "create", ContextKind: "classification", ContextID: "person", ContextDay: "2026-11-11", ContextOriginGroup: "group", ContextOriginWeek: "week", ContextOriginDay: "2026-11-11"}
+		if state == "invalid" {
+			p.Form.Errors = validation.FieldErrors{"name": "Introduza um nome."}
+		}
+		if state == "preview" || state == "conflict" {
+			p.Mode = "preview"
+			p.Token = "original-token"
+		}
+		if state == "conflict" {
+			p.Conflict = "A seleção mudou."
+		}
+		body := renderSeasons(t, p)
+		for _, want := range []string{`name="day" value="2026-11-11"`, `name="origin_group" value="group"`, `name="origin_week" value="week"`, `name="origin_day" value="2026-11-11"`, `name="return_kind" value="classification"`, `name="return_id" value="person"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s missing %q", state, want)
+			}
+		}
+		if strings.Contains(body, `name="return_to"`) {
+			t.Fatal("typed setup origin replaced with arbitrary URL transport")
+		}
+		if state == "conflict" && (!strings.Contains(body, `name="preview_token" value="original-token"`) || strings.Contains(body, `name="confirm"`)) {
+			t.Fatal("stale token rebased or confirmation still offered")
+		}
+	}
+}
+func TestSeasonEmptySetupOriginNotInvented(t *testing.T) {
+	body := renderSeasons(t, SeasonsPage{Mode: "create"})
+	for _, name := range []string{"day", "origin_group", "origin_week", "origin_day"} {
+		if strings.Contains(body, `name="`+name+`"`) {
+			t.Errorf("invented %s", name)
+		}
+	}
+}

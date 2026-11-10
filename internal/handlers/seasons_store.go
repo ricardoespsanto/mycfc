@@ -31,7 +31,7 @@ type SeasonSelection struct {
 	Current *dbgen.Season
 	Version string
 }
-type SeasonReturnContext struct{ Kind, ID, WeekID, Page, Query string }
+type SeasonReturnContext struct{ Kind, ID, WeekID, Day, Page, Query, OriginGroup, OriginWeek, OriginDay string }
 type SeasonStore interface {
 	Authorize(context.Context, uuid.UUID) error
 	HasCurrentSeason(context.Context, uuid.UUID) (bool, error)
@@ -178,9 +178,15 @@ func (s PostgresSeasonStore) ResolveReturn(ctx context.Context, actor uuid.UUID,
 	fallback := func() (SeasonReturnContext, string, error) {
 		return SeasonReturnContext{Kind: "list"}, seasonsPath, nil
 	}
+	origin, _, originErr := (PostgresTrainingSetupStore{Pool: s.Pool}).ResolveContext(ctx, actor, TrainingSetupContext{GroupID: in.OriginGroup, WeekID: in.OriginWeek, Day: in.OriginDay})
+	if originErr != nil {
+		return SeasonReturnContext{}, "", originErr
+	}
+
 	switch in.Kind {
 	case "definitions":
-		return SeasonReturnContext{Kind: "definitions"}, "/equipa/escaloes", nil
+		out := setupSeasonContext("definitions", "", origin)
+		return out, setupContextURL("/equipa/escaloes", origin), nil
 	case "member", "classification":
 		id, err := uuid.Parse(in.ID)
 		if err != nil || id == uuid.Nil {
@@ -196,7 +202,8 @@ func (s PostgresSeasonStore) ResolveReturn(ctx context.Context, actor uuid.UUID,
 		in.ID = id.String()
 		in.WeekID = ""
 		if in.Kind == "classification" {
-			return SeasonReturnContext{Kind: in.Kind, ID: in.ID}, "/equipa/classificacao/" + in.ID, nil
+			out := setupSeasonContext(in.Kind, in.ID, origin)
+			return out, setupContextURL("/equipa/classificacao/"+in.ID, origin), nil
 		}
 		n, valid := trainingGroupPageNumber(in.Page)
 		if !valid || utf8.RuneCountInString(in.Query) > 100 {
@@ -213,30 +220,17 @@ func (s PostgresSeasonStore) ResolveReturn(ctx context.Context, actor uuid.UUID,
 		}
 		return in, memberDetailPath(id, collection), nil
 	case "group":
-		id, err := uuid.Parse(in.ID)
-		if err != nil || id == uuid.Nil {
-			return fallback()
-		}
-		groups := PostgresTrainingGroupStore{Pool: s.Pool}
-		if _, err = groups.GetGroup(ctx, actor, id); err != nil {
+		c, dest, err := (PostgresTrainingSetupStore{Pool: s.Pool}).ResolveContext(ctx, actor, TrainingSetupContext{GroupID: in.ID, WeekID: in.WeekID, Day: in.Day})
+		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return fallback()
 			}
 			return SeasonReturnContext{}, "", err
 		}
-		out := SeasonReturnContext{Kind: "group", ID: id.String()}
-		dest := trainingGroupsPath + "/" + id.String()
-		if week, e := uuid.Parse(in.WeekID); e == nil && week != uuid.Nil {
-			allowed, e := groups.AllowsWeek(ctx, actor, id, week)
-			if e != nil && !errors.Is(e, pgx.ErrNoRows) {
-				return SeasonReturnContext{}, "", e
-			}
-			if e == nil && allowed {
-				out.WeekID = week.String()
-				dest = structuredPlannerURL(id.String(), week.String(), "")
-			}
+		if c.GroupID == "" {
+			return fallback()
 		}
-		return out, dest, nil
+		return SeasonReturnContext{Kind: "group", ID: c.GroupID, WeekID: c.WeekID, Day: c.Day}, dest, nil
 	default:
 		return fallback()
 	}

@@ -179,7 +179,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /treinos/prescricoes/sessoes/{id}", auth.RequireFeature(featureflags.StructuredTrainingPlanning, http.HandlerFunc(structuredTraining.PrescriptionForSession)))
 	mux.Handle("GET /treinos/prescricoes/{id}", auth.RequireFeature(featureflags.StructuredTrainingPlanning, http.HandlerFunc(structuredTraining.PrescriptionDetail)))
 	mux.Handle("GET /admin/treinos/estruturados", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.Index))))
-	trainingGroups := handlers.TrainingGroups{Store: structuredTraining.Groups, System: system, PageMeta: structuredTraining.PageMeta, Sessions: sessions}
+	trainingGroups := handlers.TrainingGroups{Setup: structuredTraining.Setup, Store: structuredTraining.Groups, System: system, PageMeta: structuredTraining.PageMeta, Sessions: sessions}
 	for _, route := range []struct {
 		pattern string
 		handler http.HandlerFunc

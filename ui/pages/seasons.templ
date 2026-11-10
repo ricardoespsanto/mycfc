@@ -15,6 +15,7 @@ type SeasonForm struct {
 	Errors                       validation.FieldErrors
 }
 type SeasonsPage struct {
+	ContextDay, ContextOriginGroup, ContextOriginWeek, ContextOriginDay string
 	Meta                                                                            components.PageMeta
 	CSRFField                                                                       templ.Component
 	Mode                                                                            string
@@ -214,6 +215,18 @@ templ seasonContext(page SeasonsPage) {
 	}
 	if page.ContextQuery != "" {
 		<input type="hidden" name="return_q" value={ page.ContextQuery }/>
+	}
+	if page.ContextDay != "" {
+		<input type="hidden" name="day" value={ page.ContextDay }/>
+	}
+	if page.ContextOriginGroup != "" {
+		<input type="hidden" name="origin_group" value={ page.ContextOriginGroup }/>
+	}
+	if page.ContextOriginWeek != "" {
+		<input type="hidden" name="origin_week" value={ page.ContextOriginWeek }/>
+	}
+	if page.ContextOriginDay != "" {
+		<input type="hidden" name="origin_day" value={ page.ContextOriginDay }/>
 	}
 }
 

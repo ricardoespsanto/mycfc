@@ -93,6 +93,11 @@ func (h Classification) Search(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	origin, returnURL, originErr := resolveTrainingSetup(r.Context(), h.Setup, actor.ID, requestSetupContext(r))
+	if originErr != nil {
+		setupFailure(w, r, originErr)
+		return
+	}
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	page := 1
 	if raw := r.URL.Query().Get("page"); raw != "" {
@@ -121,21 +126,23 @@ func (h Classification) Search(w http.ResponseWriter, r *http.Request) {
 	}
 	previous, next := "", ""
 	if page > 1 && searchQuery != "" {
-		previous = classificationSearchURL(query, page-1)
+		previous = setupContextURL(classificationSearchURL(query, page-1), origin)
 	}
 	if more {
-		next = classificationSearchURL(query, page+1)
+		next = setupContextURL(classificationSearchURL(query, page+1), origin)
 	}
 	data := struct {
+		Origin                         TrainingSetupContext
+		ReturnURL                      string
 		Query, Message, Previous, Next string
 		People                         []ClassificationPerson
 		Submitted                      bool
-	}{query, message, previous, next, people, submitted}
+	}{origin, returnURL, query, message, previous, next, people, submitted}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = classificationSearchTemplate.Execute(w, data)
 }
 
-var classificationSearchTemplate = template.Must(template.New("classification-search").Funcs(template.FuncMap{"selectURL": func(id uuid.UUID, q string) string {
-	return "/equipa/classificacao/" + id.String() + "?" + url.Values{"q": {q}}.Encode()
-}}).Parse(`<!doctype html><html lang="pt-PT"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Classificação | MyCFCoimbra</title><link rel="stylesheet" href="/equipa/classificacao.css"><main><h1>Classificação</h1><p>Pesquise pelo nome e selecione uma pessoa para classificar. Esta pesquisa não dá acesso ao perfil.</p><form method="get" action="/equipa/classificacao"><label for="person-name">Nome da pessoa</label><input id="person-name" name="q" type="search" value="{{.Query}}" maxlength="100" autofocus><button type="submit">Pesquisar</button></form>{{if .Message}}<p role="alert">{{.Message}}</p>{{else if .People}}<section aria-label="Pessoas disponíveis para classificação"><h2>Resultados</h2><ul>{{range .People}}<li><a href="{{selectURL .ID $.Query}}">Selecionar {{.Name}}</a></li>{{end}}</ul></section>{{else if .Submitted}}<p role="status">Não foram encontradas pessoas disponíveis para classificação com este nome.</p>{{end}}{{if or .Previous .Next}}<nav aria-label="Páginas de resultados">{{if .Previous}}<a href="{{.Previous}}">Anterior</a>{{end}} {{if .Next}}<a href="{{.Next}}">Seguinte</a>{{end}}</nav>{{end}}<p><a href="/today">Voltar à Coordenação</a></p></main></html>`))
+var classificationSearchTemplate = template.Must(template.New("classification-search").Funcs(template.FuncMap{"selectURL": func(id uuid.UUID, q string, c TrainingSetupContext) string {
+	return classificationPersonSetupURL(id, q, c)
+}}).Parse(`<!doctype html><html lang="pt-PT"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Classificação | MyCFCoimbra</title><link rel="stylesheet" href="/equipa/classificacao.css"><main><h1>Classificação</h1><p>Pesquise pelo nome e selecione uma pessoa para classificar. Esta pesquisa não dá acesso ao perfil.</p><form method="get" action="/equipa/classificacao">{{template "setup-origin" .Origin}}<label for="person-name">Nome da pessoa</label><input id="person-name" name="q" type="search" value="{{.Query}}" maxlength="100" autofocus><button type="submit">Pesquisar</button></form>{{if .Message}}<p role="alert">{{.Message}}</p>{{else if .People}}<section aria-label="Pessoas disponíveis para classificação"><h2>Resultados</h2><ul>{{range .People}}<li><a href="{{selectURL .ID $.Query $.Origin}}">Selecionar {{.Name}}</a></li>{{end}}</ul></section>{{else if .Submitted}}<p role="status">Não foram encontradas pessoas disponíveis para classificação com este nome.</p>{{end}}{{if or .Previous .Next}}<nav aria-label="Páginas de resultados">{{if .Previous}}<a href="{{.Previous}}">Anterior</a>{{end}} {{if .Next}}<a href="{{.Next}}">Seguinte</a>{{end}}</nav>{{end}}{{if .ReturnURL}}<p><a href="{{.ReturnURL}}">Voltar ao grupo e à semana</a></p>{{end}}<p><a href="/today">Voltar à Coordenação</a></p></main></html>` + setupHiddenTemplate))

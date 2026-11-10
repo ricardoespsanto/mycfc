@@ -25,7 +25,14 @@ type TrainingGroupForm struct {
 	Errors validation.FieldErrors
 }
 
+type TrainingGroupSetup struct {
+	Show, MissingSeason, CanClassify, CanDefine, CategoryApplicable, CategoryRequired, CategoryConfigured bool
+	Message, ClassificationURL, DefinitionsURL, SeasonURL string
+}
+
 type TrainingGroupsPage struct {
+	Setup TrainingGroupSetup
+	ContextDay string
 	Meta components.PageMeta
 	CSRFField templ.Component
 	Mode string
@@ -119,6 +126,7 @@ templ trainingGroupDetail(page TrainingGroupsPage) {
 		}
 		@trainingGroupPagination(page.RosterPreviousURL, page.RosterNextURL, "Páginas de atletas do grupo")
 	</section>
+	@trainingGroupSetupHelp(page.Setup)
 	<p class="form-help">As semanas guardam o seu próprio estado de rascunho e publicação. Depois de adicionar atletas, reveja os destinatários antes de publicar.</p>
 	<p><a href={ templ.SafeURL(page.CollectionURL) }>Voltar aos grupos de treino</a></p>
 }
@@ -167,6 +175,9 @@ templ trainingGroupAddTask(page TrainingGroupsPage) {
 		if page.WeekID != "" {
 			<input type="hidden" name="week_id" value={ page.WeekID }/>
 		}
+		if page.ContextDay != "" {
+			<input type="hidden" name="day" value={ page.ContextDay }/>
+		}
 		@components.FieldLabel("training-group-query", "Nome do atleta", false)
 		<input id="training-group-query" name="q" type="search" maxlength="100" value={ page.Form.Query } aria-invalid={ fmt.Sprint(page.Form.Errors["q"] != "") } aria-describedby={ trainingGroupDescribedBy("training-group-search-help", "q", page.Form.Errors) }/>
 		@components.FieldHelp("training-group-search-help", "Escreva um nome para procurar. Não é apresentada uma lista de atletas sem pesquisa.")
@@ -199,7 +210,7 @@ templ trainingGroupAddTask(page TrainingGroupsPage) {
 				</fieldset>
 				@components.FieldErrorMessage("members", page.Form.Errors["members"])
 			} else {
-				<div id="training-group-members" tabindex="-1">@components.EmptyState("Sem resultados", "Não foram encontradas pessoas elegíveis neste grupo.")</div>
+				<div id="training-group-members" tabindex="-1">@components.EmptyState("Sem resultados", "Não foram encontradas pessoas disponíveis para este grupo com esta pesquisa.")</div>
 				@components.FieldErrorMessage("members", page.Form.Errors["members"])
 			}
 		} else {
@@ -212,6 +223,7 @@ templ trainingGroupAddTask(page TrainingGroupsPage) {
 		}
 	</form>
 	@trainingGroupPagination(page.PreviousURL, page.NextURL, "Páginas de resultados")
+	@trainingGroupSetupHelp(page.Setup)
 }
 
 templ trainingGroupHiddenContext(page TrainingGroupsPage) {
@@ -222,6 +234,9 @@ templ trainingGroupHiddenContext(page TrainingGroupsPage) {
 	}
 	if page.WeekID != "" {
 		<input type="hidden" name="week_id" value={ page.WeekID }/>
+	}
+	if page.ContextDay != "" {
+		<input type="hidden" name="day" value={ page.ContextDay }/>
 	}
 }
 
@@ -243,6 +258,53 @@ templ trainingGroupPagination(previous, next, label string) {
 				<a class="action action--quiet" href={ templ.SafeURL(next) }>Página seguinte</a>
 			}
 		</nav>
+	}
+}
+
+templ trainingGroupSetupHelp(setup TrainingGroupSetup) {
+	if setup.Show {
+		<details class="module disclosure">
+			<summary><span><strong>Precisa de rever a configuração?</strong><small>Ajuda opcional para participação e escalão.</small></span></summary>
+			<div class="disclosure__content">
+				<p>Competição é uma participação; Iniciados é um escalão; Iniciados e Infantis pode ser um grupo de treino. O grupo organiza as semanas e não altera a participação nem o escalão dos atletas.</p>
+				if setup.Message != "" {
+					<p>{ setup.Message }</p>
+				}
+				if setup.MissingSeason {
+					<p>Não existe uma época atual configurada.</p>
+					if setup.SeasonURL != "" {
+						<p><a class="action action--secondary" href={ templ.SafeURL(setup.SeasonURL) }>Configurar épocas</a></p>
+					} else {
+						<p>Peça a um administrador para configurar e selecionar a época.</p>
+					}
+				}
+				if setup.CanClassify && setup.ClassificationURL != "" {
+					<p><a class="action action--secondary" href={ templ.SafeURL(setup.ClassificationURL) }>Rever a participação de uma pessoa</a></p>
+				} else {
+					<p>Para rever a participação de uma pessoa, peça ajuda a um administrador.</p>
+				}
+				if setup.CategoryApplicable {
+					if setup.CategoryRequired {
+						<p>A participação deste grupo requer um escalão.</p>
+					} else {
+						<p>O escalão é opcional na participação deste grupo.</p>
+					}
+					if !setup.MissingSeason {
+						if setup.CategoryConfigured {
+							<p>Existem escalões configurados nesta participação e época. A elegibilidade de cada pessoa é verificada na tarefa de participação.</p>
+						} else {
+							<p>Ainda não existem escalões configurados nesta participação e época.</p>
+						}
+					}
+					if setup.CanDefine && setup.DefinitionsURL != "" {
+						<p><a class="action action--secondary" href={ templ.SafeURL(setup.DefinitionsURL) }>Gerir escalões da época</a></p>
+					} else {
+						<p>Para rever a configuração dos escalões, peça ajuda a um administrador.</p>
+					}
+				}
+				<p>Pode continuar a preparar a semana em rascunho e voltar a estas tarefas quando precisar.</p>
+			</div>
+		</details>
 	}
 }
 

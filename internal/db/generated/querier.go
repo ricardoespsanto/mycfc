@@ -335,6 +335,10 @@ type Querier interface {
 	TrainingGroupRecords(ctx context.Context, arg TrainingGroupRecordsParams) ([]TrainingGroupRecordsRow, error)
 	// #392/#393 dedicated group tasks. Exact scope authority is independent of athlete counts.
 	TrainingGroupScopeOptions(ctx context.Context, actorID uuid.UUID) ([]TrainingGroupScopeOptionsRow, error)
+	// #395 optional setup facts. Each read repeats exact current group authority;
+	// no roster, subject, grant identity, or unrelated planner data is selected.
+	TrainingGroupSetupStatus(ctx context.Context, arg TrainingGroupSetupStatusParams) (TrainingGroupSetupStatusRow, error)
+	TrainingGroupSetupWeek(ctx context.Context, arg TrainingGroupSetupWeekParams) (pgtype.Date, error)
 	TrainingPlanExists(ctx context.Context, id uuid.UUID) (bool, error)
 	TransitionGuardianAuthority(ctx context.Context, arg TransitionGuardianAuthorityParams) (GuardianAuthorityRelationship, error)
 	UpdateActivityConnectionCredentials(ctx context.Context, arg UpdateActivityConnectionCredentialsParams) (ActivityConnection, error)

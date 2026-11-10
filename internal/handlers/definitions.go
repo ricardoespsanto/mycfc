@@ -34,7 +34,10 @@ type DefinitionStore interface {
 	Scopes(context.Context, uuid.UUID) ([]DefinitionScope, error)
 	Create(context.Context, uuid.UUID, DefinitionInput) error
 }
-type Definitions struct{ Store DefinitionStore }
+type Definitions struct {
+	Store DefinitionStore
+	Setup TrainingSetupStore
+}
 type PostgresDefinitionStore struct{ Pool *pgxpool.Pool }
 
 // Programme-level grants only: a team-only coach grant never authorises a
@@ -123,6 +126,8 @@ var definitionCode = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
 func (h Definitions) Get(w http.ResponseWriter, r *http.Request) { h.render(w, r, 200, "", "", "") }
 func (h Definitions) Post(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	actor, ok := currentUser(r.Context())
 	if !ok || actor.ID == uuid.Nil {
 		http.NotFound(w, r)
@@ -134,6 +139,11 @@ func (h Definitions) Post(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "Pedido inválido", 400)
+		return
+	}
+	origin, _, originErr := resolveTrainingSetup(r.Context(), h.Setup, actor.ID, requestSetupContext(r))
+	if originErr != nil {
+		setupFailure(w, r, originErr)
 		return
 	}
 	// Never accept provenance, membership, or a scope split across unrelated fields.
@@ -211,6 +221,15 @@ func (h Definitions) Post(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Não foi possível guardar o escalão.", http.StatusServiceUnavailable)
 		return
 	}
+	if origin.GroupID != "" {
+		_, dest, e := resolveTrainingSetup(r.Context(), h.Setup, actor.ID, origin)
+		if e != nil {
+			setupFailure(w, r, e)
+			return
+		}
+		http.Redirect(w, r, dest, http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/equipa/escaloes", http.StatusSeeOther)
 }
 func definitionErrorTarget(status int, message string) string {
@@ -226,6 +245,8 @@ func definitionErrorTarget(status int, message string) string {
 	}
 }
 func (h Definitions) render(w http.ResponseWriter, r *http.Request, status int, message, scope, code string) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	actor, ok := currentUser(r.Context())
 	if !ok || actor.ID == uuid.Nil {
 		http.NotFound(w, r)
@@ -235,12 +256,17 @@ func (h Definitions) render(w http.ResponseWriter, r *http.Request, status int, 
 		http.Error(w, "Serviço indisponível", http.StatusServiceUnavailable)
 		return
 	}
+	origin, groupReturn, originErr := resolveTrainingSetup(r.Context(), h.Setup, actor.ID, requestSetupContext(r))
+	if originErr != nil {
+		setupFailure(w, r, originErr)
+		return
+	}
 	scopes, err := h.Store.Scopes(r.Context(), actor.ID)
 	if err != nil {
 		http.Error(w, "Serviço indisponível", http.StatusServiceUnavailable)
 		return
 	}
-	setupMessage, setupURL, err := seasonMissingGuidance(r.Context(), h.Store, actor.ID, SeasonReturnContext{Kind: "definitions"})
+	setupMessage, setupURL, err := seasonMissingGuidance(r.Context(), h.Store, actor.ID, setupSeasonContext("definitions", "", origin))
 	if err != nil {
 		http.Error(w, "Serviço indisponível", 503)
 		return
@@ -262,17 +288,20 @@ func (h Definitions) render(w http.ResponseWriter, r *http.Request, status int, 
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.WriteHeader(status)
 	errorTarget := definitionErrorTarget(status, message)
 	if len(scopes) == 0 && setupMessage != "" {
 		errorTarget = "season-setup"
 	}
 	_ = definitionTemplate.Execute(w, struct {
+		Origin                                                  TrainingSetupContext
+		GroupReturnURL                                          string
 		Scopes                                                  []DefinitionScope
 		Rows                                                    []DefinitionRow
 		Message, ErrorTarget, Scope, Code, Name, From, To, CSRF string
 		SeasonSetupMessage, SeasonSetupURL                      string
-	}{scopes, definitions, message, errorTarget, scope, code, r.PostForm.Get("name"), r.PostForm.Get("birth_date_from"), r.PostForm.Get("birth_date_to"), string(csrf.Token(r)), setupMessage, setupURL})
+	}{origin, groupReturn, scopes, definitions, message, errorTarget, scope, code, r.PostForm.Get("name"), r.PostForm.Get("birth_date_from"), r.PostForm.Get("birth_date_to"), string(csrf.Token(r)), setupMessage, setupURL})
 }
 func (s PostgresDefinitionStore) List(ctx context.Context, actor uuid.UUID) ([]DefinitionRow, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT p.name_pt,c.code,c.name_pt,coalesce(c.birth_date_from::text,''),coalesce(c.birth_date_to::text,'') FROM competition_categories c JOIN seasons s ON s.id=c.season_id JOIN programmes p ON p.id=c.programme_id WHERE s.is_current AND p.code IN ('Competition','Initiation') AND (guardian_authority_is_administrator($1) OR EXISTS(SELECT 1 FROM staff_grants g JOIN users u ON u.id=g.user_id WHERE g.user_id=$1 AND u.is_active AND u.erased_at IS NULL AND NOT u.is_dependent AND g.capability='COACH' AND g.revoked_at IS NULL AND g.programme_id=c.programme_id)) ORDER BY p.name_pt,c.name_pt`, actor)
@@ -302,14 +331,14 @@ button{min-height:2.75rem;font:inherit;padding:.4rem 1rem}a,button,input,select{
 .error{border:2px solid currentColor;padding:1rem;margin:1rem 0}[aria-invalid="true"]{border:2px solid #a52820}
 @media(forced-colors:active){.error,[aria-invalid="true"]{border-color:CanvasText}:focus-visible,[tabindex="-1"]:focus{outline-color:Highlight}}
 </style></head><body><main><h1 id="heading" tabindex="-1" {{if not .Message}}autofocus{{end}}>Escalões da época</h1>
-<p><a href="/today">Voltar a Hoje</a></p>
+{{if .GroupReturnURL}}<p><a href="{{.GroupReturnURL}}">Voltar ao grupo e à semana</a></p>{{end}}<p><a href="/today">Voltar a Hoje</a></p>
 <p>Crie uma definição para a época atual antes de classificar participantes. As datas de nascimento são inclusivas e avaliadas no início da época; não há mudança automática no aniversário. Competição exige escalão; Iniciação pode ter um. Uma definição utilizada não pode ser alterada aqui.</p>
 {{if .Message}}<div role="alert" class="error" id="errors" tabindex="-1" autofocus><strong>Não foi possível guardar</strong><p><a href="#{{.ErrorTarget}}">{{.Message}}</a></p></div>{{end}}
-{{if .SeasonSetupMessage}}<p role="status" id="season-setup" tabindex="-1">{{.SeasonSetupMessage}}</p>{{if .SeasonSetupURL}}<p><a href="{{.SeasonSetupURL}}">Configurar épocas</a></p>{{end}}{{end}}{{if .Scopes}}<form method="post"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><fieldset><legend>Criar escalão</legend>
+{{if .SeasonSetupMessage}}<p role="status" id="season-setup" tabindex="-1">{{.SeasonSetupMessage}}</p>{{if .SeasonSetupURL}}<p><a href="{{.SeasonSetupURL}}">Configurar épocas</a></p>{{end}}{{end}}{{if .Scopes}}<form method="post"><input type="hidden" name="csrf_token" value="{{.CSRF}}">{{template "setup-origin" .Origin}}<fieldset><legend>Criar escalão</legend>
 <label for="scope">Época e programa</label><select name="scope" id="scope" {{if eq .ErrorTarget "scope"}}aria-invalid="true" aria-describedby="errors"{{end}} required><option value="">Escolha</option>{{range .Scopes}}<option value="{{.SeasonID}}:{{.ProgrammeID}}" {{if eq $.Scope (printf "%s:%s" .SeasonID .ProgrammeID)}}selected{{end}}>{{.Season}} — {{.Programme}}</option>{{end}}</select>
 <label for="code">Código único nesta época e programa</label><input id="code" name="code" maxlength="40" pattern="[A-Za-z][A-Za-z0-9_]*" aria-describedby="code-help{{if eq .ErrorTarget "code"}} errors{{end}}" {{if eq .ErrorTarget "code"}}aria-invalid="true"{{end}} value="{{.Code}}" required><p id="code-help">Comece por uma letra; use apenas letras sem acentos, algarismos e sublinhados.</p>
 <label for="name">Nome do escalão</label><input id="name" name="name" minlength="2" maxlength="120" value="{{.Name}}" {{if eq .ErrorTarget "name"}}aria-invalid="true" aria-describedby="errors"{{end}} required>
 <label for="birth_date_from">Nascimento desde (opcional)</label><input id="birth_date_from" name="birth_date_from" type="date" value="{{.From}}" {{if eq .ErrorTarget "birth_date_from"}}aria-invalid="true" aria-describedby="errors"{{end}}>
 <label for="birth_date_to">Nascimento até (opcional)</label><input id="birth_date_to" name="birth_date_to" type="date" value="{{.To}}" {{if eq .ErrorTarget "birth_date_to"}}aria-invalid="true" aria-describedby="errors"{{end}}>
 <button type="submit">Criar escalão</button></fieldset></form>{{end}}
-<section aria-labelledby="definitions-title"><h2 id="definitions-title">Definições acessíveis</h2>{{if .Rows}}<ul>{{range .Rows}}<li>{{.Programme}} — {{.Name}} ({{.Code}}): {{if .From}}{{.From}}{{else}}sem limite{{end}} — {{if .To}}{{.To}}{{else}}sem limite{{end}}</li>{{end}}</ul>{{else}}<p>Sem definições para os seus programas nesta época.</p>{{end}}</section></main></body></html>`))
+<section aria-labelledby="definitions-title"><h2 id="definitions-title">Definições acessíveis</h2>{{if .Rows}}<ul>{{range .Rows}}<li>{{.Programme}} — {{.Name}} ({{.Code}}): {{if .From}}{{.From}}{{else}}sem limite{{end}} — {{if .To}}{{.To}}{{else}}sem limite{{end}}</li>{{end}}</ul>{{else}}<p>Sem definições para os seus programas nesta época.</p>{{end}}</section></main></body></html>` + setupHiddenTemplate))

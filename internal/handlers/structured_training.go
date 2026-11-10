@@ -29,6 +29,7 @@ import (
 )
 
 type StructuredTraining struct {
+	Setup    TrainingSetupStore
 	Groups   TrainingGroupStore
 	Store    StructuredTrainingStore
 	System   System

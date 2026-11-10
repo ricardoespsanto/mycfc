@@ -27,6 +27,7 @@ const trainingGroupsPath = "/admin/treinos/estruturados/grupos"
 // TrainingGroups keeps group setup independent of the planner's routines,
 // variations, profiles and publications. Every protected read goes through Store.
 type TrainingGroups struct {
+	Setup    TrainingSetupStore
 	Store    TrainingGroupStore
 	System   System
 	PageMeta components.PageMeta
@@ -327,6 +328,10 @@ func (h TrainingGroups) Detail(w http.ResponseWriter, r *http.Request) {
 	if len(roster) == 20 && n < 99 {
 		p.RosterNextURL = trainingGroupContextURL(trainingGroupURL(strings.Split(p.GroupURL, "?")[0], "", n+1), p.WeekID)
 	}
+	if err := h.applySetup(ctx, r, actor, g, &p); err != nil {
+		h.failure(w, r, err)
+		return
+	}
 	h.render(w, r, http.StatusOK, p)
 }
 func (h TrainingGroups) task(ctx context.Context, w http.ResponseWriter, r *http.Request, actor CurrentUser, g TrainingGroupRecord, mode string, status int, form pages.TrainingGroupForm, conflict string) {
@@ -364,7 +369,16 @@ func (h TrainingGroups) task(ctx context.Context, w http.ResponseWriter, r *http
 			}
 		}
 	}
-	p.ReviewURL = trainingGroupContextURL(trainingGroupURL(strings.Split(p.ActionURL, "?")[0], form.Query, 0), p.WeekID)
+	if err := h.applySetup(ctx, r, actor, current, &p); err != nil {
+		h.failure(w, r, err)
+		return
+	}
+	if mode == "rename" {
+		p.ActionURL = p.RenameURL
+	} else {
+		p.ActionURL = p.AddURL
+	}
+	p.ReviewURL = groupContextDayURL(trainingGroupURL(strings.Split(p.ActionURL, "?")[0], form.Query, 0), p.WeekID, p.ContextDay)
 	h.render(w, r, status, p)
 }
 func (h TrainingGroups) Athletes(w http.ResponseWriter, r *http.Request) {
@@ -450,7 +464,7 @@ func (h TrainingGroups) AddAthletes(w http.ResponseWriter, r *http.Request) {
 		message = "As pessoas selecionadas já pertencem ao grupo. Nenhuma adição foi necessária."
 	}
 	h.flash(r, message)
-	httpx.Redirect(w, r, h.groupPage(r, actor, "detail", g).GroupURL, http.StatusSeeOther)
+	httpx.Redirect(w, r, h.setupGroupDestination(ctx, r, actor, g), http.StatusSeeOther)
 }
 func (h TrainingGroups) RenamePage(w http.ResponseWriter, r *http.Request) {
 	actor, ok := h.actor(w, r)
@@ -508,5 +522,5 @@ func (h TrainingGroups) Rename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.flash(r, "Nome do grupo alterado; as semanas existentes foram preservadas.")
-	httpx.Redirect(w, r, h.groupPage(r, actor, "detail", g).GroupURL, http.StatusSeeOther)
+	httpx.Redirect(w, r, h.setupGroupDestination(ctx, r, actor, g), http.StatusSeeOther)
 }

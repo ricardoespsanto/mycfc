@@ -44,7 +44,7 @@ func seasonMemberCollectionQuery(page, q string) string {
 	return v.Encode()
 }
 func seasonContext(r *http.Request) SeasonReturnContext {
-	return SeasonReturnContext{Kind: r.FormValue("return_kind"), ID: r.FormValue("return_id"), WeekID: r.FormValue("week_id"), Page: r.FormValue("return_page"), Query: strings.TrimSpace(r.FormValue("return_q"))}
+	return SeasonReturnContext{Kind: r.FormValue("return_kind"), ID: r.FormValue("return_id"), WeekID: r.FormValue("week_id"), Day: r.FormValue("day"), OriginGroup: r.FormValue("origin_group"), OriginWeek: r.FormValue("origin_week"), OriginDay: r.FormValue("origin_day"), Page: r.FormValue("return_page"), Query: strings.TrimSpace(r.FormValue("return_q"))}
 }
 func seasonContextValues(c SeasonReturnContext) url.Values {
 	v := url.Values{}
@@ -57,6 +57,12 @@ func seasonContextValues(c SeasonReturnContext) url.Values {
 	if c.WeekID != "" {
 		v.Set("week_id", c.WeekID)
 	}
+	for key, value := range map[string]string{"day": c.Day, "origin_group": c.OriginGroup, "origin_week": c.OriginWeek, "origin_day": c.OriginDay} {
+		if value != "" {
+			v.Set(key, value)
+		}
+	}
+
 	if c.Page != "" {
 		v.Set("return_page", c.Page)
 	}
@@ -116,7 +122,7 @@ func (h Seasons) page(ctx context.Context, w http.ResponseWriter, r *http.Reques
 	meta.CurrentUserID = actor.ID.String()
 	meta.Navigation = dashboardNavigation(actor)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
-	return pages.SeasonsPage{Meta: meta, CSRFField: meta.CSRFField, Mode: mode, Form: pages.SeasonForm{Errors: validation.FieldErrors{}}, ContextKind: c.Kind, ContextID: c.ID, ContextWeekID: c.WeekID, ContextPage: c.Page, ContextQuery: c.Query, CollectionURL: seasonContextURL(seasonsPath, c), CreateURL: seasonContextURL(seasonsPath+"/criar", c), ReturnURL: dest}, c, true
+	return pages.SeasonsPage{Meta: meta, CSRFField: meta.CSRFField, Mode: mode, Form: pages.SeasonForm{Errors: validation.FieldErrors{}}, ContextKind: c.Kind, ContextID: c.ID, ContextWeekID: c.WeekID, ContextDay: c.Day, ContextOriginGroup: c.OriginGroup, ContextOriginWeek: c.OriginWeek, ContextOriginDay: c.OriginDay, ContextPage: c.Page, ContextQuery: c.Query, CollectionURL: seasonContextURL(seasonsPath, c), CreateURL: seasonContextURL(seasonsPath+"/criar", c), ReturnURL: dest}, c, true
 }
 func (h Seasons) render(w http.ResponseWriter, r *http.Request, status int, p pages.SeasonsPage) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

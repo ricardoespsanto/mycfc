@@ -137,7 +137,7 @@ func buildStructuredWeekWorkspace(audiences []pages.StructuredTrainingAudience, 
 	out.SelectedDay = day
 	base := structuredPlannerURL(groupID, weekID, sessionID, day)
 	out.RefreshURL = base
-	out.GroupURL = trainingGroupContextURL(out.GroupURL, weekID)
+	out.GroupURL = groupContextDayURL(out.GroupURL, weekID, day)
 	out.AddSessionURL = structuredWorkspaceTask(base, "session", "criar-sessao-estruturada")
 	out.CreateWeekURL = structuredWorkspaceTask(base, "week", "criar-semana-treino")
 	out.PublicationURL = structuredWorkspaceAnchor(base, "training-publication")

@@ -128,3 +128,68 @@ func TestTrainingGroupValidationUsesAriaBooleanStrings(t *testing.T) {
 		t.Fatal("valid controls must not be marked invalid")
 	}
 }
+
+func TestTrainingGroupSetupHelpIsOptionalAndCapabilityScoped(t *testing.T) {
+	setup := TrainingGroupSetup{Show: true, MissingSeason: true, CanClassify: true, CanDefine: true, CategoryApplicable: true, CategoryRequired: true, ClassificationURL: "/equipa/classificacao?origin_group=g&origin_week=w&origin_day=2026-11-11", DefinitionsURL: "/equipa/escaloes?origin_group=g&origin_week=w&origin_day=2026-11-11", SeasonURL: "/admin/epocas?return_kind=group&return_id=g&week_id=w&day=2026-11-11"}
+	page := TrainingGroupsPage{Mode: "detail", Setup: setup, Group: TrainingGroupRow{Name: "Grupo", HasWeek: true}, PlannerURL: "/planner?group_id=g&week_id=w&day=2026-11-11"}
+	body := renderTrainingGroups(t, page)
+	for _, want := range []string{"Competição é uma participação; Iniciados é um escalão; Iniciados e Infantis pode ser um grupo de treino", `<details class="module disclosure">`, "Não existe uma época atual configurada.", "Configurar épocas", "Rever a participação de uma pessoa", "Gerir escalões da época", "Abrir semana", "Pode continuar a preparar a semana em rascunho"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing setup help %q", want)
+		}
+	}
+	if strings.Contains(body, `class="module disclosure" open`) || strings.Contains(body, "Ainda não existem escalões configurados nesta participação e época.") {
+		t.Fatal("optional help is forced or claims configured current season while missing")
+	}
+	page.Setup.Show = false
+	body = renderTrainingGroups(t, page)
+	if strings.Contains(body, "Precisa de rever a configuração?") || !strings.Contains(body, "Abrir semana") {
+		t.Fatal("ready coach has forced setup or loses direct week")
+	}
+}
+func TestTrainingGroupSetupTeamOnlyHasNoUnusableLinks(t *testing.T) {
+	page := TrainingGroupsPage{Mode: "add", Setup: TrainingGroupSetup{Show: true, MissingSeason: true, CategoryApplicable: true, ClassificationURL: "/forbidden-classification", DefinitionsURL: "/forbidden-definitions"}}
+	body := renderTrainingGroups(t, page)
+	for _, bad := range []string{`href="/forbidden-classification"`, `href="/forbidden-definitions"`, `href="/admin/epocas"`, `/perfil`} {
+		if strings.Contains(body, bad) {
+			t.Errorf("unusable task exposed %s", bad)
+		}
+	}
+	if !strings.Contains(body, "Peça a um administrador para configurar e selecionar a época.") || !strings.Contains(body, "peça ajuda a um administrador") {
+		t.Fatal("missing safe administrator guidance")
+	}
+}
+func TestTrainingGroupSetupCategoryOnlyForApplicableParticipation(t *testing.T) {
+	for _, applicable := range []bool{false, true} {
+		p := TrainingGroupsPage{Mode: "add", Setup: TrainingGroupSetup{Show: true, CanDefine: true, CategoryApplicable: applicable, CategoryConfigured: true, DefinitionsURL: "/equipa/escaloes?origin_group=g"}}
+		body := renderTrainingGroups(t, p)
+		if strings.Contains(body, "Gerir escalões da época") != applicable || strings.Contains(body, "A elegibilidade de cada pessoa é verificada") != applicable {
+			t.Errorf("category applicability=%t mishandled", applicable)
+		}
+		if applicable && !strings.Contains(body, "O escalão é opcional na participação deste grupo.") {
+			t.Fatal("optional category claimed mandatory")
+		}
+	}
+}
+func TestTrainingGroupSearchEmptyResultDoesNotClaimHiddenPeopleAbsent(t *testing.T) {
+	body := renderTrainingGroups(t, TrainingGroupsPage{Mode: "add", SearchPerformed: true, Form: TrainingGroupForm{Query: "Nome"}})
+	if !strings.Contains(body, "Não foram encontradas pessoas disponíveis para este grupo com esta pesquisa.") || strings.Contains(body, "Não foram encontradas pessoas elegíveis neste grupo.") {
+		t.Fatal("search absence overstates scope")
+	}
+}
+func TestTrainingGroupVerifiedDayRetainedAcrossNativeForms(t *testing.T) {
+	for _, mode := range []string{"create", "rename", "add"} {
+		p := TrainingGroupsPage{Mode: mode, ContextDay: "2026-11-11", WeekID: "week", Conflict: "O grupo mudou.", Form: TrainingGroupForm{Version: "original"}}
+		body := renderTrainingGroups(t, p)
+		count := 1
+		if mode == "add" {
+			count = 2
+		}
+		if got := strings.Count(body, `name="day" value="2026-11-11"`); got != count {
+			t.Errorf("%s day fields=%d want%d", mode, got, count)
+		}
+		if !strings.Contains(body, `name="week_id" value="week"`) || !strings.Contains(body, `name="version" value="original"`) {
+			t.Errorf("%s context/version lost", mode)
+		}
+	}
+}
