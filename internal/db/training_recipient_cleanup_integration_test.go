@@ -70,7 +70,7 @@ func TestTrainingRecipientCleanupCancellation(t *testing.T) {
 		// Baseline commit can precede cancelled RESET. This is partial initialization,
 		// never a zero-write claim; subsequent stamped admission still needs receipt.
 		var count int
-		if err = low.QueryRow(t.Context(), `SELECT count(*) FROM mycfc_meta.schema_migrations`).Scan(&count); err != nil || count != 80 {
+		if err = low.QueryRow(t.Context(), `SELECT count(*) FROM mycfc_meta.schema_migrations`).Scan(&count); err != nil || count != len(EmbeddedMigrationInventory()) {
 			t.Fatalf("actual committed initialization state missing %d %v", count, err)
 		}
 	})

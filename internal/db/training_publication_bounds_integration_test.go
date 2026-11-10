@@ -5,6 +5,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"github.com/google/uuid"
 	"os"
 	"runtime"
 	"strings"
@@ -82,12 +83,7 @@ func publicationAssertOverflowGate(t *testing.T, web *pgx.Conn, h recipientHisto
 func bytesContainsStringAgg(value []byte) bool { return strings.Contains(string(value), "string_agg(") }
 
 func TestPublicationExactSourceBytesAndExecutorGate(t *testing.T) {
-	f := newRecipientSchemaFixture(t)
-	f.install79(t)
-	h := recipientHistoryFixture(t, f)
-	if err := ApplyBaselineAndHarden(t.Context(), f.low, "mycfc", f.roles); err != nil {
-		t.Fatal(err)
-	}
+	f, h := recipientCurrentPublicationFixture(t)
 	web := f.web(t)
 	q := dbgen.New(web)
 	c := publicationContentFixture(t, f, h, web)
@@ -197,15 +193,29 @@ func TestPublicationExactSourceBytesAndExecutorGate(t *testing.T) {
 }
 
 func TestPublicationTupleCeilingAndExecutorGate(t *testing.T) {
-	f := newRecipientSchemaFixture(t)
-	f.install79(t)
-	h := recipientHistoryFixture(t, f)
-	if err := ApplyBaselineAndHarden(t.Context(), f.low, "mycfc", f.roles); err != nil {
-		t.Fatal(err)
-	}
+	f, h := recipientCurrentPublicationFixture(t)
 	web := f.web(t)
 	q := dbgen.New(web)
 	recipientSchemaExec(t, web, `WITH added AS (INSERT INTO users(name,email,password_hash,date_of_birth) SELECT 'Synthetic tuple subject '||position,gen_random_uuid()::text||'@example.test','hash','1980-01-01'::date FROM generate_series(1,31) position RETURNING id),memberships AS (INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on,ends_on) SELECT added.id,anchor.season_id,anchor.programme_id,CURRENT_DATE,plan.week_start FROM added CROSS JOIN user_memberships anchor JOIN training_plans plan ON plan.id=$2 WHERE anchor.id=$1 RETURNING id) INSERT INTO training_group_members(group_id,membership_id,added_by_id) SELECT $3,id,$4 FROM memberships`, h.membership, h.plan, h.group, h.actor)
+	var tupleMembers []uuid.UUID
+	rows, e := web.Query(t.Context(), `SELECT membership_id FROM training_group_members WHERE group_id=$1 AND membership_id<>$2 ORDER BY membership_id`, h.group, h.membership)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		if e = rows.Scan(&id); e != nil {
+			t.Fatal(e)
+		}
+		tupleMembers = append(tupleMembers, id)
+	}
+	rows.Close()
+	if e = rows.Err(); e != nil {
+		t.Fatal(e)
+	}
+	for _, id := range tupleMembers {
+		recipientPlaceFixtureMember(t, f, h.actor, id, h.group)
+	}
 	recipientSchemaExec(t, web, `INSERT INTO training_sessions(plan_id,title,starts_at,ends_at,created_by_id) SELECT plan.id,'Synthetic tuple session '||position,(plan.week_start::timestamp AT TIME ZONE 'Europe/Lisbon')+interval '10 hours'+position*interval '1 minute',(plan.week_start::timestamp AT TIME ZONE 'Europe/Lisbon')+interval '11 hours'+position*interval '1 minute',$2 FROM training_plans plan CROSS JOIN generate_series(1,127) position WHERE plan.id=$1`, h.plan, h.actor)
 	budget, err := q.PublicationSourceBudget(t.Context(), dbgen.PublicationSourceBudgetParams{ActorID: h.actor, PlanID: h.plan})
 	if err != nil || budget.Overflow || budget.RawTupleCount != 4096 {

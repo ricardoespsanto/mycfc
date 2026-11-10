@@ -19,12 +19,7 @@ import (
 )
 
 func TestPublicationScopedSourceAndEligibility(t *testing.T) {
-	f := newRecipientSchemaFixture(t)
-	f.install79(t)
-	h := recipientHistoryFixture(t, f)
-	if err := ApplyBaselineAndHarden(t.Context(), f.low, "mycfc", f.roles); err != nil {
-		t.Fatal(err)
-	}
+	f, h := recipientCurrentPublicationFixture(t)
 	web := f.web(t)
 	var groupedCheck string
 	if err := web.QueryRow(t.Context(), `SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='training_plans'::regclass AND conname='training_plans_week_valid'`).Scan(&groupedCheck); err != nil {
@@ -123,19 +118,14 @@ func TestPublicationScopedSourceAndEligibility(t *testing.T) {
 	if err != nil || len(users) != 1 || users[0] != h.subject {
 		t.Fatal("ineligible candidate user witness missing")
 	}
-	_, err = q.InsertPrescription(t.Context(), dbgen.InsertPrescriptionParams{ActorID: h.actor, PublicationID: h.publication, SessionID: h.session, MembershipID: h.membership, AthleteUserID: h.subject, Snapshot: []byte(`{"schema_version":1}`), SnapshotSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+	_, err = q.InsertPrescription(t.Context(), dbgen.InsertPrescriptionParams{ActorID: h.actor, PublicationID: h.publication, SessionID: h.session, MembershipID: h.membership, PlacementID: h.placement, AthleteUserID: h.subject, Snapshot: []byte(`{"schema_version":1}`), SnapshotSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("ineligible INSERT did not refuse atomically %v", err)
 	}
 }
 
 func TestPublicationInsertWitnessAndFinalSets(t *testing.T) {
-	f := newRecipientSchemaFixture(t)
-	f.install79(t)
-	h := recipientHistoryFixture(t, f)
-	if err := ApplyBaselineAndHarden(t.Context(), f.low, "mycfc", f.roles); err != nil {
-		t.Fatal(err)
-	}
+	f, h := recipientCurrentPublicationFixture(t)
 	a, b := f.web(t), f.web(t)
 	txA, err := a.BeginTx(t.Context(), pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -180,7 +170,7 @@ func TestPublicationInsertWitnessAndFinalSets(t *testing.T) {
 	if err = txA.QueryRow(t.Context(), `SELECT snapshot,snapshot_sha256 FROM training_prescriptions WHERE id=$1`, h.prescription).Scan(&raw, &hash); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = qA.InsertPrescription(t.Context(), dbgen.InsertPrescriptionParams{ActorID: h.actor, PublicationID: publication.ID, SessionID: h.session, MembershipID: h.membership, AthleteUserID: h.subject, Snapshot: raw, SnapshotSha256: hash}); err != nil {
+	if _, err = qA.InsertPrescription(t.Context(), dbgen.InsertPrescriptionParams{ActorID: h.actor, PublicationID: publication.ID, SessionID: h.session, MembershipID: h.membership, PlacementID: h.placement, AthleteUserID: h.subject, Snapshot: raw, SnapshotSha256: hash}); err != nil {
 		t.Fatal(err)
 	}
 	final, err := qA.PublicationFinalFacts(t.Context(), dbgen.PublicationFinalFactsParams{ActorID: h.actor, PlanID: h.plan, PublicationID: publication.ID})
@@ -269,12 +259,7 @@ func publicationContentFixture(t *testing.T, f recipientSchemaFixture, h recipie
 	return c
 }
 func TestPublicationVariationTransportEventsAndScope(t *testing.T) {
-	f := newRecipientSchemaFixture(t)
-	f.install79(t)
-	h := recipientHistoryFixture(t, f)
-	if err := ApplyBaselineAndHarden(t.Context(), f.low, "mycfc", f.roles); err != nil {
-		t.Fatal(err)
-	}
+	f, h := recipientCurrentPublicationFixture(t)
 	web := f.web(t)
 	q := dbgen.New(web)
 	c := publicationContentFixture(t, f, h, web)
@@ -419,12 +404,7 @@ func TestPublicationVariationTransportEventsAndScope(t *testing.T) {
 }
 
 func TestPublicationGuardianAuthorityFreshnessAndClock(t *testing.T) {
-	f := newRecipientSchemaFixture(t)
-	f.install79(t)
-	h := recipientHistoryFixture(t, f)
-	if err := ApplyBaselineAndHarden(t.Context(), f.low, "mycfc", f.roles); err != nil {
-		t.Fatal(err)
-	}
+	f, h := recipientCurrentPublicationFixture(t)
 	web := f.web(t)
 	q := dbgen.New(web)
 	content := publicationContentFixture(t, f, h, web)
@@ -483,6 +463,7 @@ func TestPublicationGuardianAuthorityFreshnessAndClock(t *testing.T) {
 	childMembership := uuid.New()
 	recipientSchemaExec(t, web, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) SELECT $1,$2,season_id,programme_id,CURRENT_DATE,ends_on FROM user_memberships WHERE id=$3`, childMembership, child, h.membership)
 	recipientSchemaExec(t, web, `INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, h.group, childMembership, h.actor)
+	recipientPlaceFixtureMember(t, f, h.actor, childMembership, h.group)
 	recipientSchemaExec(t, web, `INSERT INTO training_variations(plan_id,target_membership_id,subject_kind,subject_id,operation,change_summary,patch,created_by_id) VALUES($1,$2,'BLOCK',$3,'OVERRIDE','Synthetic child instruction','{"instructions":"Child-specific notes"}',$4)`, h.plan, childMembership, content.gymBlock, h.actor)
 	eligible, err := q.PublicationEligibleRecipients(t.Context(), dbgen.PublicationEligibleRecipientsParams{ActorID: h.actor, PlanID: h.plan})
 	if err != nil || len(eligible) != 2 {

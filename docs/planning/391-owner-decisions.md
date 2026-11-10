@@ -189,3 +189,14 @@ CodeQL PR alerts 14 and 15 were independently reviewed and dismissed as
 values and literal hostile test credentials in a temporary offline Compose
 fixture. No actual credential source or database connection is involved; the
 rule and regression remain enabled.
+
+
+The normal integration suite now uses current independently authenticated
+roles, Reader 5 and dated placements where those are required. It still checks
+private visibility, immutable stored history, concurrent publication, and the
+refusal of obsolete upgrade and retired reset requests without mutation. Three
+historical rehearsal paths (recorded-expand success, retired reset success and
+retired reset executor fault injection) remain saved behind the explicit
+`MYCFC_RUN_ARCHIVED_RELEASE_REHEARSALS=1` opt-in. They are unsupported on this
+candidate and **NOT RUN** by default; they are not evidence of upgrade or reset
+compatibility. The current refusal and invalid-predecessor checks run normally.

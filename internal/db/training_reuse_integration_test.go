@@ -51,7 +51,7 @@ func reuseBegin(t *testing.T, w focusedWaterFixture, state TrainingScheduleState
 	}
 	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
 	recipientSchemaExec(t, tx, `SELECT public.training_schedule_admit_partial($1,$2)`, state.DatabaseIncarnation, state.StateEpoch)
-	if _, e = VerifyTrainingWorkoutGraphRuntime(t.Context(), tx, TrainingScheduleCapabilities{ReaderVersion: 3, WriterVersion: 2}); e != nil {
+	if _, e = VerifyTrainingWorkoutGraphRuntime(t.Context(), tx, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 2}); e != nil {
 		t.Fatal(e)
 	}
 	for _, sql := range []string{`SELECT id FROM users WHERE id=$1 FOR SHARE`, `SELECT user_id FROM user_platform_roles WHERE user_id=$1 FOR SHARE`, `SELECT id FROM staff_grants WHERE user_id=$1 FOR SHARE`} {
@@ -638,10 +638,11 @@ func TestReuseNativeGraphAtomicRollbackAndImmutableSource(t *testing.T) {
 	recipientSchemaExec(t, w.web, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Synthetic stored outcome subject',$2,'hash','1980-01-01')`, subject, subject.String()+"@example.test")
 	recipientSchemaExec(t, w.web, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) SELECT $1,$2,season_id,programme_id,CURRENT_DATE,CURRENT_DATE+300 FROM training_plans WHERE id=$3`, membership, subject, w.plan)
 	recipientSchemaExec(t, w.web, `INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, w.group, membership, w.actor)
+	placement := recipientPlaceFixtureMember(t, w.f, w.actor, membership, w.group)
 	recipientSchemaExec(t, w.web, `INSERT INTO training_plan_publications(id,plan_id,revision,source_updated_at,change_summary,published_by_id) SELECT $1,id,1,updated_at,'Synthetic source published once',$3 FROM training_plans WHERE id=$2`, pub, w.plan, w.actor)
 	raw := `{"schema_version":1,"session":{"EntryKind":"WORKOUT"}}`
 	sum := sha256.Sum256([]byte(raw))
-	recipientSchemaExec(t, w.web, `INSERT INTO training_prescriptions(id,publication_id,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256) VALUES($1,$2,$3,$4,$5,$6,$7)`, presc, pub, source, membership, subject, raw, hex.EncodeToString(sum[:]))
+	recipientSchemaExec(t, w.web, `INSERT INTO training_prescriptions(id,publication_id,session_id,membership_id,athlete_user_id,placement_id,snapshot,snapshot_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, presc, pub, source, membership, subject, placement, raw, hex.EncodeToString(sum[:]))
 	recipientSchemaExec(t, w.web, `INSERT INTO training_session_outcomes(session_id,user_id,prescription_id,status) VALUES($1,$2,$3,'COMPLETED')`, source, subject, presc)
 	history := func() string {
 		var b string
@@ -700,7 +701,7 @@ func TestReuseNativeGraphAtomicRollbackAndImmutableSource(t *testing.T) {
 			if _, e := commands.Exec(ctx, `SELECT public.training_schedule_admit_partial($1,$2)`, state.DatabaseIncarnation, state.StateEpoch); e != nil {
 				return e
 			}
-			if _, e := VerifyTrainingWorkoutGraphRuntime(ctx, commands, TrainingScheduleCapabilities{ReaderVersion: 3, WriterVersion: 2}); e != nil {
+			if _, e := VerifyTrainingWorkoutGraphRuntime(ctx, commands, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 2}); e != nil {
 				return e
 			}
 			for _, sql := range []string{`SELECT id FROM users WHERE id=$1 FOR SHARE`, `SELECT user_id FROM user_platform_roles WHERE user_id=$1 FOR SHARE`, `SELECT id FROM staff_grants WHERE user_id=$1 FOR SHARE`} {

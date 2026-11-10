@@ -138,6 +138,7 @@ func recipientReceiptMatches(t *testing.T, f recipientSchemaFixture, want bool) 
 
 type recipientHistory struct {
 	actor, subject, membership, group, plan, session, publication, prescription uuid.UUID
+	placement                                                                   uuid.UUID
 	source                                                                      time.Time
 	before                                                                      string
 }
@@ -178,7 +179,7 @@ func recipientHistoryFixture(t *testing.T, f recipientSchemaFixture) recipientHi
 func recipientHistoryBytes(t *testing.T, q TrainingScheduleQueryReader, h recipientHistory) string {
 	t.Helper()
 	var data string
-	if err := q.QueryRow(t.Context(), `SELECT jsonb_build_array(row_to_json(plan),row_to_json(publication),row_to_json(prescription),row_to_json(outcome))::text FROM training_plans plan JOIN training_plan_publications publication ON publication.id=$2 JOIN training_prescriptions prescription ON prescription.id=$3 JOIN training_session_outcomes outcome ON outcome.session_id=$4 AND outcome.user_id=$5 WHERE plan.id=$1`, h.plan, h.publication, h.prescription, h.session, h.subject).Scan(&data); err != nil {
+	if err := q.QueryRow(t.Context(), `SELECT jsonb_build_array(row_to_json(plan),row_to_json(publication),CASE WHEN $6::uuid='00000000-0000-0000-0000-000000000000' THEN to_jsonb(prescription)-'placement_id' ELSE to_jsonb(prescription) END,row_to_json(outcome))::text FROM training_plans plan JOIN training_plan_publications publication ON publication.id=$2 JOIN training_prescriptions prescription ON prescription.id=$3 JOIN training_session_outcomes outcome ON outcome.session_id=$4 AND outcome.user_id=$5 WHERE plan.id=$1 AND($6::uuid<>'00000000-0000-0000-0000-000000000000' OR to_jsonb(prescription)->>'placement_id' IS NULL)`, h.plan, h.publication, h.prescription, h.session, h.subject, h.placement).Scan(&data); err != nil {
 		t.Fatal(err)
 	}
 	return data
@@ -287,15 +288,23 @@ func TestTrainingRecipientForwardSchemaAndRuntime(t *testing.T) {
 		t.Fatal("bootstrap SET ROLE accepted as independent inspector")
 	}
 	_ = wrongRoot.Close(t.Context())
-	successor := uuid.New()
-	recipientSchemaExec(t, web, `INSERT INTO training_plan_publications(id,plan_id,revision,source_updated_at,change_summary,supersedes_id,published_by_id) VALUES($1,$2,2,$3,'Same-source reviewed successor',$4,$5)`, successor, h.plan, h.source, h.publication, h.actor)
-	recipientSchemaExec(t, web, `INSERT INTO training_prescriptions(publication_id,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256) SELECT $1,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256 FROM training_prescriptions WHERE id=$2`, successor, h.prescription)
-	empty := uuid.New()
-	recipientSchemaExec(t, web, `INSERT INTO training_plan_publications(id,plan_id,revision,source_updated_at,change_summary,supersedes_id,published_by_id) VALUES($1,$2,3,$3,'Explicit reviewed empty successor',$4,$5)`, empty, h.plan, h.source, successor, h.actor)
-	var currentCount int
-	if err = web.QueryRow(t.Context(), `SELECT count(*) FROM training_prescriptions WHERE publication_id=(SELECT id FROM training_plan_publications WHERE plan_id=$1 ORDER BY revision DESC LIMIT 1)`, h.plan).Scan(&currentCount); err != nil || currentCount != 0 {
-		t.Fatal("empty current publication exposed earlier prescriptions as current")
-	}
+	t.Run("current same-source and empty successor", func(t *testing.T) {
+		f, h := recipientCurrentPublicationFixture(t)
+		web := f.web(t)
+		placement := h.placement
+		successor := uuid.New()
+		recipientSchemaExec(t, web, `INSERT INTO training_plan_publications(id,plan_id,revision,source_updated_at,change_summary,supersedes_id,published_by_id) VALUES($1,$2,2,$3,'Same-source reviewed successor',$4,$5)`, successor, h.plan, h.source, h.publication, h.actor)
+		recipientSchemaExec(t, web, `INSERT INTO training_prescriptions(publication_id,session_id,membership_id,athlete_user_id,placement_id,snapshot,snapshot_sha256) SELECT $1,session_id,membership_id,athlete_user_id,$3,snapshot,snapshot_sha256 FROM training_prescriptions WHERE id=$2`, successor, h.prescription, placement)
+		empty := uuid.New()
+		recipientSchemaExec(t, web, `INSERT INTO training_plan_publications(id,plan_id,revision,source_updated_at,change_summary,supersedes_id,published_by_id) VALUES($1,$2,3,$3,'Explicit reviewed empty successor',$4,$5)`, empty, h.plan, h.source, successor, h.actor)
+		var currentCount int
+		if err = web.QueryRow(t.Context(), `SELECT count(*) FROM training_prescriptions WHERE publication_id=(SELECT id FROM training_plan_publications WHERE plan_id=$1 ORDER BY revision DESC LIMIT 1)`, h.plan).Scan(&currentCount); err != nil || currentCount != 0 {
+			t.Fatal("empty current publication exposed earlier prescriptions as current")
+		}
+		if got := recipientHistoryBytes(t, f.low, h); got != h.before {
+			t.Fatal("new revisions changed current stored history")
+		}
+	})
 	if got := recipientHistoryBytes(t, f.low, h); got != h.before {
 		t.Fatal("new revisions rewrote historic outcome or old snapshot")
 	}

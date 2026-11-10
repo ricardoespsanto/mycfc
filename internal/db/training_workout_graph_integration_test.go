@@ -74,7 +74,7 @@ func TestFullWorkoutMixedAtomicRawAndOrder(t *testing.T) {
 			if _, err := commands.Exec(ctx, `SELECT public.training_schedule_admit_partial($1,$2)`, s.DatabaseIncarnation, s.StateEpoch); err != nil {
 				return err
 			}
-			if _, err := VerifyTrainingWorkoutGraphRuntime(ctx, commands, TrainingScheduleCapabilities{ReaderVersion: 3, WriterVersion: 2}); err != nil {
+			if _, err := VerifyTrainingWorkoutGraphRuntime(ctx, commands, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 2}); err != nil {
 				return err
 			}
 			txq := dbgen.New(commands)
@@ -335,7 +335,7 @@ func TestFullWorkoutSelectedProfileWitnessRaces(t *testing.T) {
 			}
 			defer tx.Rollback(t.Context())
 			recipientSchemaExec(t, tx, `SELECT public.training_schedule_admit_partial($1,$2)`, s.DatabaseIncarnation, s.StateEpoch)
-			if _, err = VerifyTrainingWorkoutGraphRuntime(t.Context(), tx, TrainingScheduleCapabilities{ReaderVersion: 3, WriterVersion: 2}); err != nil {
+			if _, err = VerifyTrainingWorkoutGraphRuntime(t.Context(), tx, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 2}); err != nil {
 				t.Fatal(err)
 			}
 			tq := dbgen.New(tx)

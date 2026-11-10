@@ -107,7 +107,7 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, version := range EmbeddedMigrationInventory() {
-		if version != TrainingScheduleCompatibilityMigration && version != TrainingRecipientRevisionMigration {
+		if version == "reset-baseline-v1" || version < TrainingScheduleCompatibilityMigration {
 			if _, err := low.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES($1)`, version); err != nil {
 				t.Fatal(err)
 			}
@@ -279,11 +279,11 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 		t.Fatalf("old prescription changed: %v", err)
 	}
 	web := scheduleTestConnection(t, roles.AppUsername, roles.AppPassword)
-	state, err := VerifyTrainingScheduleRuntime(ctx, web, TrainingScheduleCapabilities{ReaderVersion: 2, WriterVersion: 1})
+	state, err := VerifyTrainingScheduleRuntime(ctx, web, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.SchemaContract != TrainingScheduleContractC || state.PartialV2Enabled || state.RequiredReader != 1 {
+	if state.SchemaContract != TrainingScheduleContractP || state.PartialV2Enabled || state.RequiredReader != 1 {
 		t.Fatalf("unexpected C state: %+v", state)
 	}
 	for _, sql := range []string{`SELECT * FROM training_schedule_control.state`, `UPDATE training_schedule_control.state SET partial_v2_enabled=true`, `SELECT training_schedule_control.set_enabled(gen_random_uuid(),0,true)`, `SELECT training_schedule_control.commit_floor(gen_random_uuid(),0,gen_random_uuid(),repeat('a',64),2)`, `CREATE TABLE training_schedule_control.forbidden(id int)`} {
@@ -312,7 +312,7 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 	}
 	verifyPreCTrainingReader(t, roles, actor)
 	// Pure shape function must always return a definite boolean, including SQL
-	// NULL inputs; the C-only constraint still refuses every partial row.
+	// NULL inputs; the closed final gate still refuses every partial row.
 	for _, tc := range []struct {
 		precision, date, start, end, band, kind string
 		want                                    bool
@@ -342,7 +342,7 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 	if err := HardenPrivacyExecutionRoles(ctx, root, database, roles); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyTrainingScheduleRuntime(ctx, web, TrainingScheduleCapabilities{ReaderVersion: 2, WriterVersion: 1}); err != nil {
+	if _, err := VerifyTrainingScheduleRuntime(ctx, web, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 1}); err != nil {
 		t.Fatalf("repeated hardening changed gate privileges: %v", err)
 	}
 	verifyFreshTrainingScheduleParity(t, root)
@@ -385,9 +385,10 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 	exec(`INSERT INTO mycfc_meta.schema_migrations(version) VALUES('unreviewed-extra')`)
 	check(false)
 	exec(`DELETE FROM mycfc_meta.schema_migrations WHERE version='unreviewed-extra'`)
-	exec(`ALTER TABLE training_sessions DROP CONSTRAINT training_sessions_schedule_compatibility_only`)
-	check(false)
 	exec(`ALTER TABLE training_sessions ADD CONSTRAINT training_sessions_schedule_compatibility_only CHECK(schedule_precision='INTERVAL')`)
+	check(false)
+	exec(`ALTER TABLE training_sessions DROP CONSTRAINT training_sessions_schedule_compatibility_only`)
+	check(true)
 	// Retired destructive reset pins deliberately do not advance with C.
 	retired := roles
 	retired.AppUsername = releasecontract.OldWebRole
@@ -413,29 +414,14 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 	if err := locked.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Test-only P schema is deliberately not a pending embedded migration.
-	fixture, err := os.ReadFile("testdata/training_schedule_p_contract.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cutover, err := low.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cutover.Exec(ctx, string(fixture)); err != nil {
-		_ = cutover.Rollback(ctx)
-		t.Fatal(err)
-	}
-	if err := cutover.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	state, err = VerifyTrainingScheduleRuntime(ctx, web, TrainingScheduleCapabilities{ReaderVersion: 2, WriterVersion: 1})
+	// The embedded forward definitions now install the final P contract.
+	state, err = VerifyTrainingScheduleRuntime(ctx, web, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 1})
 	if err != nil || state.PartialV2Enabled {
 		t.Fatalf("C cannot read closed final contract: %v", err)
 	}
 	var epoch int64
 	floor := uuid.New()
-	if err := low.QueryRow(ctx, `SELECT training_schedule_control.commit_floor($1,$2,$3,repeat('a',64),2)`, state.DatabaseIncarnation, state.StateEpoch, floor).Scan(&epoch); err != nil {
+	if err := low.QueryRow(ctx, `SELECT training_schedule_control.commit_floor($1,$2,$3,repeat('a',64),3)`, state.DatabaseIncarnation, state.StateEpoch, floor).Scan(&epoch); err != nil {
 		t.Fatal(err)
 	}
 	if err := low.QueryRow(ctx, `SELECT training_schedule_control.set_enabled($1,$2,true)`, state.DatabaseIncarnation, epoch).Scan(&epoch); err != nil {
@@ -462,14 +448,14 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Old undated links and immutable pre-placement publications never grant
+	// a new outcome in the current grouped delivery contract.
 	for i, id := range partialIDs {
 		affected, err := q.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: id, UserID: subject, Status: dbgen.TrainingOutcomeStatusCOMPLETED, ExpectedVersion: 0})
-		if err != nil || i == 0 && affected != 1 || i > 0 && affected != 0 {
-			t.Fatalf("C outcome precision%d rows=%d err=%v", i, affected, err)
+		if err != nil || affected != 0 {
+			t.Fatalf("unpublished grouped outcome precision%d rows=%d err=%v", i, affected, err)
 		}
-		if i > 0 {
-			exec(`INSERT INTO training_session_outcomes(session_id,user_id,status) VALUES($1,$2,'COMPLETED')`, id, subject)
-		}
+		exec(`INSERT INTO training_session_outcomes(session_id,user_id,status) VALUES($1,$2,'COMPLETED')`, id, subject)
 		value := int32(30)
 		affected, err = q.UpdateOwnCompletedSessionFeedback(ctx, dbgen.UpdateOwnCompletedSessionFeedbackParams{SessionID: id, UserID: subject, ExpectedVersion: 1, ActualDurationMinutes: &value})
 		if err != nil || i == 0 && affected != 1 || i > 0 && affected != 0 {
@@ -527,25 +513,31 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 	if _, err := web.Exec(ctx, `SELECT public.restore_training_session($1,$2,clock_timestamp(),$3)`, v2, plan, actor); !errors.Is(TrainingScheduleWriteError(err), ErrTrainingScheduleWriteUnsupported) {
 		t.Fatalf("v2 restored through old duration-only helper: %v", err)
 	}
-	// Prove restrictive classification history still sees a null-start session.
-	secondSubject := uuid.New()
-	exec(`INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Synthetic partial recipient',$2,'hash','1980-01-01')`, secondSubject, secondSubject.String()+"@example.test")
-	var secondMembership uuid.UUID
-	if err := root.QueryRow(ctx, `INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on,ends_on) VALUES($1,$2,$3,CURRENT_DATE-10,CURRENT_DATE+300) RETURNING id`, secondSubject, season, programme).Scan(&secondMembership); err != nil {
-		t.Fatal(err)
-	}
-	var secondPublication uuid.UUID
-	if err := web.QueryRow(ctx, `INSERT INTO training_plan_publications(plan_id,revision,source_updated_at,change_summary,published_by_id) SELECT id,2,updated_at,'Typed partial publication',$2 FROM training_plans WHERE id=$1 RETURNING id`, plan, actor).Scan(&secondPublication); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := web.Exec(ctx, `INSERT INTO training_prescriptions(publication_id,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256) SELECT $1,$2,$3,$4,jsonb_build_object('schema_version',2,'session',training_session_snapshot_v2($2)),repeat('b',64)`, secondPublication, partialIDs[1], secondMembership, secondSubject); err != nil {
-		t.Fatal(err)
-	}
-	_, err = root.Exec(ctx, `UPDATE user_memberships SET ends_on=(SELECT week_start-1 FROM training_plans WHERE id=$2) WHERE id=$1`, secondMembership, plan)
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.ConstraintName != "user_memberships_recorded_history_end" {
-		t.Fatalf("null-start history guard bypass: %v", err)
-	}
+	// Current grouped delivery needs Reader5 and actual dated placements. Keep
+	// that fixture independent so this test still proves the Reader2 gate.
+	t.Run("current grouped null-start history", func(t *testing.T) {
+		f, h := recipientCurrentPublicationFixture(t)
+		w := f.web(t)
+		timed, untimed, publication := uuid.New(), uuid.New(), uuid.New()
+		recipientSchemaExec(t, w, `INSERT INTO training_sessions(id,plan_id,title,entry_kind,schedule_precision,scheduled_on,starts_at,created_by_id) SELECT $1,id,'Synthetic current timed start','TRAINING','START_ONLY',week_start+1,((week_start+1)::timestamp AT TIME ZONE 'Europe/Lisbon')+interval '10 hours',$3 FROM training_plans WHERE id=$2`, timed, h.plan, h.actor)
+		recipientSchemaExec(t, w, `INSERT INTO training_sessions(id,plan_id,title,entry_kind,schedule_precision,scheduled_on,created_by_id) SELECT $1,id,'Synthetic null-start history','REST','DAY',week_start+2,$3 FROM training_plans WHERE id=$2`, untimed, h.plan, h.actor)
+		recipientSchemaExec(t, w, `INSERT INTO training_plan_publications(id,plan_id,revision,source_updated_at,change_summary,published_by_id) SELECT $1,id,2,updated_at,'Synthetic partial publication',$3 FROM training_plans WHERE id=$2`, publication, h.plan, h.actor)
+		for _, id := range []uuid.UUID{timed, untimed} {
+			recipientSchemaExec(t, w, `INSERT INTO training_prescriptions(publication_id,session_id,membership_id,athlete_user_id,placement_id,snapshot,snapshot_sha256) SELECT $1,$2,$3,$4,$5,jsonb_build_object('schema_version',2,'session',training_session_snapshot_v2($2)),repeat('b',64)`, publication, id, h.membership, h.subject, h.placement)
+		}
+		for i, id := range []uuid.UUID{timed, untimed} {
+			affected, err := dbgen.New(w).SaveTrainingSessionOutcome(t.Context(), dbgen.SaveTrainingSessionOutcomeParams{SessionID: id, UserID: h.subject, Status: dbgen.TrainingOutcomeStatusCOMPLETED, ExpectedVersion: 0})
+			if err != nil || i == 0 && affected != 1 || i == 1 && affected != 0 {
+				t.Fatalf("current partial outcome precision%d rows=%d err=%v", i, affected, err)
+			}
+		}
+		// Only the null-start prescription is outside the proposed end.
+		_, err := w.Exec(t.Context(), `UPDATE user_memberships SET ends_on=(SELECT week_start+1 FROM training_plans WHERE id=$2) WHERE id=$1`, h.membership, h.plan)
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.ConstraintName != "user_memberships_recorded_history_end" {
+			t.Fatalf("null-start history guard bypass: %v", err)
+		}
+	})
 	// Closure drains admitted writers and the supported first-state order avoids
 	// the three-way late-admission waiter cycle from the agreed lock matrix.
 	oldWriter := scheduleTestConnection(t, roles.AppUsername, roles.AppPassword)
@@ -607,8 +599,8 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("gate closer did not drain admitted writer")
 	}
-	state, err = VerifyTrainingScheduleRuntime(ctx, web, TrainingScheduleCapabilities{ReaderVersion: 2, WriterVersion: 1})
-	if err != nil || state.PartialV2Enabled || !state.EverPartialV2Enabled || state.RequiredReader < 2 {
+	state, err = VerifyTrainingScheduleRuntime(ctx, web, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 1})
+	if err != nil || state.PartialV2Enabled || !state.EverPartialV2Enabled || state.RequiredReader < 3 {
 		t.Fatalf("closed P compatible reader/floor: %+v %v", state, err)
 	}
 	if _, err := web.Exec(ctx, `UPDATE training_sessions SET title=title WHERE id=$1`, partialIDs[0]); !errors.Is(TrainingScheduleWriteError(err), ErrTrainingScheduleWriteUnsupported) {
@@ -617,11 +609,11 @@ func TestTrainingScheduleCompatibilityForwardAndGate(t *testing.T) {
 	if _, err := web.Exec(ctx, `INSERT INTO training_plan_publications(plan_id,revision,source_updated_at,change_summary,published_by_id) SELECT id,3,updated_at,'Must not omit partials',$2 FROM training_plans WHERE id=$1`, plan, actor); !errors.Is(TrainingScheduleWriteError(err), ErrTrainingScheduleWriteUnsupported) {
 		t.Fatalf("closed publication subset bypass: %v", err)
 	}
-	if err := low.QueryRow(ctx, `SELECT training_schedule_control.commit_floor($1,$2,$3,repeat('c',64),3)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New()).Scan(&epoch); err != nil {
+	if err := low.QueryRow(ctx, `SELECT training_schedule_control.commit_floor($1,$2,$3,repeat('c',64),5)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New()).Scan(&epoch); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyTrainingScheduleRuntime(ctx, web, TrainingScheduleCapabilities{ReaderVersion: 2, WriterVersion: 1}); err == nil {
-		t.Fatal("reader2 treated as safe for future reader3 generation")
+	if _, err := VerifyTrainingScheduleRuntime(ctx, web, TrainingScheduleCapabilities{ReaderVersion: 3, WriterVersion: 1}); err == nil {
+		t.Fatal("reader3 treated as safe for current reader5 generation")
 	}
 	if err := low.QueryRow(ctx, `SELECT training_schedule_control.commit_floor($1,$2,$3,repeat('d',64),2)`, state.DatabaseIncarnation, epoch, uuid.New()).Scan(&epoch); err == nil {
 		t.Fatal("reader floor lowered")

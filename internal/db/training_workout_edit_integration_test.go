@@ -32,7 +32,7 @@ func beginEdit(t *testing.T, w focusedWaterFixture, s TrainingScheduleState, act
 	}
 	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
 	recipientSchemaExec(t, tx, `SELECT public.training_schedule_admit_partial($1,$2)`, s.DatabaseIncarnation, s.StateEpoch)
-	if _, err = VerifyTrainingWorkoutGraphRuntime(t.Context(), tx, TrainingScheduleCapabilities{ReaderVersion: 3, WriterVersion: 2}); err != nil {
+	if _, err = VerifyTrainingWorkoutGraphRuntime(t.Context(), tx, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 2}); err != nil {
 		t.Fatal(err)
 	}
 	recipientSchemaExec(t, tx, `SELECT id FROM users WHERE id=$1 FOR SHARE`, actor)
@@ -794,10 +794,11 @@ func TestWorkoutEditAndCancellationPreserveStoredHistoryAndOutcome(t *testing.T)
 	recipientSchemaExec(t, w.web, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Synthetic historical subject',$2,'hash','1980-01-01')`, subject, subject.String()+"@example.test")
 	recipientSchemaExec(t, w.web, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) SELECT $1,$2,season_id,programme_id,CURRENT_DATE,CURRENT_DATE+300 FROM training_plans WHERE id=$3`, membership, subject, w.plan)
 	recipientSchemaExec(t, w.web, `INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, w.group, membership, w.actor)
+	placement := recipientPlaceFixtureMember(t, w.f, w.actor, membership, w.group)
 	recipientSchemaExec(t, w.web, `INSERT INTO training_plan_publications(id,plan_id,revision,source_updated_at,change_summary,published_by_id) SELECT $1,id,1,updated_at,'Synthetic immutable first publication',$3 FROM training_plans WHERE id=$2`, publication, w.plan, w.actor)
 	raw := `{"schema_version":1,"session":{"EntryKind":"WORKOUT"}}`
 	sum := sha256.Sum256([]byte(raw))
-	recipientSchemaExec(t, w.web, `INSERT INTO training_prescriptions(id,publication_id,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256) VALUES($1,$2,$3,$4,$5,$6,$7)`, prescription, publication, id, membership, subject, raw, hex.EncodeToString(sum[:]))
+	recipientSchemaExec(t, w.web, `INSERT INTO training_prescriptions(id,publication_id,session_id,membership_id,athlete_user_id,placement_id,snapshot,snapshot_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, prescription, publication, id, membership, subject, placement, raw, hex.EncodeToString(sum[:]))
 	recipientSchemaExec(t, w.web, `INSERT INTO training_session_outcomes(session_id,user_id,prescription_id,status) VALUES($1,$2,$3,'COMPLETED')`, id, subject, prescription)
 	recipientSchemaExec(t, w.web, `INSERT INTO training_routines(id,name,kind,owner_user_id,source_id,source_updated_at,snapshot) SELECT $1,'Synthetic immutable routine','SESSION',$2,id,updated_at,'{"schema_version":1,"entry_kind":"WORKOUT"}'::jsonb FROM training_sessions WHERE id=$3`, routine, w.actor, id)
 	history := func() string {

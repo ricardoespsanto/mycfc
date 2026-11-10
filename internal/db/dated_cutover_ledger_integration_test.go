@@ -24,10 +24,7 @@ import (
 // It neither depends on nor rewrites the runner's final-baseline database.
 func recordedExpandFixture(t *testing.T) *pgx.Conn {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Fatal("TEST_DATABASE_URL required for recorded-expand fixture")
-	}
+	dsn := newRecipientSchemaFixture(t, true).url
 	ctx := context.Background()
 	admin, err := pgx.Connect(ctx, dsn)
 	if err != nil {
@@ -142,24 +139,38 @@ func TestDatedParticipationApplyBaselineFromRecordedExpand(t *testing.T) {
 	if _, err := conn.Exec(ctx, `DELETE FROM mycfc_meta.schema_migrations WHERE version='202609290002_dated_participation_contract'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := ApplyBaseline(ctx, conn); err != nil {
-		t.Fatalf("apply recorded-expand contract: %v", err)
+	// This candidate intentionally refuses this obsolete lineage. A failed
+	// attempt must preserve the recorded expand schema and durable data.
+	if err := ApplyBaseline(ctx, conn); err == nil {
+		t.Fatal("obsolete expand lineage accepted by current candidate")
 	}
-	if err := VerifyDatedParticipationContract(ctx, conn); err != nil {
-		t.Fatalf("final postcondition: %v", err)
+	var retained bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM news_items WHERE title_pt='Notícia retida') AND EXISTS(SELECT 1 FROM pg_constraint WHERE conname='user_memberships_user_season_programme_unique') AND NOT EXISTS(SELECT 1 FROM mycfc_meta.schema_migrations WHERE version='202609290002_dated_participation_contract')`).Scan(&retained); err != nil || !retained {
+		t.Fatalf("refused obsolete lineage was modified: %v", err)
 	}
-	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='user_memberships_user_season_programme_unique')`).Scan(&oldArbiter); err != nil {
-		t.Fatal(err)
-	}
-	if oldArbiter {
-		t.Fatal("legacy arbiter survived final contract")
-	}
-	// An exact retry must preserve durable data, not reinstall the baseline.
-	if err := ApplyBaseline(ctx, conn); err != nil {
-		t.Fatalf("retry final contract: %v", err)
-	}
-	var news int
-	if err := conn.QueryRow(ctx, `SELECT count(*) FROM news_items WHERE title_pt='Notícia retida'`).Scan(&news); err != nil || news != 1 {
-		t.Fatalf("non-member durable row lost: %d %v", news, err)
-	}
+	t.Run("archived recorded-expand success unsupported on current candidate", func(t *testing.T) {
+		if os.Getenv("MYCFC_RUN_ARCHIVED_RELEASE_REHEARSALS") != "1" {
+			t.Skip("archived legacy conversion outcome; current candidate must refuse this lineage")
+		}
+		if err := ApplyBaseline(ctx, conn); err != nil {
+			t.Fatalf("apply recorded-expand contract: %v", err)
+		}
+		if err := VerifyDatedParticipationContract(ctx, conn); err != nil {
+			t.Fatalf("final postcondition: %v", err)
+		}
+		if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='user_memberships_user_season_programme_unique')`).Scan(&oldArbiter); err != nil {
+			t.Fatal(err)
+		}
+		if oldArbiter {
+			t.Fatal("legacy arbiter survived final contract")
+		}
+		// An exact retry must preserve durable data, not reinstall the baseline.
+		if err := ApplyBaseline(ctx, conn); err != nil {
+			t.Fatalf("retry final contract: %v", err)
+		}
+		var news int
+		if err := conn.QueryRow(ctx, `SELECT count(*) FROM news_items WHERE title_pt='Notícia retida'`).Scan(&news); err != nil || news != 1 {
+			t.Fatalf("non-member durable row lost: %d %v", news, err)
+		}
+	})
 }

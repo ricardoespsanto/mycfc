@@ -56,14 +56,14 @@ func (w focusedWaterFixture) prepare(t *testing.T) TrainingScheduleState {
 		t.Fatal("fresh P must start closed")
 	}
 	var epoch int64
-	if err = w.f.low.QueryRow(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,3)`, s.DatabaseIncarnation, s.StateEpoch, uuid.New(), strings.Repeat("a", 64)).Scan(&epoch); err != nil {
+	if err = w.f.low.QueryRow(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,5)`, s.DatabaseIncarnation, s.StateEpoch, uuid.New(), strings.Repeat("a", 64)).Scan(&epoch); err != nil {
 		t.Fatal(err)
 	}
 	if err = w.f.low.QueryRow(t.Context(), `SELECT training_schedule_control.set_enabled($1,$2,true)`, s.DatabaseIncarnation, epoch).Scan(&epoch); err != nil {
 		t.Fatal(err)
 	}
 	s, err = TrainingScheduleStatus(t.Context(), w.web)
-	if err != nil || !s.PartialV2Enabled || s.RequiredReader != 3 {
+	if err != nil || !s.PartialV2Enabled || s.RequiredReader != 5 {
 		t.Fatalf("actual isolated owner preparation failed %v", err)
 	}
 	return s
@@ -128,7 +128,7 @@ func TestFocusedWaterFreshShapesAndGate(t *testing.T) {
 		t.Fatal("owner opened authoring below corrected recipient floor3")
 	}
 	s = w.prepare(t)
-	if _, err = VerifyTrainingRecipientRuntime(t.Context(), w.web, TrainingScheduleCapabilities{ReaderVersion: 3, WriterVersion: 2}); err != nil {
+	if _, err = VerifyTrainingRecipientRuntime(t.Context(), w.web, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 2}); err != nil {
 		t.Fatal(err)
 	}
 	for _, kind := range []string{"TRAINING", "COMPETITION", "REST", "LOGISTICS"} {
@@ -187,7 +187,7 @@ func TestFocusedWaterAtomicPlainRoundtripAndBounds(t *testing.T) {
 			if _, err := commands.Exec(ctx, `SELECT public.training_schedule_admit_partial($1,$2)`, s.DatabaseIncarnation, s.StateEpoch); err != nil {
 				return err
 			}
-			if _, err := VerifyTrainingRecipientRuntime(ctx, commands, TrainingScheduleCapabilities{ReaderVersion: 3, WriterVersion: 2}); err != nil {
+			if _, err := VerifyTrainingRecipientRuntime(ctx, commands, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 2}); err != nil {
 				return err
 			}
 			queries := dbgen.New(commands)
