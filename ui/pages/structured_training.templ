@@ -1446,10 +1446,11 @@ if page.Workspace.Enabled && page.SelectedDay != "" {
 }
 
 templ structuredSegmentForm(page StructuredTrainingPage, sessionID string) {
+	{{ errors := page.SegmentForm.Errors; if page.SegmentForm.SessionID != sessionID { errors = nil } }}
 	<button class="action action--quiet" type="button" data-dialog-open={ "add-segment-" + sessionID }>Adicionar segmento</button>
 	<dialog id={ "add-segment-" + sessionID } class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "segment-" + sessionID } data-task-url={ structuredPlannerReturnURL(page) } aria-labelledby={ "add-segment-title-" + sessionID }>
 		<div class="task-dialog__header"><h3 id={ "add-segment-title-" + sessionID }>Adicionar segmento</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
-		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.SegmentForm.Errors), []components.FieldErrorRef{{Key: "session", Field: "add-segment-title-" + sessionID}, {Key: "modality", Field: "segment-modality-" + sessionID}, {Key: "purpose", Field: "segment-purpose-" + sessionID}, {Key: "title", Field: "segment-title-" + sessionID}, {Key: "location", Field: "segment-location-" + sessionID}, {Key: "planned_duration_minutes", Field: "segment-duration-" + sessionID}, {Key: "planned_start_offset_minutes", Field: "segment-start-offset-" + sessionID}, {Key: "transition_duration_minutes", Field: "segment-transition-" + sessionID}, {Key: "equipment_notes", Field: "segment-equipment-" + sessionID}, {Key: "block_title", Field: "segment-block-title-" + sessionID}, {Key: "instructions", Field: "segment-instructions-" + sessionID}}))
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(errors), []components.FieldErrorRef{{Key: "session", Field: "add-segment-title-" + sessionID}, {Key: "modality", Field: "segment-modality-" + sessionID}, {Key: "purpose", Field: "segment-purpose-" + sessionID}, {Key: "title", Field: "segment-title-" + sessionID}, {Key: "location", Field: "segment-location-" + sessionID}, {Key: "planned_duration_minutes", Field: "segment-duration-" + sessionID}, {Key: "planned_start_offset_minutes", Field: "segment-start-offset-" + sessionID}, {Key: "transition_duration_minutes", Field: "segment-transition-" + sessionID}, {Key: "equipment_notes", Field: "segment-equipment-" + sessionID}, {Key: "block_title", Field: "segment-block-title-" + sessionID}, {Key: "instructions", Field: "segment-instructions-" + sessionID}}))
 		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/sessoes/" + sessionID + "/segmentos") } data-task-form>
 			@page.CSRFField
 			<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
@@ -1460,17 +1461,17 @@ templ structuredSegmentForm(page StructuredTrainingPage, sessionID string) {
 				}
 			</select>
 			@components.FieldLabel("segment-title-"+sessionID, "Título (opcional)", false)
-			<input id={ "segment-title-" + sessionID } name="title" maxlength="120" value={ page.SegmentForm.Title }/>@components.FieldErrorMessage("title", page.SegmentForm.Errors["title"])
+			<input id={ "segment-title-" + sessionID } aria-invalid={ fmt.Sprintf("%t", errors["title"] != "") } aria-describedby={ "segment-title-" + sessionID + "-error" } name="title" maxlength="120" value={ page.SegmentForm.Title }/>@components.FieldErrorMessage("segment-title-"+sessionID, errors["title"])
 			@components.FieldLabel("segment-location-"+sessionID, "Local (opcional)", false)
-			<input id={ "segment-location-" + sessionID } name="location" maxlength="180" value={ page.SegmentForm.Location }/>@components.FieldErrorMessage("location", page.SegmentForm.Errors["location"])
+			<input id={ "segment-location-" + sessionID } aria-invalid={ fmt.Sprintf("%t", errors["location"] != "") } aria-describedby={ "segment-location-" + sessionID + "-error" } name="location" maxlength="180" value={ page.SegmentForm.Location }/>@components.FieldErrorMessage("segment-location-"+sessionID, errors["location"])
 			@components.FieldLabel("segment-duration-"+sessionID, "Duração prevista em minutos (opcional)", false)
-			<input id={ "segment-duration-" + sessionID } name="planned_duration_minutes" type="number" min="1" max="1440" value={ page.SegmentForm.Duration }/>@components.FieldErrorMessage("planned_duration_minutes", page.SegmentForm.Errors["planned_duration_minutes"])
+			<input id={ "segment-duration-" + sessionID } aria-invalid={ fmt.Sprintf("%t", errors["planned_duration_minutes"] != "") } aria-describedby={ "segment-duration-" + sessionID + "-error" } name="planned_duration_minutes" type="number" min="1" max="1440" value={ page.SegmentForm.Duration }/>@components.FieldErrorMessage("segment-duration-"+sessionID, errors["planned_duration_minutes"])
 			@components.FieldLabel("segment-start-offset-"+sessionID, "Início previsto, em minutos após o início da sessão (opcional)", false)
-			<input id={ "segment-start-offset-" + sessionID } name="planned_start_offset_minutes" type="number" min="0" max="1440" value={ page.SegmentForm.StartOffset }/>@components.FieldErrorMessage("planned_start_offset_minutes", page.SegmentForm.Errors["planned_start_offset_minutes"])
+			<input id={ "segment-start-offset-" + sessionID } aria-invalid={ fmt.Sprintf("%t", errors["planned_start_offset_minutes"] != "") } aria-describedby={ "segment-start-offset-" + sessionID + "-error" } name="planned_start_offset_minutes" type="number" min="0" max="1440" value={ page.SegmentForm.StartOffset }/>@components.FieldErrorMessage("segment-start-offset-"+sessionID, errors["planned_start_offset_minutes"])
 			@components.FieldLabel("segment-transition-"+sessionID, "Transição antes deste segmento, em minutos (opcional)", false)
-			<input id={ "segment-transition-" + sessionID } name="transition_duration_minutes" type="number" min="1" max="1440" value={ page.SegmentForm.Transition }/>@components.FieldErrorMessage("transition_duration_minutes", page.SegmentForm.Errors["transition_duration_minutes"])
+			<input id={ "segment-transition-" + sessionID } aria-invalid={ fmt.Sprintf("%t", errors["transition_duration_minutes"] != "") } aria-describedby={ "segment-transition-" + sessionID + "-error" } name="transition_duration_minutes" type="number" min="1" max="1440" value={ page.SegmentForm.Transition }/>@components.FieldErrorMessage("segment-transition-"+sessionID, errors["transition_duration_minutes"])
 			@components.FieldLabel("segment-equipment-"+sessionID, "Material e preparação (opcional)", false)
-			<textarea id={ "segment-equipment-" + sessionID } name="equipment_notes" maxlength="1000">{ page.SegmentForm.EquipmentNotes }</textarea>@components.FieldErrorMessage("equipment_notes", page.SegmentForm.Errors["equipment_notes"])
+			<textarea id={ "segment-equipment-" + sessionID } aria-invalid={ fmt.Sprintf("%t", errors["equipment_notes"] != "") } aria-describedby={ "segment-equipment-" + sessionID + "-error" } name="equipment_notes" maxlength="1000">{ page.SegmentForm.EquipmentNotes }</textarea>@components.FieldErrorMessage("segment-equipment-"+sessionID, errors["equipment_notes"])
 			@components.FieldLabel("segment-purpose-"+sessionID, "Objetivo do primeiro bloco", true)
 			<select id={ "segment-purpose-" + sessionID } name="purpose" required>
 				for _, value := range []string{"WARM_UP", "MAIN", "COOL_DOWN", "TECHNIQUE", "CUSTOM"} {
@@ -1478,32 +1479,33 @@ templ structuredSegmentForm(page StructuredTrainingPage, sessionID string) {
 				}
 			</select>
 			@components.FieldLabel("segment-block-title-"+sessionID, "Título do bloco (opcional)", false)
-			<input id={ "segment-block-title-" + sessionID } name="block_title" maxlength="120" value={ page.SegmentForm.BlockTitle }/>@components.FieldErrorMessage("block_title", page.SegmentForm.Errors["block_title"])
+			<input id={ "segment-block-title-" + sessionID } aria-invalid={ fmt.Sprintf("%t", errors["block_title"] != "") } aria-describedby={ "segment-block-title-" + sessionID + "-error" } name="block_title" maxlength="120" value={ page.SegmentForm.BlockTitle }/>@components.FieldErrorMessage("segment-block-title-"+sessionID, errors["block_title"])
 			@components.FieldLabel("segment-instructions-"+sessionID, "Instruções", true)
-			<textarea id={ "segment-instructions-" + sessionID } name="instructions" minlength="2" maxlength="4000" required>{ page.SegmentForm.Instructions }</textarea>@components.FieldErrorMessage("instructions", page.SegmentForm.Errors["instructions"])
+			<textarea id={ "segment-instructions-" + sessionID } aria-invalid={ fmt.Sprintf("%t", errors["instructions"] != "") } aria-describedby={ "segment-instructions-" + sessionID + "-error" } name="instructions" minlength="2" maxlength="4000" required>{ page.SegmentForm.Instructions }</textarea>@components.FieldErrorMessage("segment-instructions-"+sessionID, errors["instructions"])
 			<button type="submit">Adicionar segmento</button>
 		</form>
 	</dialog>
 }
 
 templ structuredBlockForm(page StructuredTrainingPage, segmentID string) {
+	{{ errors := page.BlockForm.Errors; if page.BlockForm.SegmentID != segmentID { errors = nil } }}
 	<button class="action action--quiet" type="button" data-dialog-open={ "add-block-" + segmentID }>Adicionar bloco</button>
 	<dialog id={ "add-block-" + segmentID } class="task-dialog" data-task-dialog data-task-open-on-load?={ page.OpenForm == "block-" + segmentID } data-task-url={ structuredPlannerReturnURL(page) } aria-labelledby={ "add-block-title-dialog-" + segmentID }>
 		<div class="task-dialog__header"><h3 id={ "add-block-title-dialog-" + segmentID }>Adicionar bloco</h3><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
-		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.BlockForm.Errors), []components.FieldErrorRef{{Key: "segment", Field: "add-block-title-dialog-" + segmentID}, {Key: "purpose", Field: "block-purpose-" + segmentID}, {Key: "title", Field: "block-title-" + segmentID}, {Key: "instructions", Field: "block-instructions-" + segmentID}}))
+		@components.ErrorSummary(components.FieldErrorsFor(map[string]string(errors), []components.FieldErrorRef{{Key: "segment", Field: "add-block-title-dialog-" + segmentID}, {Key: "purpose", Field: "block-purpose-" + segmentID}, {Key: "title", Field: "block-title-" + segmentID}, {Key: "instructions", Field: "block-instructions-" + segmentID}}))
 		<form class="form-layout" method="post" action={ templ.SafeURL("/admin/treinos/estruturados/segmentos/" + segmentID + "/blocos") } data-task-form>
 			@page.CSRFField
 			<input type="hidden" name="return_to" value={ structuredPlannerReturnURL(page) }/>
 			@components.FieldLabel("block-purpose-"+segmentID, "Objetivo", true)
-			<select id={ "block-purpose-" + segmentID } name="purpose" required>
+			<select id={ "block-purpose-" + segmentID } aria-invalid={ fmt.Sprintf("%t", errors["purpose"] != "") } aria-describedby={ "block-purpose-" + segmentID + "-error" } name="purpose" required>
 				for _, value := range []string{"WARM_UP", "MAIN", "COOL_DOWN", "TECHNIQUE", "CUSTOM"} {
 					<option value={ value } selected?={ page.BlockForm.SegmentID == segmentID && page.BlockForm.Purpose == value }>{ structuredPurposeLabel(value) }</option>
 				}
-			</select>@components.FieldErrorMessage("purpose", page.BlockForm.Errors["purpose"])
+			</select>@components.FieldErrorMessage("block-purpose-"+segmentID, errors["purpose"])
 			@components.FieldLabel("block-title-"+segmentID, "Título (opcional)", false)
-			<input id={ "block-title-" + segmentID } name="title" maxlength="120" value={ page.BlockForm.Title }/>@components.FieldErrorMessage("title", page.BlockForm.Errors["title"])
+			<input id={ "block-title-" + segmentID } aria-invalid={ fmt.Sprintf("%t", errors["title"] != "") } aria-describedby={ "block-title-" + segmentID + "-error" } name="title" maxlength="120" value={ page.BlockForm.Title }/>@components.FieldErrorMessage("block-title-"+segmentID, errors["title"])
 			@components.FieldLabel("block-instructions-"+segmentID, "Instruções", true)
-			<textarea id={ "block-instructions-" + segmentID } name="instructions" minlength="2" maxlength="4000" required>{ page.BlockForm.Instructions }</textarea>@components.FieldErrorMessage("instructions", page.BlockForm.Errors["instructions"])
+			<textarea id={ "block-instructions-" + segmentID } aria-invalid={ fmt.Sprintf("%t", errors["instructions"] != "") } aria-describedby={ "block-instructions-" + segmentID + "-error" } name="instructions" minlength="2" maxlength="4000" required>{ page.BlockForm.Instructions }</textarea>@components.FieldErrorMessage("block-instructions-"+segmentID, errors["instructions"])
 			<button type="submit">Adicionar bloco</button>
 		</form>
 	</dialog>
