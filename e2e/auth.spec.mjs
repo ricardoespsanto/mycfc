@@ -41,6 +41,21 @@ async function emulateBrowserZoom(page, zoom, viewport = { width: 1280, height: 
 }
 
 // Exercise the supported staff classification task, never the retired membership form.
+async function createAdultMember(page, name, email, birthDate) {
+  await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
+  // The page clears sensitive fields on pageshow. Enter credentials after it settles.
+  await page.waitForLoadState('networkidle');
+  await page.locator('#member-name').fill(name);
+  await page.locator('#member-email').fill(email);
+  await page.locator('#member-birth').fill(birthDate);
+  await page.locator('#member-password').fill(password);
+  await page.locator('#member-password-confirmation').fill(password);
+  await expect(page.locator('#member-password')).toHaveValue(password);
+  await expect(page.locator('#member-password-confirmation')).toHaveValue(password);
+  await page.getByRole('button', { name: 'Criar conta' }).click();
+  await expect(page.getByText('Conta criada.', { exact: true })).toBeVisible();
+}
+
 async function assignCurrentParticipation(page, programme, beforeConfirmation = async () => {}) {
   const memberURL = page.url();
   await page.waitForLoadState('networkidle');
@@ -937,17 +952,7 @@ test.describe('authentication', () => {
 
     await page.getByRole('link', { name: 'Membros', exact: true }).click();
     await expect(page).toHaveURL('/admin/membros');
-    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
-    // Let initial pageshow finish clearing sensitive fields before entering credentials.
-    await page.waitForLoadState('networkidle');
-    await page.locator('#member-name').fill(athleteName);
-    await page.locator('#member-email').fill(athleteEmail);
-    await page.locator('#member-birth').fill('2000-01-01');
-    await page.locator('#member-password').fill(password);
-    await page.locator('#member-password-confirmation').fill(password);
-    await expect(page.locator('#member-password')).toHaveValue(password);
-    await expect(page.locator('#member-password-confirmation')).toHaveValue(password);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await createAdultMember(page, athleteName, athleteEmail, '2000-01-01');
     await page.getByLabel('Pesquisar membros').fill(athleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await expect(page).toHaveURL(new RegExp('/admin/membros\\?q='));
@@ -1095,14 +1100,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/admin/membros');
-    await page.getByRole('link', { name: 'Criar conta' }).click();
-    await page.locator('#member-name').fill(structuredAthleteName);
-    await page.locator('#member-email').fill(structuredAthleteEmail);
-    await page.locator('#member-birth').fill('2005-01-01');
-    await page.locator('#member-password').fill(password);
-    await page.locator('#member-password-confirmation').fill(password);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
-    await expect(page.getByText('Conta criada.', { exact: true })).toBeVisible();
+    await createAdultMember(page, structuredAthleteName, structuredAthleteEmail, '2005-01-01');
     await page.getByLabel('Pesquisar membros').fill(structuredAthleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: structuredAthleteName }).click();
@@ -1402,13 +1400,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.goto('/admin/membros');
-    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
-    await page.locator('#member-name').fill(athleteName);
-    await page.locator('#member-email').fill(athleteEmail);
-    await page.locator('#member-birth').fill('2005-01-01');
-    await page.locator('#member-password').fill(password);
-    await page.locator('#member-password-confirmation').fill(password);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await createAdultMember(page, athleteName, athleteEmail, '2005-01-01');
     await page.getByLabel('Pesquisar membros').fill(athleteName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: athleteName }).click();
@@ -1584,13 +1576,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: 'Membros', exact: true }).click();
-    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
-    await page.locator('#member-name').fill(waitlistedName);
-    await page.locator('#member-email').fill(waitlistedEmail);
-    await page.locator('#member-birth').fill('2000-01-01');
-    await page.locator('#member-password').fill(password);
-    await page.locator('#member-password-confirmation').fill(password);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
+    await createAdultMember(page, waitlistedName, waitlistedEmail, '2000-01-01');
     await page.getByLabel('Pesquisar membros').fill(waitlistedName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: waitlistedName }).click();
@@ -1790,17 +1776,7 @@ test.describe('authentication', () => {
     await page.getByLabel('Palavra-passe').fill(password);
     await page.getByRole('button', { name: 'Iniciar sessão' }).click();
     await page.getByRole('link', { name: 'Membros', exact: true }).click();
-    await page.getByRole('link', { name: 'Criar conta', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    await page.locator('#member-name').fill(memberName);
-    await page.locator('#member-email').fill(leisureEmail);
-    await page.locator('#member-birth').fill('2000-01-01');
-    await page.locator('#member-password').fill(password);
-    await page.locator('#member-password-confirmation').fill(password);
-    await expect(page.locator('#member-password')).toHaveValue(password);
-    await expect(page.locator('#member-password-confirmation')).toHaveValue(password);
-    await page.getByRole('button', { name: 'Criar conta' }).click();
-    await expect(page.getByText('Conta criada.', { exact: true })).toBeVisible();
+    await createAdultMember(page, memberName, leisureEmail, '2000-01-01');
     await page.getByLabel('Pesquisar membros').fill(memberName);
     await page.getByRole('button', { name: 'Procurar' }).click();
     await page.getByRole('link', { name: memberName }).click();
