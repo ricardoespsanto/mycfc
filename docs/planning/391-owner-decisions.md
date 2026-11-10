@@ -18,8 +18,12 @@ required.
 
 Recipient publication review and full structured/mixed workout creation are
 implemented and locally verified. The next bounded increment is identity-preserving
-editing using the existing models and lifecycle rules. Necessary work includes fresh schema integrity definitions, scoped
-queries, authenticated handler/UI integration and proportionate real tests.
+editing and cancellation using the existing models and lifecycle rules. The
+current increment needs scoped queries, authenticated handler/UI integration,
+concurrency and lifecycle checks, and proportionate real PostgreSQL/browser tests
+on newly owned disposable fixtures. It does not currently require new schema
+definitions: retain the implemented fresh-schema integrity constraints rather
+than adding existing-record conversion or upgrade rehearsals.
 Saving a draft does not publish it. Existing-record conversion, backfill and
 legacy upgrade rehearsals remain outside delivery gates; their optional work
 stays saved in isolated checkouts and frozen handoffs.
