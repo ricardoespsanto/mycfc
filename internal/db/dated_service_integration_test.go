@@ -124,12 +124,24 @@ func TestDatedParticipationSubjectLocksAndDayBoundary(t *testing.T) {
 	}
 	defer pool.Close()
 	service := DatedParticipationService{Pool: pool}
-	var today time.Time
-	if err := pool.QueryRow(ctx, `SELECT (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date`).Scan(&today); err != nil {
-		t.Fatal(err)
+	today := func(t *testing.T) time.Time {
+		t.Helper()
+		var day time.Time
+		if err := pool.QueryRow(t.Context(), `SELECT (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date`).Scan(&day); err != nil {
+			t.Fatal(err)
+		}
+		return day
 	}
-	in := OrdinaryDatedAssignment{ActorID: w.actor, MemberID: w.actor, SeasonID: w.season, ProgrammeID: w.programme, StartsOn: today}
+	in := OrdinaryDatedAssignment{ActorID: w.actor, MemberID: w.actor, SeasonID: w.season, ProgrammeID: w.programme}
+	day := today(t)
+	in.StartsOn = day.AddDate(0, 0, 1)
 	own, err := service.CreateOrdinaryAssignment(ctx, in)
+	if errors.Is(err, ErrClassificationStale) {
+		if next := today(t); !day.Equal(next) {
+			in.StartsOn = next.AddDate(0, 0, 1)
+			own, err = service.CreateOrdinaryAssignment(ctx, in)
+		}
+	}
 	if err != nil || own.UserID == nil || *own.UserID != w.actor {
 		t.Fatalf("administrator self-assignment failed: %v", err)
 	}
@@ -139,8 +151,16 @@ func TestDatedParticipationSubjectLocksAndDayBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	foreign := in
-	foreign.MemberID, foreign.StartsOn = w.subject, today.AddDate(0, 0, 1)
-	if _, err := service.TransitionNextDay(ctx, own.ID, foreign); !errors.Is(err, ErrDatedParticipationTransition) {
+	day = today(t)
+	foreign.MemberID, foreign.StartsOn = w.subject, day.AddDate(0, 0, 1)
+	_, err = service.TransitionNextDay(ctx, own.ID, foreign)
+	if errors.Is(err, ErrDatedParticipationWindow) {
+		if next := today(t); !day.Equal(next) {
+			foreign.StartsOn = next.AddDate(0, 0, 1)
+			_, err = service.TransitionNextDay(ctx, own.ID, foreign)
+		}
+	}
+	if !errors.Is(err, ErrDatedParticipationTransition) {
 		t.Fatalf("another member's interval accepted as transition source: %v", err)
 	}
 	if w.revision(t) != before {
@@ -158,6 +178,7 @@ func TestDatedParticipationSubjectLocksAndDayBoundary(t *testing.T) {
 		}
 		defer tx.Rollback(t.Context())
 		recipientSchemaExec(t, tx, `SELECT id FROM users WHERE id=$1 FOR UPDATE`, w.actor)
+		in.StartsOn = today(t).AddDate(0, 0, 1)
 		if _, err := service.CreateOrdinaryAssignment(t.Context(), in); !errors.Is(err, ErrClassificationStale) {
 			t.Fatalf("locked self-actor did not return a retryable classification conflict: %v", err)
 		}
@@ -165,11 +186,12 @@ func TestDatedParticipationSubjectLocksAndDayBoundary(t *testing.T) {
 
 	t.Run("calendar day changes before commit", func(t *testing.T) {
 		in.MemberID = uuid.New()
+		in.StartsOn = today(t)
 		recipientSchemaExec(t, w.web, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Synthetic day boundary',$2,'hash','1980-01-01')`, in.MemberID, in.MemberID.String()+"@example.test")
 		outcome, err := WithRecipientPublicationTx(t.Context(), pool, recipientTestOptions(), func(ctx context.Context, commands dbgen.DBTX) error {
-			// PostgreSQL executes every query and write. Advance only the final
-			// calendar-date observation to exercise the midnight rollback.
-			_, err := writeDatedParticipation(ctx, &datedDayBoundaryTx{DBTX: commands}, in, nil, "")
+			// Pin the first calendar observation and advance the second. The
+			// actual clock can cross midnight without changing this test case.
+			_, err := writeDatedParticipation(ctx, &datedDayBoundaryTx{DBTX: commands, day: in.StartsOn}, in, nil, "")
 			return err
 		})
 		if !errors.Is(err, ErrClassificationStale) || outcome.Outcome != SessionTxNotCommitted {
@@ -184,15 +206,15 @@ func TestDatedParticipationSubjectLocksAndDayBoundary(t *testing.T) {
 
 type datedDayBoundaryTx struct {
 	dbgen.DBTX
+	day      time.Time
 	dayReads int
 }
 
 func (tx *datedDayBoundaryTx) QueryRow(ctx context.Context, statement string, args ...any) pgx.Row {
 	if statement == `SELECT (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date` {
+		day := tx.day.AddDate(0, 0, tx.dayReads)
 		tx.dayReads++
-		if tx.dayReads == 2 {
-			statement += " + 1"
-		}
+		return tx.DBTX.QueryRow(ctx, `SELECT $1::date`, day)
 	}
 	return tx.DBTX.QueryRow(ctx, statement, args...)
 }
