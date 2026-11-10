@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -460,5 +461,221 @@ func testLocalTerminalJournalWithoutFloorIntent(t *testing.T, root, low *pgx.Con
 	after, err := db.TrainingScheduleStatus(ctx, low)
 	if err != nil || after.StateEpoch != state.StateEpoch || after.FloorCommitID == nil || *after.FloorCommitID != *state.FloorCommitID {
 		t.Fatal("reporting the terminal journal changed its floor", err)
+	}
+}
+
+func testInterruptedLocalBootstrapProvenance(t *testing.T, raw string) {
+	t.Helper()
+	ctx := t.Context()
+	original, err := pgx.Connect(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close(ctx)
+	roles := databaseRoleCredentialsFromEnvironment()
+	err = withRecipientPolicySession(ctx, original, func(ctx context.Context) error {
+		if err := captureLocalRecipientProvenance(ctx, original, roles); err != nil {
+			return err
+		}
+		if err := captureLocalRecipientProvenance(ctx, original, roles); err != nil {
+			return err
+		}
+		return completeLocalRecipientBootstrap(ctx, original)
+	})
+	if err == nil || !strings.Contains(err.Error(), "publisher was not created") || !original.IsClosed() {
+		t.Fatalf("incomplete local bootstrap was accepted: %v", err)
+	}
+	root, err := pgx.Connect(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close(ctx)
+	binding, err := localManifestBinding(ctx, root, roles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := openLocalRecipientManifest(binding, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer record.Close()
+	if record.Value.Phase != "captured" || record.Value.PublisherOID != nil || record.Value.OriginalLogin != nil {
+		t.Fatal("incomplete bootstrap recorded a fabricated publisher")
+	}
+}
+
+func testClosedAuthoringRejectsRecordedActivation(t *testing.T, root, low *pgx.Conn, closed db.TrainingScheduleState) {
+	t.Helper()
+	ctx := t.Context()
+	roles := db.RoleCredentials{AppUsername: startupPublisher, MigrationUsername: low.Config().User, MigrationPassword: low.Config().Password}
+	binding, err := localManifestBinding(ctx, root, roles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := openLocalRecipientManifest(binding, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := record.Value
+	defer func() {
+		defer record.Close()
+		record.Value = original
+		if err := record.Save(); err != nil {
+			t.Error("restore fixture journal", err)
+		}
+	}()
+	target := recipientCommandTarget{Database: root.Config().Database, Roles: roles}
+	for _, tc := range []struct {
+		name, want            string
+		forgetAcknowledgement bool
+	}{
+		{"acknowledged intent", "do not replay or reopen it", false},
+		{"intent epoch predates later gate close", "epoch changed; inspect recorded intent", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			migration, err := pgx.ConnectConfig(t.Context(), low.Config())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer migration.Close(t.Context())
+			record.Value = original
+			if tc.forgetAcknowledgement {
+				record.Value.AuthoringPreparedEpoch = nil
+			}
+			err = completeLocalAuthoringPreparation(t.Context(), migration, root, target, record, closed)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+			after, err := db.TrainingScheduleStatus(t.Context(), low)
+			if err != nil || after.StateEpoch != closed.StateEpoch || after.PartialV2Enabled {
+				t.Fatal("recorded intent reopened a separately closed gate", err)
+			}
+			publisher, err := db.InspectTrainingRecipientPublisher(t.Context(), root, startupPublisher)
+			if err != nil || publisher.CanLogin {
+				t.Fatal("recorded intent restored the fenced publisher", err)
+			}
+		})
+	}
+}
+
+func testLocalAuthoringRestoreNeedsFreshEvidence(t *testing.T, root, low *pgx.Conn, state db.TrainingScheduleState) {
+	t.Helper()
+	ctx := t.Context()
+	roles := db.RoleCredentials{AppUsername: startupPublisher, MigrationUsername: low.Config().User, MigrationPassword: low.Config().Password}
+	binding, err := localManifestBinding(ctx, root, roles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := openLocalRecipientManifest(binding, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer record.Close()
+	original, journal := record.Value, record.path
+	for _, tc := range []struct {
+		name, want string
+		fenced     bool
+	}{
+		{"publisher still has work", "stop every local application", false},
+		{"floor changed between inspections", "unchanged floor and fenced publisher", true},
+		{"final inspector cannot authenticate", "independent migration connection rejected", true},
+		{"journal cannot record the fence", "rename", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				record.Value, record.path = original, journal
+				if err := record.Save(); err != nil {
+					t.Error("restore fixture journal", err)
+				}
+				publisher, err := db.InspectTrainingRecipientPublisher(ctx, root, startupPublisher)
+				if err != nil {
+					t.Error("inspect fixture publisher", err)
+					return
+				}
+				if !publisher.CanLogin {
+					if _, err := setRecipientPublisherLogin(ctx, root, startupPublisher, publisher.OID, true); err != nil {
+						t.Error("restore fixture publisher", err)
+					}
+				}
+			})
+			migration, err := pgx.ConnectConfig(t.Context(), low.Config())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer migration.Close(t.Context())
+			bootstrap, err := pgx.ConnectConfig(t.Context(), root.Config())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer bootstrap.Close(t.Context())
+			record.Value.Phase = "floor_committed"
+			target := recipientCommandTarget{Database: root.Config().Database, Roles: roles}
+			candidate := state
+			switch tc.name {
+			case "publisher still has work":
+				cfg := root.Config().Copy()
+				cfg.Database, cfg.User, cfg.Password = "postgres", startupPublisher, os.Getenv("APP_DB_PASSWORD")
+				publisher, err := pgx.ConnectConfig(t.Context(), cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer publisher.Close(t.Context())
+			case "floor changed between inspections":
+				previousDigest := strings.Repeat("e", 64)
+				candidate.FloorManifestSHA256 = &previousDigest
+			case "final inspector cannot authenticate":
+				target.Roles.MigrationPassword = "synthetic-wrong"
+			case "journal cannot record the fence":
+				record.path = filepath.Join(t.TempDir(), "journal")
+				if err := os.Mkdir(record.path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = completeLocalAuthoringPreparation(t.Context(), migration, bootstrap, target, record, candidate)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+			after, err := db.TrainingScheduleStatus(t.Context(), low)
+			if err != nil || after.StateEpoch != state.StateEpoch || after.FloorManifestSHA256 == nil || *after.FloorManifestSHA256 != *state.FloorManifestSHA256 {
+				t.Fatal("failed restoration altered the serving schedule", err)
+			}
+			publisher, err := db.InspectTrainingRecipientPublisher(t.Context(), root, startupPublisher)
+			if err != nil || publisher.CanLogin == tc.fenced {
+				t.Fatal("failed restoration changed the required publisher fence", err)
+			}
+		})
+	}
+}
+
+func testLocalProvenanceRefusesUnboundTarget(t *testing.T, root, low *pgx.Conn) {
+	t.Helper()
+	roles := db.RoleCredentials{AppUsername: startupPublisher, MigrationUsername: low.Config().User}
+	for _, tc := range []struct{ name, want string }{
+		{"no explicit endpoint", "requires explicit owned loopback URL"},
+		{"bootstrap clone lacks credentials", "credentials/configuration required"},
+		{"clone is independently authenticated without bootstrap privilege", "requires original authenticated configured bootstrap"},
+		{"other project directory", "unrecorded populated local fixture"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			switch tc.name {
+			case "no explicit endpoint":
+				t.Setenv("DATABASE_URL", "")
+				_, err := localManifestBinding(t.Context(), root, roles)
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("err = %v, want %q", err, tc.want)
+				}
+				return
+			case "bootstrap clone lacks credentials":
+				t.Setenv("POSTGRES_PASSWORD", "")
+			case "clone is independently authenticated without bootstrap privilege":
+				t.Setenv("POSTGRES_USER", low.Config().User)
+				t.Setenv("POSTGRES_PASSWORD", low.Config().Password)
+			case "other project directory":
+				t.Chdir(t.TempDir())
+			}
+			if err := requireLocalRecipientProvenance(t.Context(), low, roles); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }

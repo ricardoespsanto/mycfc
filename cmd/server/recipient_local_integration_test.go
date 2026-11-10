@@ -32,6 +32,9 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 		t.Setenv(key, value)
 	}
 	t.Setenv("DATABASE_URL", raw)
+	t.Run("interrupted bootstrap only records captured identity", func(t *testing.T) {
+		testInterruptedLocalBootstrapProvenance(t, raw)
+	})
 	if err := runServerCommand(t.Context(), []string{"bootstrap-db"}); err != nil {
 		t.Fatal("constructive bootstrap", err)
 	}
@@ -96,6 +99,12 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	t.Run("only terminal journal may report state without floor intent", func(t *testing.T) {
 		testLocalTerminalJournalWithoutFloorIntent(t, root, low, state)
 	})
+	t.Run("authoring restore requires current floor and publisher evidence", func(t *testing.T) {
+		testLocalAuthoringRestoreNeedsFreshEvidence(t, root, low, state)
+	})
+	t.Run("local provenance rejects an unbound target", func(t *testing.T) {
+		testLocalProvenanceRefusesUnboundTarget(t, root, low)
+	})
 	original := state
 	if err = runServerCommand(t.Context(), []string{"prepare-local-recipient-floor"}); err != nil {
 		t.Fatal("idempotent local floor", err)
@@ -159,6 +168,9 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	if err = low.QueryRow(t.Context(), `SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname='local_recipient_web'`).Scan(&login); err != nil || login {
 		t.Fatal("unexpected publisher LOGIN restored", err)
 	}
+	t.Run("recorded activation cannot reopen a separately closed gate", func(t *testing.T) {
+		testClosedAuthoringRejectsRecordedActivation(t, root, low, state)
+	})
 	if _, err = low.Exec(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,$5)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New(), strings.Repeat("b", 64), trainingcompat.ReaderGeneration+1); err != nil {
 		t.Fatal(err)
 	}
