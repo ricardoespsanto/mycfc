@@ -349,3 +349,40 @@ func TestWorkspaceAppointmentMutationLinksAreScopedSiblingActions(t *testing.T) 
 		t.Fatal("empty edit URL must hide only edit entry")
 	}
 }
+
+func TestReuseWorkspaceOptionalEntriesPreserveDetailEditCancel(t *testing.T) {
+	p := workspaceFixture()
+	before := renderWorkspace(t, p)
+	if strings.Contains(before, ">Copiar semana</a>") || strings.Contains(before, ">Copiar dia</a>") || strings.Contains(before, ">Adaptar para…</a>") {
+		t.Fatal("empty reuse URLs must keep old presentation")
+	}
+	p.Workspace.CopyURL = "/reuse/week"
+	p.Workspace.RoutineURL = "/reuse/routines?target=week"
+	p.Workspace.AdaptURL = "/adapt/week"
+	p.Workspace.Days[0].CopyURL = "/reuse/day?date=2026-11-09"
+	p.Workspace.Days[0].RoutineURL = "/reuse/routines?target=day"
+	a := &p.Workspace.Days[0].Afternoon[0]
+	a.EditURL = "/edit/session"
+	a.CancelURL = "/cancel/session"
+	a.CopyURL = "/reuse/session"
+	a.RoutineURL = "/reuse/routines?target=session"
+	a.AdaptURL = "/adapt/session?task=variation#training-variations"
+	body := renderWorkspace(t, p)
+	for _, href := range []string{p.Workspace.CopyURL, p.Workspace.RoutineURL, p.Workspace.AdaptURL, p.Workspace.Days[0].CopyURL, p.Workspace.Days[0].RoutineURL, a.URL, a.EditURL, a.CancelURL, a.CopyURL, a.RoutineURL, a.AdaptURL} {
+		if !strings.Contains(body, `href="`+html.EscapeString(href)+`"`) {
+			t.Fatal("missing contextual entry", href)
+		}
+	}
+	if !strings.Contains(body, `aria-label="Copiar dia · Dia 1, 2026-11-09"`) || !strings.Contains(body, `aria-label="Copiar sessão · Água e ginásio · 2026-11-09 · 16:00–18:00"`) {
+		t.Fatal("context must distinguish repeated action links")
+	}
+	for _, anchor := range regexp.MustCompile(`(?s)<a\b[^>]*>.*?</a>`).FindAllString(body, -1) {
+		if strings.Count(anchor, "<a ") != 1 {
+			t.Fatal("reuse action nested in existing detail anchor")
+		}
+	}
+	p.Workspace.HasWeek = false
+	if body = renderWorkspace(t, p); !strings.Contains(body, "Criar semana") || !strings.Contains(body, `href="/reuse/routines?target=week"`) {
+		t.Fatal("provided routine entry must remain discoverable without inventing a week")
+	}
+}
