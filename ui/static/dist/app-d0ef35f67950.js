@@ -844,7 +844,7 @@ if (variationPlanSelect instanceof HTMLElement && variationPlanSelect.matches("s
 const variationOperation = document.querySelector("#variation-operation");
 if (variationOperation instanceof HTMLElement && variationOperation.matches("select")) {
   const form = variationOperation.closest("form");
-  const patchFields = form?.querySelectorAll("input[name]:not([type='hidden']):not([name='version']), select[name='modality'], textarea[name='instructions']") || [];
+  const patchFields = form?.querySelectorAll("input[name]:not([type='hidden']):not([name='version']), select[name='modality'], select[name='intensity_profile_id'], textarea[name='instructions']") || [];
   const excludedNames = new Set(["plan_id", "target", "subject", "operation", "change_summary"]);
   const syncVariationOperation = () => {
     const omit = variationOperation.value === "OMIT";
