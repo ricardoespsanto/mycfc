@@ -43,11 +43,12 @@ type MemberProgramme struct {
 	Active   bool
 }
 type MemberDetailPage struct {
-	Meta                       components.PageMeta
-	Member                     MemberDetail
-	Season, Success, ReturnURL string
-	Programmes                 []MemberProgramme
-	Errors                     validation.FieldErrors
+	Meta                                       components.PageMeta
+	Member                                     MemberDetail
+	Season, Success, ReturnURL, SeasonSetupURL string
+	SeasonMissing                              bool
+	Programmes                                 []MemberProgramme
+	Errors                                     validation.FieldErrors
 }
 
 func Members(page MembersPage) templ.Component {
@@ -1101,6 +1102,10 @@ func memberDetailContent(page MemberDetailPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
+		templ_7745c5c3_Err = components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.Errors), []components.FieldErrorRef{{Key: "membership", Field: "member-classification-title"}})).Render(ctx, templ_7745c5c3_Buffer)
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
 		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 82, "<section class=\"module\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
@@ -1183,7 +1188,7 @@ func memberDetailContent(page MemberDetailPage) templ.Component {
 			var templ_7745c5c3_Var35 templ.SafeURL
 			templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinURLErrs(memberMutationURL("/admin/membros/"+page.Member.ID+"/credencial-menor", page.ReturnURL))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 173, Col: 482}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 174, Col: 482}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 			if templ_7745c5c3_Err != nil {
@@ -1290,7 +1295,7 @@ func memberDetailContent(page MemberDetailPage) templ.Component {
 			var templ_7745c5c3_Var37 templ.SafeURL
 			templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinURLErrs(memberMutationURL("/admin/membros/"+page.Member.ID+"/desativar", page.ReturnURL))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 181, Col: 401}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 182, Col: 401}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 			if templ_7745c5c3_Err != nil {
@@ -1329,7 +1334,7 @@ func memberDetailContent(page MemberDetailPage) templ.Component {
 			var templ_7745c5c3_Var38 string
 			templ_7745c5c3_Var38, templ_7745c5c3_Err = templ.JoinStringErrs(page.Member.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 181, Col: 950}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 182, Col: 950}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var38))
 			if templ_7745c5c3_Err != nil {
@@ -1362,7 +1367,7 @@ func memberDetailContent(page MemberDetailPage) templ.Component {
 				var templ_7745c5c3_Var40 string
 				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinStringErrs(page.Member.Name)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 181, Col: 1199}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 182, Col: 1199}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 				if templ_7745c5c3_Err != nil {
@@ -1383,7 +1388,40 @@ func memberDetailContent(page MemberDetailPage) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 113, "<section aria-labelledby=\"member-classification-title\"><h2 id=\"member-classification-title\">Participação desportiva</h2><p>Consulte a participação atual, agendada e o histórico numa tarefa separada. As funções de acesso da conta não são alteradas.</p>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 113, "<section aria-labelledby=\"member-classification-title\"><h2 id=\"member-classification-title\" tabindex=\"-1\">Participação desportiva</h2>")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		if page.SeasonMissing {
+			templ_7745c5c3_Err = components.Callout("Sem época atual", "A configuração da época está em falta. Configure e selecione uma época antes de atribuir a participação que depende dela.", "info").Render(ctx, templ_7745c5c3_Buffer)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 114, " ")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			if page.SeasonSetupURL != "" {
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 115, "<p><a class=\"action action--secondary\" href=\"")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var41 templ.SafeURL
+				templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.SeasonSetupURL))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 188, Col: 80}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 116, "\">Configurar épocas</a></p>")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+			}
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 117, "<p>Consulte a participação atual, agendada e o histórico numa tarefa separada. As funções de acesso da conta não são alteradas.</p>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1391,20 +1429,20 @@ func memberDetailContent(page MemberDetailPage) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 114, "<a class=\"action action--secondary\" href=\"")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 118, "<a class=\"action action--secondary\" href=\"")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		var templ_7745c5c3_Var41 templ.SafeURL
-		templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/equipa/classificacao/" + page.Member.ID))
+		var templ_7745c5c3_Var42 templ.SafeURL
+		templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/equipa/classificacao/" + page.Member.ID))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 183, Col: 433}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 191, Col: 311}
 		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 115, "\">Alterar participação e consultar histórico</a></section>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 119, "\">Alterar participação e consultar histórico</a></section>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -1428,38 +1466,38 @@ func memberDatum(label, value string) templ.Component {
 			}()
 		}
 		ctx = templ.InitializeContext(ctx)
-		templ_7745c5c3_Var42 := templ.GetChildren(ctx)
-		if templ_7745c5c3_Var42 == nil {
-			templ_7745c5c3_Var42 = templ.NopComponent
+		templ_7745c5c3_Var43 := templ.GetChildren(ctx)
+		if templ_7745c5c3_Var43 == nil {
+			templ_7745c5c3_Var43 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 116, "<li class=\"record-item\"><div class=\"record-item__copy\"><h3>")
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		var templ_7745c5c3_Var43 string
-		templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(label)
-		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 186, Col: 107}
-		}
-		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
-		if templ_7745c5c3_Err != nil {
-			return templ_7745c5c3_Err
-		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 117, "</h3><p class=\"record-meta\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 120, "<li class=\"record-item\"><div class=\"record-item__copy\"><h3>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var44 string
-		templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(value)
+		templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 186, Col: 144}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 194, Col: 107}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 118, "</p></div></li>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 121, "</h3><p class=\"record-meta\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		var templ_7745c5c3_Var45 string
+		templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinStringErrs(value)
+		if templ_7745c5c3_Err != nil {
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/members.templ`, Line: 194, Col: 144}
+		}
+		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 122, "</p></div></li>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

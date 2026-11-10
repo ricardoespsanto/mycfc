@@ -140,6 +140,7 @@ type StructuredTrainingPage struct {
 	Management                                                  bool
 	CanManageWaterProfiles                                      bool
 	Success, Error, OpenForm                                    string
+	SeasonSetupURL, SeasonSetupMessage string
 	RoutineQuery, RoutineModality, RoutineObjective, RoutineTag string
 	Audiences, PlannerAudiences                                 []StructuredTrainingAudience
 	Cycles                                                       []StructuredTrainingCycle
@@ -1207,6 +1208,12 @@ templ structuredGroupForm(page StructuredTrainingPage) {
 templ structuredWeekForm(page StructuredTrainingPage) {
 	@components.TaskDialog(components.TaskSurfaceConfig{ID: "criar-semana-treino", TitleID: "structured-week-title", Eyebrow: "Planeamento estruturado", Title: "Criar semana", Description: "Associe uma semana datada a um grupo.", Variant: "sheet", URL: structuredPlannerReturnURL(page), ReturnURL: structuredPlannerReturnURL(page), Open: page.OpenForm == "week"}) {
 		<div class="task-form">
+            if page.SeasonSetupMessage != "" {
+                @components.Callout("Rever a configuração da época", page.SeasonSetupMessage, "info")
+                if page.SeasonSetupURL != "" {
+<p><a class="action action--secondary" href={ templ.SafeURL(page.SeasonSetupURL) }>Configurar épocas</a></p>
+}
+            }
 			@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.WeekForm.Errors), []components.FieldErrorRef{{Key: "group_id", Field: "structured-week-group"}, {Key: "title", Field: "structured-week-name"}, {Key: "week_start", Field: "structured-week-start"}}))
 			<form class="form-layout" method="post" action="/admin/treinos/estruturados/semanas" data-task-form>
 				@page.CSRFField

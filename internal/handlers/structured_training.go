@@ -568,7 +568,13 @@ func (h StructuredTraining) CreateWeek(w http.ResponseWriter, r *http.Request) {
 	created, err := h.Store.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{Title: form.Title, Description: form.Description, WeekStart: pgtype.Date{Time: weekStart, Valid: true}, PlannedLoadPercentage: plannedLoad, CreatedByID: user.ID, GroupID: groupID})
 	if errors.Is(err, pgx.ErrNoRows) {
 		form.Errors.Add("week_start", "A semana tem de pertencer a uma época registada.")
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "week", WeekForm: form, PlannerReturnURL: returnTo})
+		setupURL := ""
+		setupMessage := "Peça a um administrador que registe uma época com datas que incluam esta semana. Depois regresse ao grupo para rever e criar a semana."
+		if user.IsAdmin {
+			setupURL = seasonSetupURL(h.seasonSetupContext(ctx, user, groupID, returnTo))
+			setupMessage = "Registe uma época com datas explícitas que incluam esta semana. Depois regresse ao grupo para rever e criar a semana."
+		}
+		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "week", WeekForm: form, PlannerReturnURL: returnTo, SeasonSetupURL: setupURL, SeasonSetupMessage: setupMessage})
 		return
 	}
 	if err != nil {
@@ -3859,4 +3865,27 @@ func intValue(value *int32) int {
 		return 0
 	}
 	return int(*value)
+}
+
+// Preserve only context proven to belong to the exact group, never a posted
+// planner URL's UUID syntax alone.
+func (h StructuredTraining) seasonSetupContext(ctx context.Context, user CurrentUser, group uuid.UUID, returnTo string) SeasonReturnContext {
+	out := SeasonReturnContext{Kind: "group", ID: group.String()}
+	u, err := url.Parse(returnTo)
+	if err != nil || u.Query().Get("group_id") != group.String() {
+		return out
+	}
+	week, err := uuid.Parse(u.Query().Get("week_id"))
+	if err != nil || week == uuid.Nil {
+		return out
+	}
+	resolver, ok := h.Groups.(trainingGroupWeekResolver)
+	if !ok {
+		return out
+	}
+	allowed, err := resolver.AllowsWeek(ctx, user.ID, group, week)
+	if err == nil && allowed {
+		out.WeekID = week.String()
+	}
+	return out
 }

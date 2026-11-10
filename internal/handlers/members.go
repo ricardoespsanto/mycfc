@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -35,7 +34,6 @@ type MemberStore interface {
 	CreateDependentUser(context.Context, dbgen.CreateDependentUserParams) (dbgen.CreateDependentUserRow, error)
 	DeactivateMemberForAdmin(context.Context, uuid.UUID) (int64, error)
 	GetCurrentSeason(context.Context) (dbgen.Season, error)
-	CreateSeason(context.Context, dbgen.CreateSeasonParams) (dbgen.Season, error)
 	ListMembershipProgrammes(context.Context) ([]dbgen.Programme, error)
 	ListActiveMembershipsForUser(context.Context, uuid.UUID) ([]dbgen.ListActiveMembershipsForUserRow, error)
 	UpsertCurrentSeasonMembership(context.Context, dbgen.UpsertCurrentSeasonMembershipParams) (dbgen.UpsertCurrentSeasonMembershipRow, error)
@@ -51,6 +49,7 @@ type Members struct {
 	Now            func() time.Time
 	Sessions       *scs.SessionManager
 	Classification Classification
+	Seasons        Seasons
 	Definitions    Definitions
 }
 
@@ -199,6 +198,10 @@ func (h Members) Membership(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), dashboardQueryTimeout)
 	defer cancel()
 	season, err := h.currentSeason(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		h.renderDetail(w, r, id, http.StatusUnprocessableEntity, validation.FieldErrors{"membership": "Selecione primeiro uma época atual na configuração de épocas."}, "")
+		return
+	}
 	if err != nil {
 		h.System.InternalError(w, r)
 		return
@@ -418,7 +421,8 @@ func (h Members) renderDetail(w http.ResponseWriter, r *http.Request, id uuid.UU
 		return
 	}
 	season, err := h.currentSeason(ctx)
-	if err != nil {
+	missingSeason := errors.Is(err, pgx.ErrNoRows)
+	if err != nil && !missingSeason {
 		h.System.InternalError(w, r)
 		return
 	}
@@ -445,7 +449,7 @@ func (h Members) renderDetail(w http.ResponseWriter, r *http.Request, id uuid.UU
 	meta.CurrentPath = r.URL.Path
 	returnURL := memberCollectionReturn(r)
 	meta.Breadcrumbs = []components.NavigationItem{{Label: "Membros", Path: returnURL}}
-	page := pages.MemberDetailPage{Meta: meta, Member: pages.MemberDetail{ID: member.ID.String(), Name: member.Name, Email: stringValue(member.Email), LoginID: stringValue(member.MinorLoginID), Guardian: stringValue(member.GuardianName), Dependent: member.IsDependent, Active: member.IsActive}, Season: season.Name, ReturnURL: returnURL, Errors: fieldErrors}
+	page := pages.MemberDetailPage{Meta: meta, Member: pages.MemberDetail{ID: member.ID.String(), Name: member.Name, Email: stringValue(member.Email), LoginID: stringValue(member.MinorLoginID), Guardian: stringValue(member.GuardianName), Dependent: member.IsDependent, Active: member.IsActive}, Season: season.Name, ReturnURL: returnURL, Errors: fieldErrors, SeasonMissing: missingSeason, SeasonSetupURL: memberSeasonSetupURL(id, returnURL)}
 	if h.Sessions != nil {
 		page.Success = h.Sessions.PopString(r.Context(), "member_detail_flash")
 	}
@@ -455,20 +459,9 @@ func (h Members) renderDetail(w http.ResponseWriter, r *http.Request, id uuid.UU
 	h.renderDetailPage(w, r, status, page)
 }
 
+// Missing setup remains an explicit administrator task; reads never create it.
 func (h Members) currentSeason(ctx context.Context) (dbgen.Season, error) {
-	season, err := h.Store.GetCurrentSeason(ctx)
-	if err == nil {
-		return season, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return dbgen.Season{}, err
-	}
-	year := h.today().Year()
-	season, err = h.Store.CreateSeason(ctx, dbgen.CreateSeasonParams{Code: fmt.Sprintf("%d", year), Name: fmt.Sprintf("Época %d", year), StartsOn: pgtype.Date{Time: time.Date(year, 1, 1, 0, 0, 0, 0, h.location()), Valid: true}, EndsOn: pgtype.Date{Time: time.Date(year, 12, 31, 0, 0, 0, 0, h.location()), Valid: true}, IsCurrent: true})
-	if isUniqueViolation(err) {
-		return h.Store.GetCurrentSeason(ctx)
-	}
-	return season, err
+	return h.Store.GetCurrentSeason(ctx)
 }
 func (h Members) memberID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
@@ -550,4 +543,21 @@ func stringValue(value *string) string {
 func stringPtr(value string) *string { return &value }
 func minorLoginID(id uuid.UUID) string {
 	return "CFC-" + strings.ToUpper(strings.ReplaceAll(id.String()[:8], "-", ""))
+}
+
+func memberSeasonSetupURL(id uuid.UUID, collection string) string {
+	u, err := url.Parse(collection)
+	if err != nil {
+		return seasonSetupURL(SeasonReturnContext{Kind: "member", ID: id.String()})
+	}
+	q := u.Query()
+	query := q.Get("q")
+	if len([]rune(query)) > 100 {
+		query = ""
+	}
+	page := q.Get("page")
+	if n, err := strconv.Atoi(page); err != nil || n < 1 || n > 99 {
+		page = ""
+	}
+	return seasonSetupURL(SeasonReturnContext{Kind: "member", ID: id.String(), Page: page, Query: query})
 }

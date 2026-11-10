@@ -98,6 +98,12 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /equipa/escaloes", auth.RequireAuthenticated(http.HandlerFunc(members.Definitions.Post)))
 	mux.Handle("POST /equipa/classificacao/{id}", auth.RequireAuthenticated(http.HandlerFunc(members.Classification.Post)))
 	mux.Handle("POST /equipa/classificacao/{id}/selecoes", auth.RequireAuthenticated(http.HandlerFunc(members.Classification.ReplaceSelections)))
+	// Seasons also support membership/classification when training planning is disabled.
+	mux.Handle("GET /admin/epocas", auth.RequireAdmin(http.HandlerFunc(members.Seasons.Index)))
+	mux.Handle("GET /admin/epocas/criar", auth.RequireAdmin(http.HandlerFunc(members.Seasons.CreatePage)))
+	mux.Handle("POST /admin/epocas/criar", auth.RequireAdmin(http.HandlerFunc(members.Seasons.Create)))
+	mux.Handle("GET /admin/epocas/{id}/selecionar", auth.RequireAdmin(http.HandlerFunc(members.Seasons.Selection)))
+	mux.Handle("POST /admin/epocas/{id}/selecionar", auth.RequireAdmin(http.HandlerFunc(members.Seasons.Select)))
 	mux.Handle("GET /admin/membros", auth.RequireAdmin(http.HandlerFunc(members.Index)))
 	mux.Handle("POST /admin/membros", auth.RequireAdmin(http.HandlerFunc(members.Create)))
 	mux.Handle("GET /admin/membros/criar", auth.RequireAdmin(http.HandlerFunc(members.CreatePage)))

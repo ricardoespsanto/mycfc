@@ -50,6 +50,7 @@ type Querier interface {
 	// the runtime web role has no SELECT privilege on those relations.
 	ClaimTokenEmailOutbox(ctx context.Context, arg ClaimTokenEmailOutboxParams) (ClaimTokenEmailOutboxRow, error)
 	ClearManageableTrainingCycleTargets(ctx context.Context, arg ClearManageableTrainingCycleTargetsParams) error
+	ClearManagedCurrentSeason(ctx context.Context, actorID uuid.UUID) error
 	ClearMemberProfilePhoto(ctx context.Context, userID uuid.UUID) (pgtype.Timestamptz, error)
 	ClearTrainingCycleChildren(ctx context.Context, cycleID uuid.UUID) error
 	ClearTrainingCycleWeeks(ctx context.Context, cycleID uuid.UUID) error
@@ -82,6 +83,7 @@ type Querier interface {
 	CreateGymBlockPrescription(ctx context.Context, arg CreateGymBlockPrescriptionParams) (int64, error)
 	CreateGymExercise(ctx context.Context, arg CreateGymExerciseParams) (uuid.UUID, error)
 	CreateMaintenanceTask(ctx context.Context, arg CreateMaintenanceTaskParams) (MaintenanceTask, error)
+	CreateManagedSeason(ctx context.Context, arg CreateManagedSeasonParams) (Season, error)
 	CreateMemberProfileAudit(ctx context.Context, arg CreateMemberProfileAuditParams) (uuid.UUID, error)
 	CreateNews(ctx context.Context, arg CreateNewsParams) (NewsItem, error)
 	CreatePasswordReset(ctx context.Context, arg CreatePasswordResetParams) (uuid.UUID, error)
@@ -227,6 +229,7 @@ type Querier interface {
 	ListGuardianAuthorityInvitations(ctx context.Context, arg ListGuardianAuthorityInvitationsParams) ([]ListGuardianAuthorityInvitationsRow, error)
 	ListGuardianRelationshipsForGuardian(ctx context.Context, arg ListGuardianRelationshipsForGuardianParams) ([]ListGuardianRelationshipsForGuardianRow, error)
 	ListLatestTrainingPrescriptionHashesForPlan(ctx context.Context, planID uuid.UUID) ([]ListLatestTrainingPrescriptionHashesForPlanRow, error)
+	ListManagedSeasons(ctx context.Context, arg ListManagedSeasonsParams) ([]Season, error)
 	ListManagedStructuredCompetitionEvents(ctx context.Context, arg ListManagedStructuredCompetitionEventsParams) ([]ListManagedStructuredCompetitionEventsRow, error)
 	ListManagedTrainingCycleTargets(ctx context.Context, arg ListManagedTrainingCycleTargetsParams) ([]ListManagedTrainingCycleTargetsRow, error)
 	ListManagedTrainingCycleWeeks(ctx context.Context, arg ListManagedTrainingCycleWeeksParams) ([]ListManagedTrainingCycleWeeksRow, error)
@@ -284,6 +287,7 @@ type Querier interface {
 	LockStructuredPublicationMemberships(ctx context.Context, membershipIds []uuid.UUID) ([]uuid.UUID, error)
 	LockStructuredTrainingPlanForPublication(ctx context.Context, planID uuid.UUID) (LockStructuredTrainingPlanForPublicationRow, error)
 	LockTrainingCycles(ctx context.Context, cycleIds []uuid.UUID) ([]TrainingCycle, error)
+	ManagedSeasonCurrentExists(ctx context.Context, actorID uuid.UUID) (bool, error)
 	MarkAnnouncementRead(ctx context.Context, arg MarkAnnouncementReadParams) error
 	MarkMediaUploadCleanup(ctx context.Context, arg MarkMediaUploadCleanupParams) error
 	MarkSyncedActivityDeleted(ctx context.Context, arg MarkSyncedActivityDeletedParams) (SyncedActivity, error)
@@ -317,7 +321,12 @@ type Querier interface {
 	SaveEventResponse(ctx context.Context, arg SaveEventResponseParams) error
 	SaveTrainingSessionOutcome(ctx context.Context, arg SaveTrainingSessionOutcomeParams) (int64, error)
 	ScheduleMaintenanceTask(ctx context.Context, arg ScheduleMaintenanceTaskParams) (ScheduleMaintenanceTaskRow, error)
+	SeasonAdminAllowed(ctx context.Context, pActorID uuid.UUID) (bool, error)
+	SeasonReturnMemberAllowed(ctx context.Context, arg SeasonReturnMemberAllowedParams) (bool, error)
+	SeasonSelectionRows(ctx context.Context, arg SeasonSelectionRowsParams) ([]SeasonSelectionRowsRow, error)
+	SeasonSetupStatus(ctx context.Context, actorID uuid.UUID) (SeasonSetupStatusRow, error)
 	SetGuardianAuthorityPolicyEnabled(ctx context.Context, arg SetGuardianAuthorityPolicyEnabledParams) (GuardianAuthorityPolicy, error)
+	SetManagedCurrentSeason(ctx context.Context, arg SetManagedCurrentSeasonParams) (int64, error)
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
 	SubmitGuardianAuthorityRenewal(ctx context.Context, arg SubmitGuardianAuthorityRenewalParams) (string, error)
 	TouchTaskTrainingGroup(ctx context.Context, groupID uuid.UUID) error
