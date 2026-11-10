@@ -91,9 +91,39 @@ Historical preservation exercises and legacy upgrade compatibility are outside
 the owner's delivery scope; authentication, privacy and enforced protections
 remain. See [owner decisions](planning/391-owner-decisions.md).
 
-## Remaining acceptance
+## Owner acceptance and follow-up coverage
 
-Coach-observed usability, actual screen-reader use and a naturally observed
-midnight return are **untested**, not passed. An owner decision about explicitly
-excluding these checks is pending. Merge, deployment and live operations remain
-separate release decisions.
+**Decision recorded 10 November 2026:** Ricardo, the product owner, replied
+“Agree” via Telegram and accepted the locally implemented #391 increment and
+its missing **human coach-observation** and **screen-reader testing** evidence.
+The accepted implementation candidate is
+`50c1f5a8624231bc71310e6a8cb72f8c4c5dcd23` on `feat/391-coach-planning`, with the
+197-file automated runtime and binary identities recorded above. The passing
+automated evidence is unchanged.
+
+Rationale: deliver the already verified useful increment without indefinite
+acceptance delay. Mitigation: retain the **NOT RUN** labels and track both as
+follow-up coverage. This is an accepted coverage gap, not a test pass.
+
+| Follow-up coverage | Actual status | Disposition |
+| --- | --- | --- |
+| Human coach-observed usability | **NOT RUN** | Accepted by Ricardo for this increment; follow-up remains open |
+| Actual screen-reader testing | **NOT RUN** | Accepted by Ricardo for this increment; follow-up remains open |
+
+This resolves the pending question for those two checks; do not request their
+acceptance again.
+
+## Natural midnight return: separate, not waived
+
+Ricardo explicitly did **not** waive this check. Its setup attempts have not yet reached the boundary: one exposed a test
+navigation race, and another incorrectly treated the expected future scheduled
+return as current membership. Both failures were retained; the harness now
+distinguishes scheduled and effective roster states. A fresh owned fixture is being prepared to
+observe the actual **11 November 2026, 00:00 Europe/Lisbon (00:00 UTC)** boundary
+with the same unrestarted application. The result is **PENDING**, not PASS.
+Current-day withdrawal and future session-date return evidence above remain
+separate from this natural-clock check. The live state and eventual result are
+tracked independently; no missing clock evidence is implied accepted.
+
+Acceptance of the two follow-up gaps does not authorize GitHub publication,
+merge, production deployment, database reset or unrelated live operations.

@@ -106,8 +106,8 @@ see `../dated-training-placements-verification.md`. This does not establish full
 affected read/publication integration are feature requirements, not conversion
 of existing records. Craft guidance and both automated real-plan replays are now
 verified in `../coach-planning-acceptance.md`; coach-observed usability, actual
-screen-reader use and natural midnight return remain untested. The pending owner
-question asks whether to complete or explicitly exclude those checks.
+screen-reader use remain NOT RUN, accepted as follow-up coverage by Ricardo below.
+Natural midnight return remains a separate required check and was not waived.
 Temporary placements return to the previous group; exact season dates remain
 unknown and configurable. No destructive database operation is needed or
 authorized for this local increment. GitHub and release actions remain separate.
@@ -131,3 +131,25 @@ guidance differs. Both plans may replay in the synthetic week 16–22 November
 the evidence. Synthetic season dates are test configuration, not approved club
 boundaries. Actual season dates remain unknown and configurable. Temporary
 placements return to the exact previous group when they end.
+
+## Local increment accepted; two evidence gaps become follow-up coverage
+
+On 10 November 2026 Ricardo replied **“Agree”** via Telegram to accepting the
+locally implemented #391 increment with **human coach observation** and
+**screen-reader testing** missing. Both remain **NOT RUN**, with follow-up
+coverage tracked in `../coach-planning-acceptance.md`.
+
+- Decision owner: Ricardo.
+- Accepted implementation candidate: `50c1f5a8624231bc71310e6a8cb72f8c4c5dcd23`;
+  the automated 197-file runtime, four passing cases and exact binary identity
+  remain recorded in the acceptance record.
+- Rationale: deliver the already verified useful increment without indefinite
+  acceptance delay.
+- Mitigation: retain NOT RUN labels and track both follow-ups; do not relabel
+  either as PASS or request this acceptance again.
+
+**Natural midnight return was not waived.** Report its actual process state and
+result separately. This decision supplies no authority for new GitHub
+publication, merge, production deployment, database reset or unrelated live
+operations. Other confirmed decisions, including exact previous-group return
+and configurable unknown season dates, remain in force.

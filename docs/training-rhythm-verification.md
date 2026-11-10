@@ -1,7 +1,8 @@
 # Shared kayak/canoe guidance — local verification
 
 Status: implemented locally; the complete automated two-plan browser replay passes.
-Human coach/screen-reader/natural-clock acceptance remains untested.
+Human coach/screen-reader checks remain NOT RUN, accepted as follow-up coverage by Ricardo.
+Natural midnight return remains separate and unwaived; see the acceptance record.
 No GitHub publication, merge, deployment or live database action is established.
 
 ## Delivered behavior
