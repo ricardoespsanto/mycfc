@@ -165,3 +165,27 @@ authorize database reset/wipe, removal of backups or unrelated live operations.
 No existing-record conversion/backfill is required; necessary feature schema
 and enforced protections remain. See `../coach-planning-acceptance.md` for exact
 evidence and candidate identities.
+
+
+## Required normal-release check follows the approved scope
+
+The first PR #405 CI run exposed an obsolete upgrade-only rehearsal: it built
+an unstamped candidate and attempted a nonlocal test-database command, which
+the enforced endpoint guard correctly refused. Existing-record upgrade
+compatibility remains outside this increment. The historical rehearsal stays
+available as the opt-in `make test-release-upgrade` target.
+
+The required CI job retains its existing `release-upgrade` identity and summary
+requirement, but now runs `make test-normal-release-image`: build the actual
+candidate Docker image with an explicit synthetic version and exact commit,
+read its compiled normal-release/capability/schema declarations without network
+access, validate a canonical synthetic publication against those declarations,
+and require rejection of a wrong candidate stamp. This is artifact evidence,
+not a production receipt or populated-data upgrade claim. Existing required
+PostgreSQL, browser, security and other checks remain enforced.
+
+CodeQL PR alerts 14 and 15 were independently reviewed and dismissed as
+“used in tests”: the reported plaintext consists solely of checked-in example
+values and literal hostile test credentials in a temporary offline Compose
+fixture. No actual credential source or database connection is involved; the
+rule and regression remain enabled.

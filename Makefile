@@ -16,7 +16,7 @@ TFLINT_IMAGE := ghcr.io/terraform-linters/tflint:v0.64.0@sha256:1c595f42d794c32c
 TERRAFORM_PLUGIN_CACHE_DIR ?= $(CURDIR)/.cache/terraform/plugin-cache
 INTEGRATION_TEST_FLAGS ?= -count=1
 
-.PHONY: help tools ci-generate-tools ci-lint-tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker test-ci-classifier test-e2e-worker-harness test-release-tooling test-release-upgrade release approval-packet dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci test-e2e-workers terraform-fmt terraform-validate terraform-test terraform-lint terraform-check verify verify-foundation reset-local fmt-check
+.PHONY: help tools ci-generate-tools ci-lint-tools lint-tools lint lint-go lint-ui lint-shell lint-workflows lint-docker test-ci-classifier test-e2e-worker-harness test-release-tooling test-normal-release-image test-release-upgrade release approval-packet dev-infra dev-infra-down dev-infra-clean generate generate-fast db-provision db-provision-test dev-bootstrap dev ui-review-reset ui-review-dev ui-review-screenshots test test-coverage test-deployment test-integration test-e2e test-e2e-ci test-e2e-workers terraform-fmt terraform-validate terraform-test terraform-lint terraform-check verify verify-foundation reset-local fmt-check
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*## "; printf "Usage: make <target>\n\n"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -82,6 +82,7 @@ test-e2e-worker-harness: ## Test worker-trial validation and evidence parsing
 
 test-release-tooling: ## Test release manifests, CloudWatch verification, resumability, and approval packets
 	sh scripts/release-evidence_test.sh
+	sh scripts/normal-release-image_test.sh
 	sh scripts/verify-release-evidence_test.sh
 	sh scripts/release_test.sh
 	sh scripts/approval-packet_test.sh
@@ -95,6 +96,9 @@ test-release-tooling: ## Test release manifests, CloudWatch verification, resuma
 	python3 scripts/terraform-structured-diagnostic_test.py
 	bash scripts/terraform-stack_test.sh
 	bash scripts/discover-terraform-inputs_test.sh
+
+test-normal-release-image: ## Verify the stamped production image and normal release declarations
+	sh scripts/normal-release-image-test.sh
 
 test-release-upgrade: ## Exercise the predecessor-to-candidate production database release sequence
 	sh scripts/release-upgrade-test.sh "$${PREDECESSOR_REF:-origin/main}"

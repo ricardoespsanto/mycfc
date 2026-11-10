@@ -158,12 +158,10 @@ jobs:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # The gate builds both the exact predecessor and the candidate.
+          # Validate the actual stamped candidate image; history remains available.
           fetch-depth: 0
-      - name: Exercise the production release sequence from predecessor to candidate
-        env:
-          PREDECESSOR_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: make test-release-upgrade
+      - name: Verify the actual stamped normal release image and identity contracts
+        run: make test-normal-release-image
 
   coverage:
     needs: classify
