@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -256,6 +257,45 @@ func testIndependentRecipientInspectionRefusals(t *testing.T, root, low *pgx.Con
 			t.Fatalf("inspector accepted a backend from another database: %v", err)
 		}
 	})
+	t.Run("mutation refuses unavailable role configuration", func(t *testing.T) {
+		t.Setenv("APP_DB_USER", "")
+		old := loadDatabaseCommandConfig
+		t.Cleanup(func() { loadDatabaseCommandConfig = old })
+		loadDatabaseCommandConfig = func(context.Context) (config.Config, error) {
+			return config.Config{}, errors.New("fixture configuration unavailable")
+		}
+		original, err := pgx.ConnectConfig(t.Context(), low.Config())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer original.Close(t.Context())
+		err = withRecipientPolicySession(t.Context(), original, func(ctx context.Context) error {
+			return requireRecipientMutationAdmission(ctx, original)
+		})
+		if !original.IsClosed() {
+			t.Fatal("a rejected mutation left its policy session available for reuse")
+		}
+		if err == nil || !strings.Contains(err.Error(), "role configuration unavailable") {
+			t.Fatalf("mutation accepted missing role configuration: %v", err)
+		}
+	})
+	t.Run("mutation refuses invalid migration identity", func(t *testing.T) {
+		t.Setenv("MIGRATION_DB_USER", "nonexistent_fixture_role")
+		original, err := pgx.ConnectConfig(t.Context(), low.Config())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer original.Close(t.Context())
+		err = withRecipientPolicySession(t.Context(), original, func(ctx context.Context) error {
+			return requireRecipientMutationAdmission(ctx, original)
+		})
+		if !original.IsClosed() {
+			t.Fatal("a rejected mutation left its policy session available for reuse")
+		}
+		if err == nil || !strings.Contains(err.Error(), "independent migration connection rejected") {
+			t.Fatalf("mutation continued without an authenticated inspector: %v", err)
+		}
+	})
 }
 
 func testLocalAuthoringRejectsMissingActivationWitness(t *testing.T, root, low *pgx.Conn, state db.TrainingScheduleState) {
@@ -296,5 +336,129 @@ func testLocalAuthoringRejectsMissingActivationWitness(t *testing.T, root, low *
 				t.Fatal("rejected witness changed publisher LOGIN", err)
 			}
 		})
+	}
+}
+
+// Close the real fixture connection before its COMMIT is sent. A caller
+// must still treat the failed acknowledgement as unknown and inspect state.
+type localCommitDisconnect struct{ interrupted bool }
+
+func (f *localCommitDisconnect) TraceQueryStart(ctx context.Context, conn *pgx.Conn, query pgx.TraceQueryStartData) context.Context {
+	if strings.EqualFold(query.SQL, "commit") && !f.interrupted {
+		f.interrupted = true
+		_ = conn.Close(ctx)
+	}
+	return ctx
+}
+
+func (*localCommitDisconnect) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func testLocalRecipientTransactionDisconnect(t *testing.T, root, low *pgx.Conn, state db.TrainingScheduleState) {
+	t.Helper()
+	ctx := t.Context()
+	roles := db.RoleCredentials{AppUsername: startupPublisher, MigrationUsername: low.Config().User}
+	inspected, err := inspectRecipientConnection(ctx, low, low.Config().Database, roles, db.RecipientInspectFinal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	floor := recipientFloorInput{Incarnation: state.DatabaseIncarnation, Commit: uuid.New(), Epoch: state.StateEpoch, Manifest: strings.Repeat("d", 64), Reader: state.RequiredReader}
+	for _, tc := range []struct {
+		name     string
+		original *pgx.Conn
+		mutate   func(context.Context, *pgx.Conn) error
+	}{
+		{"publisher", root, func(ctx context.Context, conn *pgx.Conn) error {
+			got, err := setRecipientPublisherLogin(ctx, conn, startupPublisher, inspected.Publisher.OID, false)
+			if got.OID != 0 {
+				t.Error("unconfirmed publisher change returned an acknowledgement")
+			}
+			return err
+		}},
+		{"floor", low, func(ctx context.Context, conn *pgx.Conn) error {
+			got, err := commitRecipientFloor(ctx, conn, inspected, floor)
+			if got.FloorCommitID != nil {
+				t.Error("unconfirmed floor change returned an acknowledgement")
+			}
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.original.Config().Copy()
+			closed, err := pgx.ConnectConfig(t.Context(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := closed.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.mutate(t.Context(), closed); err == nil {
+				t.Fatal("a closed session acknowledged a transaction")
+			}
+			fault := &localCommitDisconnect{}
+			cfg.Tracer = fault
+			connected, err := pgx.ConnectConfig(t.Context(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer connected.Close(t.Context())
+			err = withRecipientPolicySession(t.Context(), connected, func(ctx context.Context) error {
+				return tc.mutate(ctx, connected)
+			})
+			if !fault.interrupted || err == nil || !strings.Contains(err.Error(), "commit not acknowledged; inspect current state before retry") {
+				t.Fatalf("commit interruption did not require inspection: %v", err)
+			}
+		})
+	}
+	after, err := db.TrainingScheduleStatus(ctx, low)
+	if err != nil || after.StateEpoch != state.StateEpoch || after.FloorCommitID == nil || *after.FloorCommitID != *state.FloorCommitID {
+		t.Fatal("interrupted transaction changed the fixture floor", err)
+	}
+	publisher, err := db.InspectTrainingRecipientPublisher(ctx, root, startupPublisher)
+	if err != nil || publisher.OID != inspected.Publisher.OID || !publisher.CanLogin {
+		t.Fatal("interrupted transaction changed the fixture publisher", err)
+	}
+}
+
+func testLocalTerminalJournalWithoutFloorIntent(t *testing.T, root, low *pgx.Conn, state db.TrainingScheduleState) {
+	t.Helper()
+	ctx := t.Context()
+	binding, err := localManifestBinding(ctx, root, db.RoleCredentials{AppUsername: startupPublisher, MigrationUsername: low.Config().User})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := openLocalRecipientManifest(binding, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := record.Value
+	record.Close()
+	writeRecord := func(value localRecipientManifest) {
+		t.Helper()
+		file, err := openLocalRecipientManifest(binding, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		file.Value = value
+		if err := file.Save(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { writeRecord(original) })
+	withoutIntent := original
+	withoutIntent.Intent = nil
+	withoutIntent.Phase = "floor_committed"
+	writeRecord(withoutIntent)
+	if err := runServerCommand(ctx, []string{"prepare-local-recipient-floor"}); err == nil || !strings.Contains(err.Error(), "requires recorded intent inspection") {
+		t.Fatalf("unfinished journal resumed without its floor intent: %v", err)
+	}
+	withoutIntent.Phase = "restored"
+	writeRecord(withoutIntent)
+	if err := runServerCommand(ctx, []string{"prepare-local-recipient-floor"}); err != nil {
+		t.Fatal("terminal journal could not report its unchanged acknowledged state", err)
+	}
+	after, err := db.TrainingScheduleStatus(ctx, low)
+	if err != nil || after.StateEpoch != state.StateEpoch || after.FloorCommitID == nil || *after.FloorCommitID != *state.FloorCommitID {
+		t.Fatal("reporting the terminal journal changed its floor", err)
 	}
 }

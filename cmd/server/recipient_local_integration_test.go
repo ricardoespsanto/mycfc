@@ -90,6 +90,12 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	t.Run("authoring requires its exact activation witness", func(t *testing.T) {
 		testLocalAuthoringRejectsMissingActivationWitness(t, root, low, state)
 	})
+	t.Run("transaction disconnects require state inspection", func(t *testing.T) {
+		testLocalRecipientTransactionDisconnect(t, root, low, state)
+	})
+	t.Run("only terminal journal may report state without floor intent", func(t *testing.T) {
+		testLocalTerminalJournalWithoutFloorIntent(t, root, low, state)
+	})
 	original := state
 	if err = runServerCommand(t.Context(), []string{"prepare-local-recipient-floor"}); err != nil {
 		t.Fatal("idempotent local floor", err)

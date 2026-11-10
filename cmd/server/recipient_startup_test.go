@@ -227,3 +227,10 @@ func TestRecipientInspectionRejectsFabricatedSession(t *testing.T) {
 		t.Fatalf("expected physical session rejection, got %v", err)
 	}
 }
+
+func TestDatabaseCommandConnectionRefusesMalformedPort(t *testing.T) {
+	conn, err := connectDatabaseCommand(t.Context(), "postgres://fixture:synthetic@127.0.0.1:invalid/mycfc_test")
+	if err == nil || conn != nil {
+		t.Fatalf("malformed port produced a database connection: %v", err)
+	}
+}
