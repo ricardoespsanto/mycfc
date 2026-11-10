@@ -59,7 +59,7 @@ func prepareLocalRecipientFloor(ctx context.Context) error {
 		if m.Phase != "restored" && m.Phase != "bootstrapped" {
 			return errors.New("local floor state requires recorded intent inspection")
 		}
-		return emitLocalRecipientFloor(s)
+		return completeLocalAuthoringPreparation(op, migration, bootstrap, target, record, s)
 	}
 	if m.Intent == nil {
 		m.Intent = &localRecipientFloorIntent{Incarnation: s.DatabaseIncarnation.String(), ExpectedEpoch: s.StateEpoch, Commit: uuid.NewString(), MinimumReader: 3}
@@ -92,10 +92,14 @@ func prepareLocalRecipientFloor(ctx context.Context) error {
 		return errors.New("local floor intent binding changed")
 	}
 	floorMatches := func(state db.TrainingScheduleState) bool {
-		return state.DatabaseIncarnation == id && state.StateEpoch == intent.ExpectedEpoch+1 && state.RequiredReader == 3 && state.FloorCommitID != nil && *state.FloorCommitID == commit && state.FloorManifestSHA256 != nil && *state.FloorManifestSHA256 == intent.ManifestSHA256
+		epochMatches := state.StateEpoch == intent.ExpectedEpoch+1
+		if m.AuthoringExpectedEpoch != nil && *m.AuthoringExpectedEpoch == intent.ExpectedEpoch+1 && state.PartialV2Enabled && state.StateEpoch == *m.AuthoringExpectedEpoch+1 {
+			epochMatches = true
+		}
+		return state.DatabaseIncarnation == id && epochMatches && state.RequiredReader == 3 && state.FloorCommitID != nil && *state.FloorCommitID == commit && state.FloorManifestSHA256 != nil && *state.FloorManifestSHA256 == intent.ManifestSHA256
 	}
 	if m.Phase == "restored" && floorMatches(s) && inspected.Publisher.CanLogin == *m.OriginalLogin {
-		return emitLocalRecipientFloor(s)
+		return completeLocalAuthoringPreparation(op, migration, bootstrap, target, record, s)
 	}
 	if !floorMatches(s) && s.StateEpoch != intent.ExpectedEpoch {
 		return errors.New("local floor state changed; inspect recorded intent without replaying old epoch")
@@ -138,29 +142,9 @@ func prepareLocalRecipientFloor(ctx context.Context) error {
 	if err = record.Save(); err != nil {
 		return err
 	}
-	err = withRecipientPolicySession(op, bootstrap, func(owned context.Context) error {
-		current, err := inspectRecipientFromOriginal(owned, bootstrap, target.Database, target.Roles, db.RecipientInspectFinal)
-		if err != nil {
-			return err
-		}
-		if current.ScheduleState == nil || !floorMatches(*current.ScheduleState) || current.Publisher.OID != *m.PublisherOID {
-			return errors.New("local floor restore binding changed")
-		}
-		if err := requireNoLocalPublisherWork(owned, bootstrap, m.PublisherRole, *m.PublisherOID); err != nil {
-			return err
-		}
-		_, err = setRecipientPublisherLogin(owned, bootstrap, m.PublisherRole, *m.PublisherOID, *m.OriginalLogin)
-		if err != nil {
-			return err
-		}
-		m.Phase = "restored"
-		return record.Save()
-	})
-	if err != nil {
-		return err
-	}
-	return emitLocalRecipientFloor(s)
+	return completeLocalAuthoringPreparation(op, migration, bootstrap, target, record, s)
 }
+
 func requireNoLocalPublisherWork(ctx context.Context, c *pgx.Conn, role string, oid uint32) error {
 	var safe bool
 	err := c.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE oid OPERATOR(pg_catalog.=) $1::pg_catalog.oid AND rolname OPERATOR(pg_catalog.=) $2::pg_catalog.name) AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_stat_activity WHERE usesysid OPERATOR(pg_catalog.=) $1::pg_catalog.oid) AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_prepared_xacts WHERE owner OPERATOR(pg_catalog.=) $2::pg_catalog.name)`, oid, role).Scan(&safe)

@@ -139,6 +139,7 @@ func buildStructuredWeekWorkspace(audiences []pages.StructuredTrainingAudience, 
 	out.RefreshURL = base
 	out.GroupURL = groupContextDayURL(out.GroupURL, weekID, day)
 	out.AddSessionURL = structuredWorkspaceTask(base, "session", "criar-sessao-estruturada")
+	out.WaterCreateURL = focusedWaterCreateURL(weekID, day)
 	out.CreateWeekURL = structuredWorkspaceTask(base, "week", "criar-semana-treino")
 	out.PublicationURL = structuredWorkspaceAnchor(base, "training-publication")
 	out.AdvancedURL = structuredWorkspaceAnchor(base, "training-cycles")
@@ -157,7 +158,7 @@ func buildStructuredWeekWorkspace(audiences []pages.StructuredTrainingAudience, 
 		d := start.AddDate(0, 0, i)
 		date := d.Format("2006-01-02")
 		dayURL := structuredPlannerURL(groupID, weekID, "", date)
-		record := pages.StructuredWorkspaceDay{Date: date, Label: workspaceDateLabel(d), ShortLabel: d.Format("02/01"), URL: dayURL, AddSessionURL: structuredWorkspaceTask(dayURL, "session", "criar-sessao-estruturada"), Selected: date == day}
+		record := pages.StructuredWorkspaceDay{Date: date, Label: workspaceDateLabel(d), ShortLabel: d.Format("02/01"), URL: dayURL, AddSessionURL: structuredWorkspaceTask(dayURL, "session", "criar-sessao-estruturada"), Selected: date == day, WaterCreateURL: focusedWaterCreateURL(weekID, date)}
 		for _, session := range week.Sessions {
 			if session.StartsOn != date {
 				continue

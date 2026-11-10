@@ -19,7 +19,7 @@ type StructuredWorkspaceAppointment struct {
 	Selected                                                              bool
 }
 type StructuredWorkspaceDay struct {
-	Date, Label, ShortLabel, URL, AddSessionURL string
+	Date, Label, ShortLabel, URL, AddSessionURL, WaterCreateURL string
 	Selected                                    bool
 	Morning, Afternoon                          []StructuredWorkspaceAppointment
 	Unscheduled []StructuredWorkspaceAppointment
@@ -33,7 +33,7 @@ type StructuredWeekWorkspace struct {
 	Enabled, HasWeek                                                                                                 bool
 	GroupID, GroupName, Scope, CoachName, WeekID, WeekTitle, Season, StartsOn, EndsOn, DateRange, SelectedDay        string
 	MemberCount                                                                                                      int
-	GroupsURL, GroupURL, AddSessionURL, CreateWeekURL, PreviousURL, NextURL, PublicationURL, AdvancedURL, RefreshURL string
+	GroupsURL, GroupURL, AddSessionURL, WaterCreateURL, CreateWeekURL, PreviousURL, NextURL, PublicationURL, AdvancedURL, RefreshURL string
 	Weeks                                                                                                            []StructuredWorkspaceWeekChoice
 	Days                                                                                                             []StructuredWorkspaceDay
 	Publication                                                                                                      StructuredWorkspacePublication
@@ -123,6 +123,9 @@ templ structuredWeekWorkspace(page StructuredTrainingPage) {
 							href={ templ.SafeURL(day.AddSessionURL) }
 							aria-label={ "Adicionar sessão · " + day.Label + ", " + day.Date }
 						>Adicionar sessão</a>
+						if day.WaterCreateURL != "" {
+							<a class="action action--quiet week-day__add" href={ templ.SafeURL(day.WaterCreateURL) } aria-label={ "Treino de água · " + day.Label + ", " + day.Date }>Treino de água</a>
+						}
 					</section>
 				}
 			</div>
@@ -282,7 +285,11 @@ func structuredWorkspacePublicationLabel(p StructuredWorkspacePublication) strin
 }
 func structuredWorkspaceActions(w StructuredWeekWorkspace) []components.PageAction {
 	if w.HasWeek {
-		return []components.PageAction{{Label: "Adicionar sessão", Href: w.AddSessionURL, Variant: "primary"}}
+		actions := []components.PageAction{{Label: "Adicionar sessão", Href: w.AddSessionURL, Variant: "primary"}}
+		if w.WaterCreateURL != "" {
+			actions = append(actions, components.PageAction{Label: "Treino de água", Href: w.WaterCreateURL, Variant: "secondary"})
+		}
+		return actions
 	}
 	return []components.PageAction{{Label: "Criar semana", Href: w.CreateWeekURL, Variant: "primary"}}
 }

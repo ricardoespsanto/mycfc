@@ -184,7 +184,7 @@ func TestFreshReceiptAcceptsOnlyPinnedGenesisAcrossForwardMigration(t *testing.T
 	t.Cleanup(func() { releasecontract.Version, releasecontract.Candidate = oldVersion, oldCandidate })
 	var original []string
 	for _, version := range EmbeddedMigrationInventory() {
-		if version != "202610010003_privacy_attachment_trigger_runtime" && version != TrainingScheduleCompatibilityMigration && version != TrainingRecipientRevisionMigration {
+		if version != "202610010003_privacy_attachment_trigger_runtime" && version != TrainingScheduleCompatibilityMigration && version != TrainingRecipientRevisionMigration && version != TrainingPartialAuthoringMigration {
 			original = append(original, version)
 		}
 	}
@@ -250,7 +250,7 @@ func (freshScheduleStatusRow) Scan(dest ...any) error {
 		return errors.New("unexpected status scan")
 	}
 	*dest[0].(*uuid.UUID) = uuid.MustParse("00000000-0000-0000-0000-000000000001")
-	*dest[1].(*string) = TrainingScheduleContractC
+	*dest[1].(*string) = TrainingScheduleContractP
 	*dest[2].(*int64) = 0
 	*dest[3].(*int32) = 1
 	*dest[4].(**uuid.UUID) = nil

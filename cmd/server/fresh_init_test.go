@@ -159,6 +159,9 @@ func (*freshReadyVersions) Close()     {}
 func (*freshReadyVersions) Err() error { return nil }
 
 func (freshReceiptReadyConn) QueryRow(_ context.Context, statement string, _ ...any) pgx.Row {
+	if strings.Contains(statement, "FROM training_schedule_control.status()") {
+		return freshAuthoringStatusRow{}
+	}
 	if strings.Contains(statement, "string_agg(version") {
 		return freshLedgerRow{}
 	}
@@ -228,4 +231,15 @@ func TestFreshInitRejectsWrongStampedRuntimeIdentity(t *testing.T) {
 	if err := runServerCommand(t.Context(), []string{"fresh-init-db", "--confirm-empty"}); err == nil || !strings.Contains(err.Error(), "binary/runtime identity mismatch") {
 		t.Fatalf("wrong stamped release accepted: %v", err)
 	}
+}
+
+// Interface-only current fresh-schema fact; actual guards are exercised with PG.
+type freshAuthoringStatusRow struct{}
+
+func (freshAuthoringStatusRow) Scan(dest ...any) error {
+	if len(dest) != 8 {
+		return errors.New("unexpected status")
+	}
+	*dest[1].(*string) = db.TrainingScheduleContractP
+	return nil
 }

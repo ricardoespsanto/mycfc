@@ -309,20 +309,12 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 										<article class="nested-record training-card training-card--session" aria-labelledby={ "structured-session-" + session.ID } data-training-card data-default-open={ fmt.Sprintf("%t", sessionIndex == 0) }>
 											<div class="training-card__header">
 												<div>
-													<h5 id={ "structured-session-" + session.ID }>{ session.Title }</h5>
-													<p class="record-meta">
-														{ trainingScheduleLabel(session.Schedule, session.When) } · { structuredEntryKindLabel(session.EntryKind) }
-														if len(session.Modalities) > 0 {
-															<span>· { structuredModalitiesLabel(session.Modalities) }</span>
-														}
-													</p>
+													@structuredWorkoutInstructionHeader(session, false)
 												</div>
 												<button class="action action--quiet training-card__toggle" type="button" aria-expanded="true" aria-controls={ "session-content-" + session.ID } data-training-toggle><span data-training-toggle-label>Ocultar</span></button>
 											</div>
 											<div id={ "session-content-" + session.ID } class="training-card__body">
-												if session.Description != "" {
-													<p>{ session.Description }</p>
-												}
+												@structuredWorkoutInstructionDescription(session)
 												if session.WriteUnsupported {
 @components.Callout("Sessão disponível para consulta", trainingUnsupportedMessage(session.UnsupportedMessage), "info")
 <p><a href={ templ.SafeURL(structuredPlannerReturnURL(page)) }>Voltar à semana</a></p>
@@ -373,164 +365,7 @@ if len(session.Changes) > 0 {
 </div></details>
 													<p><a class="action action--quiet" href={ templ.SafeURL("/treinos/prescricoes/sessoes/" + session.ID) }>Ver prescrições e respostas dos atletas</a></p>
 												}
-												if !session.Schedule.Unavailable && len(session.Segments) == 0 && (session.EntryKind == "TRAINING" || session.EntryKind == "COMPETITION") {
-													<p class="record-meta">Sessão ainda sem segmentos.</p>
-												}
-												for _, segment := range session.Segments {
-													<section class="nested-record" aria-labelledby={ "segment-" + segment.ID }>
-														<h6 id={ "segment-" + segment.ID }>
-															{ structuredModalityLabel(segment.Modality) }
-															if segment.Title != "" {
-																<span>· { segment.Title }</span>
-															}
-														</h6>
-														if segment.Location != "" || segment.Duration != "" || segment.PlannedStart != "" || segment.Transition > 0 {
-															<p class="record-meta">
-																if segment.PlannedStart != "" {
-																	<span>Início previsto { segment.PlannedStart }</span>
-																}
-																if segment.Duration != "" {
-																	<span>· { segment.Duration }</span>
-																}
-																if segment.Transition > 0 {
-																	<span>· { fmt.Sprintf("%d min de transição", segment.Transition) }</span>
-																}
-																if segment.Location != "" {
-																	<span>· { segment.Location }</span>
-																}
-															</p>
-														}
-														if segment.EquipmentNotes != "" {
-															<p><strong>Material:</strong> { segment.EquipmentNotes }</p>
-														}
-														for _, block := range segment.Blocks {
-															<div class="nested-record">
-																<p>
-																	<strong>
-																		{ structuredPurposeLabel(block.Purpose) }
-																		if block.Title != "" {
-																			<span>· { block.Title }</span>
-																		}
-																	</strong>
-																</p>
-																<p class="preserve-lines">{ block.Instructions }</p>
-																if block.GymStructure != "" {
-																	<p class="record-meta">
-																		{ gymStructureLabel(block.GymStructure) } · { trainingObjectiveLabel(block.GymObjective) } · { fmt.Sprintf("%d voltas", block.GymRounds) }
-																		if block.GymRoundRecovery > 0 {
-																			<span>· { fmt.Sprintf("%d s de recuperação entre voltas", block.GymRoundRecovery) }</span>
-																		}
-																	</p>
-																	<ol class="record-list">
-																		for _, exercise := range block.Exercises {
-																			<li class="record-item record-item--stacked">
-																				<div class="record-item__copy">
-																					<strong>{ exercise.Name }</strong>
-																					<p>{ exercise.Prescription }</p>
-																					if exercise.Resistance != "" || exercise.Intent != "" || exercise.Tempo != "" {
-																						<p class="record-meta">
-																							{ exercise.Resistance }
-																							if exercise.Intent != "" {
-																								<span>· { gymExecutionIntentLabel(exercise.Intent) }</span>
-																							}
-																							if exercise.Tempo != "" {
-																								<span>· Tempo { exercise.Tempo }</span>
-																							}
-																						</p>
-																					}
-																					if exercise.Notes != "" {
-																						<p>{ exercise.Notes }</p>
-																					}
-																				</div>
-																				if page.Management && !session.WriteUnsupported {
-																					@structuredMoveExercise(page, exercise)
-																				}
-																			</li>
-																		}
-																	</ol>
-																	if page.Management && !session.WriteUnsupported {
-																		@structuredGymExerciseForm(page, block.ID)
-																	}
-																}
-																	if block.WaterMethod != "" {
-																		<p class="record-meta">
-																			{ block.WaterMethod }
-																			if block.WaterProfile != "" {
-																				<span>· { block.WaterProfile }</span>
-																			}
-																		if block.WaterTarget != "" {
-																			<span>· { block.WaterTarget }</span>
-																		}
-																		</p>
-																		if len(block.WaterTotals) > 0 {
-																			<dl class="training-totals" aria-label="Totais planeados do bloco">
-																				for _, total := range block.WaterTotals {
-																					<div><dt>{ total.Label }</dt><dd>{ total.Value } <span class="record-meta">{ total.Certainty }</span></dd></div>
-																				}
-																			</dl>
-																		}
-																	<ol class="record-list">
-																		for _, step := range block.WaterSteps {
-																			<li class="record-item record-item--stacked"><div class="record-item__copy">
-																				<strong>
-																					if step.ParentID != "" {
-																						<span>↳ </span>
-																					}
-																					{ step.Name }
-																				</strong>
-																				<p>
-																					{ step.Prescription }
-																					if step.Repeats > 0 {
-																						<span>{ fmt.Sprintf("%d repetições", step.Repeats) }</span>
-																					}
-																					if step.Recovery > 0 {
-																						<span> · { fmt.Sprintf("%d s de recuperação", step.Recovery) }</span>
-																					}
-																				</p>
-																				if step.Intensity != "" || step.Drill != "" {
-																					<p class="record-meta">
-																						{ step.Intensity }
-																						if step.Drill != "" {
-																							<span>· { step.Drill }</span>
-																						}
-																					</p>
-																				}
-																				if step.Instructions != "" {
-																					<p>{ step.Instructions }</p>
-																				}
-																			</div></li>
-																		}
-																	</ol>
-																	if page.Management && !session.WriteUnsupported {
-																		@structuredWaterStepForm(page, block)
-																	}
-																}
-																if page.Management && !session.WriteUnsupported {
-																	<details class="training-action-menu"><summary class="action action--quiet">Ações do bloco</summary><div class="training-actions">@structuredMoveBlock(page, block)
-@structuredSaveRoutineForm(page, "BLOCK", block.ID)
-@structuredCopyBlockForm(page, block.ID)
-</div></details>
-																}
-															</div>
-														}
-														if page.Management && !session.WriteUnsupported {
-															<details class="training-action-menu">
-																<summary class="action action--quiet">Ações do segmento</summary>
-																<div class="training-actions">
-																	@structuredMoveSegment(page, segment)
-																	@structuredSaveRoutineForm(page, "SEGMENT", segment.ID)
-											@structuredBlockForm(page, segment.ID)
-											if segment.Modality == "GYM" {
-												@structuredGymBlockTaskLink(page, session.ID, segment.ID)
-																	}
-																	if segment.Modality == "WATER" {
-																					@structuredWaterBlockForm(page, session.ID, segment)
-																	}
-																</div>
-															</details>
-														}
-													</section>
-												}
+												@structuredWorkoutInstructionActivities(page, session, false)
 												if page.Management && !session.WriteUnsupported && (session.EntryKind == "TRAINING" || session.EntryKind == "COMPETITION") {
 													<div class="training-actions">@structuredSegmentForm(page, session.ID)
 </div>
@@ -545,6 +380,209 @@ if len(session.Changes) > 0 {
 				</article>
 			}
 		</section>
+}
+
+// StructuredWorkoutInstructions is the canonical base instruction preview.
+// It deliberately supplies no management context and includes no athlete outcomes.
+templ StructuredWorkoutInstructions(session StructuredTrainingSession) {
+	<section aria-label="Instruções do treino">
+		@structuredWorkoutInstructionHeader(session, true)
+		@structuredWorkoutInstructionDescription(session)
+		@structuredWorkoutInstructionActivities(StructuredTrainingPage{}, session, true)
+	</section>
+}
+
+templ structuredWorkoutInstructionHeader(session StructuredTrainingSession, standalone bool) {
+	if standalone {
+		<h3 id={ "structured-session-" + session.ID }>{ session.Title }</h3>
+	} else {
+		<h5 id={ "structured-session-" + session.ID }>{ session.Title }</h5>
+	}
+	<p class="record-meta">
+		{ trainingScheduleLabel(session.Schedule, session.When) } · { structuredEntryKindLabel(session.EntryKind) }
+		if len(session.Modalities) > 0 {
+			<span>· { structuredModalitiesLabel(session.Modalities) }</span>
+		}
+	</p>
+}
+
+templ structuredWorkoutInstructionDescription(session StructuredTrainingSession) {
+	if session.Description != "" {
+		<p class="preserve-lines">{ session.Description }</p>
+	}
+}
+
+templ structuredWorkoutInstructionActivities(page StructuredTrainingPage, session StructuredTrainingSession, standalone bool) {
+	if !session.Schedule.Unavailable && len(session.Segments) == 0 && (session.EntryKind == "TRAINING" || session.EntryKind == "COMPETITION") {
+		<p class="record-meta">Sessão ainda sem segmentos.</p>
+	}
+	for _, segment := range session.Segments {
+		<section class="nested-record" aria-labelledby={ "segment-" + segment.ID }>
+			if standalone {
+				<h4 id={ "segment-" + segment.ID }>@structuredWorkoutInstructionActivityTitle(segment)</h4>
+			} else {
+				<h6 id={ "segment-" + segment.ID }>@structuredWorkoutInstructionActivityTitle(segment)</h6>
+			}
+			if segment.Location != "" || segment.Duration != "" || segment.PlannedStart != "" || segment.Transition > 0 {
+				<p class="record-meta">
+					if segment.PlannedStart != "" {
+						<span>Início previsto { segment.PlannedStart }</span>
+					}
+					if segment.Duration != "" {
+						<span>· { segment.Duration }</span>
+					}
+					if segment.Transition > 0 {
+						<span>· { fmt.Sprintf("%d min de transição", segment.Transition) }</span>
+					}
+					if segment.Location != "" {
+						<span>· { segment.Location }</span>
+					}
+				</p>
+			}
+			if segment.EquipmentNotes != "" {
+				<p><strong>Material:</strong> { segment.EquipmentNotes }</p>
+			}
+			for _, block := range segment.Blocks {
+				<div class="nested-record">
+					<p>
+						<strong>
+							{ structuredPurposeLabel(block.Purpose) }
+							if block.Title != "" {
+								<span>· { block.Title }</span>
+							}
+						</strong>
+					</p>
+					<p class="preserve-lines">{ block.Instructions }</p>
+					if block.GymStructure != "" {
+						<p class="record-meta">
+							{ gymStructureLabel(block.GymStructure) } · { trainingObjectiveLabel(block.GymObjective) } · { fmt.Sprintf("%d voltas", block.GymRounds) }
+							if block.GymRoundRecovery > 0 {
+								<span>· { fmt.Sprintf("%d s de recuperação entre voltas", block.GymRoundRecovery) }</span>
+							}
+						</p>
+						<ol class="record-list">
+							for _, exercise := range block.Exercises {
+								<li class="record-item record-item--stacked">
+									<div class="record-item__copy">
+										<strong>{ exercise.Name }</strong>
+										<p>{ exercise.Prescription }</p>
+										if exercise.Resistance != "" || exercise.Intent != "" || exercise.Tempo != "" {
+											<p class="record-meta">
+												{ exercise.Resistance }
+												if exercise.Intent != "" {
+													<span>· { gymExecutionIntentLabel(exercise.Intent) }</span>
+												}
+												if exercise.Tempo != "" {
+													<span>· Tempo { exercise.Tempo }</span>
+												}
+											</p>
+										}
+										if exercise.Notes != "" {
+											<p>{ exercise.Notes }</p>
+										}
+									</div>
+									if page.Management && !session.WriteUnsupported {
+										@structuredMoveExercise(page, exercise)
+									}
+								</li>
+							}
+						</ol>
+						if page.Management && !session.WriteUnsupported {
+							@structuredGymExerciseForm(page, block.ID)
+						}
+					}
+					if block.WaterMethod != "" {
+						<p class="record-meta">
+							{ block.WaterMethod }
+							if block.WaterProfile != "" {
+								<span>· { block.WaterProfile }</span>
+							}
+							if block.WaterTarget != "" {
+								<span>· { block.WaterTarget }</span>
+							}
+						</p>
+						if len(block.WaterTotals) > 0 {
+							<dl class="training-totals" aria-label="Totais planeados do bloco">
+								for _, total := range block.WaterTotals {
+									<div><dt>{ total.Label }</dt><dd>{ total.Value } <span class="record-meta">{ total.Certainty }</span></dd></div>
+								}
+							</dl>
+						}
+						<ol class="record-list">
+							for _, step := range block.WaterSteps {
+								<li class="record-item record-item--stacked">
+									<div class="record-item__copy">
+										<strong>
+											if step.ParentID != "" {
+												<span>↳ </span>
+											}
+											{ step.Name }
+										</strong>
+										<p>
+											{ step.Prescription }
+											if step.Repeats > 0 {
+												<span>{ fmt.Sprintf("%d repetições", step.Repeats) }</span>
+											}
+											if step.Recovery > 0 {
+												<span>· { fmt.Sprintf("%d s de recuperação", step.Recovery) }</span>
+											}
+										</p>
+										if step.Intensity != "" || step.Drill != "" {
+											<p class="record-meta">
+												{ step.Intensity }
+												if step.Drill != "" {
+													<span>· { step.Drill }</span>
+												}
+											</p>
+										}
+										if step.Instructions != "" {
+											<p>{ step.Instructions }</p>
+										}
+									</div>
+								</li>
+							}
+						</ol>
+						if page.Management && !session.WriteUnsupported {
+							@structuredWaterStepForm(page, block)
+						}
+					}
+					if page.Management && !session.WriteUnsupported {
+						<details class="training-action-menu">
+							<summary class="action action--quiet">Ações do bloco</summary>
+							<div class="training-actions">
+								@structuredMoveBlock(page, block)
+								@structuredSaveRoutineForm(page, "BLOCK", block.ID)
+								@structuredCopyBlockForm(page, block.ID)
+							</div>
+						</details>
+					}
+				</div>
+			}
+			if page.Management && !session.WriteUnsupported {
+				<details class="training-action-menu">
+					<summary class="action action--quiet">Ações do segmento</summary>
+					<div class="training-actions">
+						@structuredMoveSegment(page, segment)
+						@structuredSaveRoutineForm(page, "SEGMENT", segment.ID)
+						@structuredBlockForm(page, segment.ID)
+						if segment.Modality == "GYM" {
+							@structuredGymBlockTaskLink(page, session.ID, segment.ID)
+						}
+						if segment.Modality == "WATER" {
+							@structuredWaterBlockForm(page, session.ID, segment)
+						}
+					</div>
+				</details>
+			}
+		</section>
+	}
+}
+
+templ structuredWorkoutInstructionActivityTitle(segment StructuredTrainingSegment) {
+	{ structuredModalityLabel(segment.Modality) }
+	if segment.Title != "" {
+		<span>· { segment.Title }</span>
+	}
 }
 
 templ structuredTrainingAdvanced(page StructuredTrainingPage) {

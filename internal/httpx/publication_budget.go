@@ -17,7 +17,11 @@ const PublicationConfirmMaxBytes int64 = 16 << 10
 func PublicationIngressMiddleware(writeTimeout time.Duration) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if publicationPostPath(r) {
+			if publicationPostPath(r) || focusedWorkoutPostPath(r) {
+				limit := PublicationConfirmMaxBytes
+				if focusedWorkoutPostPath(r) {
+					limit = 1 << 20
+				}
 				started := time.Now()
 				business := min(20*time.Second, writeTimeout-10*time.Second)
 				if business <= 0 {
@@ -30,7 +34,7 @@ func PublicationIngressMiddleware(writeTimeout time.Duration) Middleware {
 				ctx, cancel := context.WithDeadline(ctx, started.Add(business))
 				defer cancel()
 				r = r.WithContext(ctx)
-				r.Body = http.MaxBytesReader(w, r.Body, PublicationConfirmMaxBytes)
+				r.Body = http.MaxBytesReader(w, r.Body, limit)
 			}
 			next.ServeHTTP(w, r)
 		})
@@ -63,4 +67,19 @@ func PublicationDeadline(ctx context.Context, writeTimeout time.Duration) (time.
 		deadline = parent
 	}
 	return deadline, time.Now().Before(deadline)
+}
+
+func focusedWorkoutPostPath(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	const prefix = "/admin/treinos/estruturados/semanas/"
+	if !strings.HasPrefix(r.URL.Path, prefix) {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")
+	if len(parts) != 4 || parts[0] == "" || parts[1] != "treinos" || parts[2] != "criar" {
+		return false
+	}
+	return parts[3] == "rascunho" || parts[3] == "prever" || parts[3] == "confirmar"
 }

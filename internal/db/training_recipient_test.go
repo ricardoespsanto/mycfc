@@ -18,12 +18,12 @@ func TestTrainingRecipientNormalPinsAndExplicitPhases(t *testing.T) {
 	if hex.EncodeToString(sum[:]) != releasecontract.NormalBaselineDigest {
 		t.Fatal("normal baseline pin mismatch")
 	}
-	for digest, want := range map[string]RecipientSchemaPhase{releasecontract.FreshGenesisDigest: RecipientReviewed77, releasecontract.NormalParentDigest: RecipientReviewed78, releasecontract.NormalRecipientParentDigest: RecipientReviewed79, releasecontract.NormalFinalDigest: RecipientFinal} {
+	for digest, want := range map[string]RecipientSchemaPhase{releasecontract.FreshGenesisDigest: RecipientReviewed77, releasecontract.NormalParentDigest: RecipientReviewed78, releasecontract.NormalRecipientParentDigest: RecipientReviewed79, releasecontract.NormalAuthoringParentDigest: RecipientReviewed80, releasecontract.NormalFinalDigest: RecipientFinal} {
 		versions, phase := trainingRecipientInventory(digest)
 		if phase != want || versions == nil {
 			t.Fatalf("reviewed inventory missing %s", want)
 		}
-		expected := map[RecipientSchemaPhase]int{RecipientReviewed77: 77, RecipientReviewed78: 78, RecipientReviewed79: 79, RecipientFinal: 80}[want]
+		expected := map[RecipientSchemaPhase]int{RecipientReviewed77: 77, RecipientReviewed78: 78, RecipientReviewed79: 79, RecipientReviewed80: 80, RecipientFinal: 81}[want]
 		if len(versions) != expected {
 			t.Fatalf("phase %s count=%d", want, len(versions))
 		}

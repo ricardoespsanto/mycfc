@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"github.com/a-h/templ"
 	"github.com/cfcoimbra/mycfc/internal/validation"
+	"html"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -266,5 +269,44 @@ func TestWeekAndSessionErrorsHaveUniqueAccessibleAssociations(t *testing.T) {
 		if !strings.Contains(body, expected) {
 			t.Errorf("missing accessible feedback %q", expected)
 		}
+	}
+}
+
+func TestWeekWorkspaceFocusedWaterEntryRetainsGenericPaths(t *testing.T) {
+	p := workspaceFixture()
+	p.Workspace.WaterCreateURL = "/admin/treinos/estruturados/semanas/week/treinos/criar?day=2026-11-09&context=week"
+	for i := range p.Workspace.Days {
+		p.Workspace.Days[i].WaterCreateURL = "/admin/treinos/estruturados/semanas/week/treinos/criar?day=" + p.Workspace.Days[i].Date
+	}
+	body := renderWorkspace(t, p)
+	for _, href := range append([]string{p.Workspace.WaterCreateURL, p.Workspace.AddSessionURL, p.Workspace.AdvancedURL}, p.Workspace.Days[0].AddSessionURL, p.Workspace.Days[6].WaterCreateURL) {
+		if !strings.Contains(body, `href="`+html.EscapeString(href)+`"`) {
+			t.Fatalf("lost scoped entry %s", href)
+		}
+	}
+	if strings.Count(body, ">Treino de água</a>") != 8 || strings.Count(body, ">Adicionar sessão</a>") != 8 || !strings.Contains(body, `aria-label="Treino de água · Dia 7, 2026-11-15"`) {
+		t.Fatal("header/day focused links must coexist with generic entries")
+	}
+	if dir := os.Getenv("WORKSPACE_COMPONENT_EVIDENCE"); dir != "" {
+		if !filepath.IsAbs(dir) || !strings.HasPrefix(filepath.Clean(dir), filepath.Clean(os.TempDir())+string(os.PathSeparator)) {
+			t.Fatal("evidence must use absolute temporary directory")
+		}
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		document := `<!doctype html><html lang="pt-PT"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Componente da semana</title><link rel="stylesheet" href="/assets/app.css"><script defer src="/assets/app.js"></script></head><body class="app-body"><main id="conteudo-principal" class="page-shell">` + body + `</main></body></html>`
+		if err := os.WriteFile(filepath.Join(dir, "week-links.html"), []byte(document), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.Workspace.WaterCreateURL = ""
+	p.Workspace.Days[0].WaterCreateURL = ""
+	body = renderWorkspace(t, p)
+	if strings.Count(body, ">Treino de água</a>") != 6 || strings.Count(body, ">Adicionar sessão</a>") != 8 {
+		t.Fatal("only empty focused URLs should hide focused entries")
+	}
+	p.Workspace.HasWeek = false
+	if body = renderWorkspace(t, p); strings.Contains(body, "Treino de água") || !strings.Contains(body, "Criar semana") {
+		t.Fatal("no week must retain explicit week creation")
 	}
 }

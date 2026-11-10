@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cfcoimbra/mycfc/internal/db"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -65,7 +66,7 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	}
 	defer low.Close(context.Background())
 	state, err := db.TrainingScheduleStatus(t.Context(), low)
-	if err != nil || state.RequiredReader != 3 || state.FloorCommitID == nil {
+	if err != nil || state.RequiredReader != 3 || state.FloorCommitID == nil || !state.PartialV2Enabled || state.SchemaContract != db.TrainingScheduleContractP {
 		t.Fatal("floor not acknowledged", err)
 	}
 	original := state
@@ -79,6 +80,63 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	var login bool
 	if err = low.QueryRow(t.Context(), `SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname='local_recipient_web'`).Scan(&login); err != nil || !login {
 		t.Fatal("original local LOGIN not restored", err)
+	}
+	// Model a process exit after the real enable committed but before its
+	// acknowledgement was durably recorded. Resume must reconcile that exact
+	// intent, not execute another enable or refresh its epoch.
+	binding, err := localManifestBinding(t.Context(), root, db.RoleCredentials{AppUsername: "local_recipient_web", MigrationUsername: "local_recipient_migration"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := openLocalRecipientManifest(binding, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Value.AuthoringExpectedEpoch == nil || record.Value.AuthoringPreparedEpoch == nil || *record.Value.AuthoringPreparedEpoch != state.StateEpoch {
+		t.Fatal("activation acknowledgement absent")
+	}
+	record.Value.AuthoringPreparedEpoch = nil
+	record.Value.Phase = "floor_committed"
+	if err = record.Save(); err != nil {
+		t.Fatal(err)
+	}
+	record.Close()
+	if _, err = root.Exec(t.Context(), `ALTER ROLE local_recipient_web NOLOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	if err = runServerCommand(t.Context(), []string{"prepare-local-recipient-floor"}); err != nil {
+		t.Fatal("recorded enable acknowledgement recovery", err)
+	}
+	state, err = db.TrainingScheduleStatus(t.Context(), low)
+	if err != nil || state.StateEpoch != original.StateEpoch || !state.PartialV2Enabled {
+		t.Fatal("resume replayed enable", err)
+	}
+	if err = low.QueryRow(t.Context(), `SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname='local_recipient_web'`).Scan(&login); err != nil || !login {
+		t.Fatal("matching recovery did not restore original LOGIN", err)
+	}
+	// A separately closed gate is a different decision. The recorded command
+	// must not reopen it or restore a publisher fenced by that later decision.
+	if _, err = root.Exec(t.Context(), `ALTER ROLE local_recipient_web NOLOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = low.Exec(t.Context(), `SELECT training_schedule_control.set_enabled($1,$2,false)`, state.DatabaseIncarnation, state.StateEpoch); err != nil {
+		t.Fatal(err)
+	}
+	if err = runServerCommand(t.Context(), []string{"prepare-local-recipient-floor"}); err == nil {
+		t.Fatal("independently closed authoring gate reopened")
+	}
+	state, err = db.TrainingScheduleStatus(t.Context(), low)
+	if err != nil || state.PartialV2Enabled {
+		t.Fatal("closed gate changed", err)
+	}
+	if err = low.QueryRow(t.Context(), `SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname='local_recipient_web'`).Scan(&login); err != nil || login {
+		t.Fatal("unexpected publisher LOGIN restored", err)
+	}
+	if _, err = low.Exec(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,4)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New(), strings.Repeat("b", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if err = runServerCommand(t.Context(), []string{"prepare-local-recipient-floor"}); err == nil {
+		t.Fatal("future reader floor adopted")
 	}
 	// A different project directory cannot retroactively adopt this populated DB.
 	t.Chdir(t.TempDir())

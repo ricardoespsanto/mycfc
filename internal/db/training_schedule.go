@@ -77,13 +77,16 @@ func VerifyTrainingScheduleMigrationFinal(ctx context.Context, q TrainingSchedul
  (SELECT pg_catalog.array_agg(version ORDER BY version COLLATE "C") FROM mycfc_meta.schema_migrations)=$1::text[]`, EmbeddedMigrationInventory()).Scan(&exact); err != nil || !exact {
 		return errors.New("training schedule final inventory mismatch")
 	}
-	return verifyTrainingScheduleSchema(ctx, q, TrainingScheduleContractC, false)
+	return verifyTrainingScheduleSchema(ctx, q, TrainingScheduleContractP, false)
 }
 
 // verifyTrainingScheduleAdmissionSchema accepts only explicitly reviewed old
-// inventories before migration, and the current final C schema afterward.
+// inventories before definition changes, and the current final P schema.
 func verifyTrainingScheduleAdmissionSchema(ctx context.Context, q TrainingScheduleQueryReader, digest string) error {
-	if digest == EmbeddedMigrationDigest() || digest == releasecontract.NormalRecipientParentDigest {
+	if digest == EmbeddedMigrationDigest() {
+		return verifyTrainingScheduleSchema(ctx, q, TrainingScheduleContractP, false)
+	}
+	if digest == releasecontract.NormalAuthoringParentDigest || digest == releasecontract.NormalRecipientParentDigest {
 		return verifyTrainingScheduleSchema(ctx, q, TrainingScheduleContractC, false)
 	}
 	if digest != releasecontract.NormalParentDigest && digest != releasecontract.FreshGenesisDigest {
@@ -159,6 +162,19 @@ func verifyTrainingScheduleSchema(ctx context.Context, q TrainingScheduleQueryRe
  AND EXISTS(SELECT 1 FROM pg_catalog.pg_trigger WHERE tgrelid='public.training_plan_publications'::pg_catalog.regclass AND tgname='training_plan_publications_schedule_guard' AND tgfoid='training_schedule_control.guard_publication()'::pg_catalog.regprocedure AND NOT tgisinternal AND tgenabled IN ('O','A') AND tgtype=7)`, contract == TrainingScheduleContractC, "'INTERVAL'::text").Scan(&valid)
 	if err != nil || !valid {
 		return errors.New("training schedule schema contract mismatch")
+	}
+	// Actual P authoring cannot enable partial writes below the corrected
+	// recipient reader floor. C's known parent retains its original CHECK2.
+	minimum := 2
+	if contract == TrainingScheduleContractP {
+		minimum = 3
+	}
+	expectedEnable := fmt.Sprintf("CHECK (((NOT partial_v2_enabled) OR ((schema_contract = 'schedule-p1'::text) AND (required_reader >= %d) AND (floor_commit_id IS NOT NULL) AND ever_partial_v2_enabled)))", minimum)
+	expectedEver := fmt.Sprintf("CHECK (((NOT ever_partial_v2_enabled) OR (required_reader >= %d)))", minimum)
+	if err = q.QueryRow(ctx, `SELECT /* training schedule exact floor checks */
+     EXISTS(SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid='training_schedule_control.state'::pg_catalog.regclass AND conname='training_schedule_enable_valid' AND convalidated AND pg_catalog.pg_get_constraintdef(oid)=$1)
+     AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid='training_schedule_control.state'::pg_catalog.regclass AND conname='training_schedule_ever_floor' AND convalidated AND pg_catalog.pg_get_constraintdef(oid)=$2)`, expectedEnable, expectedEver).Scan(&valid); err != nil || !valid {
+		return errors.New("training schedule reader floor constraint mismatch")
 	}
 	// Compare installed function source, not a self-reported state label or a
 	// substring that a weakened body could retain. No application function is

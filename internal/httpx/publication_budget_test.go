@@ -86,3 +86,27 @@ func TestPublicationIngressRefusesExhaustedReserveBeforeDispatch(t *testing.T) {
 		t.Fatal("publication dispatched without response reserve")
 	}
 }
+
+func TestFocusedWorkoutIngressActualBodyBoundaryAndPathIsolation(t *testing.T) {
+	for _, task := range []string{"rascunho", "prever", "confirmar"} {
+		for _, size := range []int{1 << 20, 1<<20 + 1} {
+			path := "/admin/treinos/estruturados/semanas/id/treinos/criar/" + task
+			PublicationIngressMiddleware(30*time.Second)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if _, ok := PublicationDeadline(r.Context(), 30*time.Second); !ok {
+					t.Fatal("focused ingress budget absent")
+				}
+				_, err := io.ReadAll(r.Body)
+				if (err != nil) != (size > 1<<20) {
+					t.Fatalf("%s body%d: %v", task, size, err)
+				}
+			})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", path, strings.NewReader(strings.Repeat("x", size))))
+		}
+	}
+	for _, path := range []string{"/admin/treinos/estruturados/semanas/id/treinos/criar", "/admin/treinos/estruturados/semanas/id/treinos/criar/confirmar/extra"} {
+		PublicationIngressMiddleware(30*time.Second)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := PublicationDeadline(r.Context(), 30*time.Second); ok {
+				t.Fatal("unrelated path received task budget")
+			}
+		})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", path, nil))
+	}
+}

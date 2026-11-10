@@ -488,6 +488,9 @@ func TestFocusedWorkoutSingleIntentionalAutofocus(t *testing.T) {
 			p.Message = tc.message
 			p.Errors = tc.errors
 			body := renderWorkout(t, p)
+			if tc.message != "" && len(workoutErrorKeys(p)) > 0 && strings.Index(body, `class="error-summary"`) > strings.Index(body, `class="task-conflict"`) {
+				t.Fatal("linked errors must precede Message for progressive focus")
+			}
 			count := 0
 			target := ""
 			for _, tag := range workoutTags(body, "section") {
@@ -505,5 +508,287 @@ func TestFocusedWorkoutSingleIntentionalAutofocus(t *testing.T) {
 				t.Fatalf("autofocus count%d target%q want%q", count, target, tc.want)
 			}
 		})
+	}
+}
+
+func waterCreateFixture() StructuredWorkoutTaskPage {
+	p := workoutFixture()
+	p.WaterCreateOnly = true
+	p.Activities = []StructuredWorkoutActivity{{Key: "a_1", Phases: []StructuredWorkoutPhase{{Key: "p_1"}, {Key: "p_2"}, {Key: "p_3"}}}}
+	p.Values.Set("title", "")
+	p.Values.Set("schedule.start_time", "")
+	for i, purpose := range []string{"WARM_UP", "MAIN", "COOL_DOWN"} {
+		p.Values.Set(fmt.Sprintf("activities[a_1].phases[p_%d].purpose", i+1), purpose)
+		p.Values.Del(fmt.Sprintf("activities[a_1].phases[p_%d].instructions", i+1))
+	}
+	return p
+}
+
+func TestFocusedWaterCreateCapabilityAndNativeCommands(t *testing.T) {
+	p := waterCreateFixture()
+	body := renderWorkout(t, p)
+	for _, name := range []string{"entry_kind", "activities[a_1].modality", "schedule.mode"} {
+		if kind, _ := workoutAttr(workoutControl(t, body, name), "type"); kind != "hidden" {
+			t.Fatalf("%s must be fixed/hidden", name)
+		}
+	}
+	for _, name := range []string{"schedule.start_time", "schedule.end_date", "schedule.end_time"} {
+		assertWorkoutValue(t, body, name, "")
+	}
+	if _, readonly := workoutAttr(workoutControl(t, body, "schedule.date"), "readonly"); !readonly {
+		t.Fatal("selected day must be readonly")
+	}
+	if _, readonly := workoutAttr(workoutControl(t, body, "schedule.end_date"), "readonly"); readonly {
+		t.Fatal("explicit end date must remain editable")
+	}
+	if _, required := workoutAttr(workoutControl(t, body, "schedule.start_time"), "required"); !required {
+		t.Fatal("actual start is required")
+	}
+	for _, name := range []string{"schedule.end_date", "schedule.end_time", "activities[a_1].phases[p_1].instructions"} {
+		if _, required := workoutAttr(workoutControl(t, body, name), "required"); required {
+			t.Fatalf("blank optional field required: %s", name)
+		}
+	}
+	if got := strings.Join(workoutOptionValues(t, body, "activities[a_1].phases[p_1].purpose"), ","); got != ",WARM_UP,MAIN,COOL_DOWN,CUSTOM" {
+		t.Fatal(got)
+	}
+	for _, forbidden := range []string{"activity_add", "activity_remove:", "water_effort_add:", "gym_add:", "Detalhar intervalos", "Local, duração", ".detail_mode\"", ".water.profile_id\""} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("unsupported control: %s", forbidden)
+		}
+	}
+	seen := map[string]bool{}
+	for _, button := range workoutTags(body, "button") {
+		if name, _ := workoutAttr(button, "name"); name == "command" {
+			command, _ := workoutAttr(button, "value")
+			seen[command] = true
+			if command != "preview" {
+				if _, ok := workoutAttr(button, "formnovalidate"); !ok {
+					t.Fatalf("draft command blocked by incomplete fields: %s", command)
+				}
+			}
+		}
+	}
+	for _, command := range []string{"phase_add:a_1", "phase_up:a_1:p_2", "phase_down:a_1:p_2", "phase_remove:a_1:p_2", "refresh", "preview"} {
+		if !seen[command] {
+			t.Fatal(command)
+		}
+	}
+	if strings.Contains(body, "data-task-form") || !strings.Contains(body, "guardado como rascunho") || !strings.Contains(body, `href="/advanced"`) {
+		t.Fatal("native draft/recovery semantics missing")
+	}
+}
+
+func TestFocusedWaterCreateRetainsRawErrorsAndTombstones(t *testing.T) {
+	p := waterCreateFixture()
+	p.Message = "Reveja a fase."
+	p.Values.Set("schedule.start_time", "25:92")
+	p.Values.Set("schedule.mode", "DAY") // retained conflict, never silently made valid
+	p.Values.Set("activities[a_1].phases[p_2].purpose", "CUSTOM")
+	p.Values.Set("activities[a_1].phases[p_2].instructions", "\nlinha <script>\nsegunda\tlinha")
+	p.Values.Set("activities[a_1].duration_minutes", "3e!&\"")
+	p.Removed = []StructuredWorkoutRemoval{{Kind: "PHASE", Key: "r_1", Label: "Fase retirada", Payload: `{"instructions":"<script>&\""}`}}
+	p.Errors = validation.FieldErrors{"schedule.start_time": "Hora inválida.", "schedule.mode": "Modo não permitido.", "activities.a_1.duration_minutes": "Campo não suportado.", "activities.a_1.phases.p_2.title": "Indique o título."}
+	body := renderWorkout(t, p)
+	if strings.Index(body, `class="error-summary"`) > strings.Index(body, `class="task-conflict"`) {
+		t.Fatal("linked errors must precede message for progressive focus")
+	}
+	assertWorkoutValue(t, body, "schedule.start_time", "25:92")
+	assertWorkoutValue(t, body, "schedule.mode", "DAY")
+	assertWorkoutValue(t, body, "activities[a_1].duration_minutes", "3e!&\"")
+	assertWorkoutValue(t, body, "removed[r_1].payload", p.Removed[0].Payload)
+	if strings.Count(body, " autofocus") != 1 || !strings.Contains(body, `href="#workout-schedule-start_time"`) || strings.Contains(body, `href="#workout-schedule-mode"`) || strings.Contains(body, `href="#workout-activities-a_1-duration_minutes"`) {
+		t.Fatal("visible field focus/link contract violated")
+	}
+	if !strings.Contains(body, `value="restore:r_1" formnovalidate`) || strings.Contains(body, "<script>") {
+		t.Fatal("restore/raw escaping contract")
+	}
+}
+
+func TestFocusedWaterCreateOccurrenceChoicesAndExplicitEnd(t *testing.T) {
+	p := waterCreateFixture()
+	p.Values.Set("schedule.date", "2026-10-25")
+	p.Values.Set("schedule.start_time", "01:30")
+	p.StartOccurrences = []StructuredWorkoutChoice{{"2026-10-25T00:30:00Z", "Primeira ocorrência · UTC+01:00"}, {"2026-10-25T01:30:00Z", "Segunda ocorrência · UTC+00:00"}}
+	body := renderWorkout(t, p)
+	if got := strings.Join(workoutOptionValues(t, body, "schedule.start_occurrence"), ","); got != ",2026-10-25T00:30:00Z,2026-10-25T01:30:00Z" {
+		t.Fatal(got)
+	}
+	if strings.Contains(body, `value="2026-10-25T00:30:00Z" selected`) {
+		t.Fatal("first fold occurrence silently selected")
+	}
+	p.Values.Set("schedule.start_occurrence", "unavailable-original-occurrence")
+	p.Values.Set("schedule.end_time", "03:00")
+	body = renderWorkout(t, p)
+	assertWorkoutValue(t, body, "schedule.end_date", "")
+	if !strings.Contains(body, `value="unavailable-original-occurrence" selected`) {
+		t.Fatal("raw invalid occurrence lost")
+	}
+	p.Values.Set("activities[a_1].phases[p_3].purpose", "CUSTOM")
+	body = renderWorkout(t, p)
+	if _, required := workoutAttr(workoutControl(t, body, "activities[a_1].phases[p_3].title"), "required"); required {
+		t.Fatal("unused blank custom phase should not require title")
+	}
+}
+
+func focusedInstructionFixture() StructuredTrainingSession {
+	return StructuredTrainingSession{ID: "preview-session", Title: "Água <segura>", EntryKind: "TRAINING", Description: "Notas gerais\nSegunda linha", Schedule: TrainingScheduleView{Known: true, Precision: "START_ONLY", Date: "2026-11-09", StartsAt: "16:00"}, Modalities: []string{"WATER"}, Outcome: "COMPLETED", ActualDistance: "9000 m", PrescriptionID: "private-history", WriteUnsupported: true, Segments: []StructuredTrainingSegment{{ID: "segment", Modality: "WATER", Blocks: []StructuredTrainingBlock{{ID: "b1", Purpose: "WARM_UP", Instructions: "Água livre\nSem ritmo inventado"}, {ID: "b2", Purpose: "CUSTOM", Title: "Objetivo do treinador", Instructions: "4x(5’/1’+7’/2’+3’)/3’ R2"}, {ID: "b3", Purpose: "COOL_DOWN", Instructions: "Retorno à calma"}}}}}
+}
+
+func TestFocusedWorkoutCanonicalInstructionPreviewParity(t *testing.T) {
+	session := focusedInstructionFixture()
+	render := func(c templ.Component) string {
+		t.Helper()
+		var out bytes.Buffer
+		if err := c.Render(context.Background(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	preview := render(StructuredWorkoutInstructions(session))
+	page := StructuredTrainingPage{Audiences: []StructuredTrainingAudience{{GroupName: "Grupo", Weeks: []StructuredTrainingWeek{{ID: "week", Sessions: []StructuredTrainingSession{session}}}}}}
+	athlete := render(structuredTrainingPlan(page))
+	// Context changes only heading levels; the instruction fragments stay shared.
+	nestedPreview := strings.NewReplacer("<h3 ", "<h5 ", "</h3>", "</h5>", "<h4 ", "<h6 ", "</h4>", "</h6>").Replace(preview)
+	for _, c := range []templ.Component{structuredWorkoutInstructionHeader(session, false), structuredWorkoutInstructionDescription(session), structuredWorkoutInstructionActivities(StructuredTrainingPage{}, session, false)} {
+		shared := render(c)
+		if strings.Count(nestedPreview, shared) != 1 || strings.Count(athlete, shared) != 1 {
+			t.Fatal("preview and athlete must render identical canonical instruction fragments once")
+		}
+	}
+	for _, forbidden := range []string{"<form", "<button", "<a ", "Resposta do atleta", "9000 m", "private-history", "Ações do", "Sessão disponível para consulta"} {
+		if strings.Contains(preview, forbidden) {
+			t.Fatalf("readonly renderer leaked %s", forbidden)
+		}
+	}
+	if !strings.Contains(preview, "Fim por definir") || !strings.Contains(preview, `class="preserve-lines">Notas gerais`) || strings.Contains(preview, "<segura>") || strings.Index(preview, "Água livre") > strings.Index(preview, "Objetivo do treinador") {
+		t.Fatal("truthful ordered escaped instruction content missing")
+	}
+	p := waterCreateFixture()
+	p.Reviewing = true
+	p.Preview = StructuredWorkoutInstructions(session)
+	p.ReviewToken = "signed-token"
+	p.ProposalJSON = `{"signed":"proposal"}`
+	body := renderWorkout(t, p)
+	if strings.Contains(body, `.water.method"`) || strings.Contains(body, `.gym.structure"`) {
+		t.Fatal("edit-back manufactured unsupported empty detail fields")
+	}
+	if !strings.Contains(body, preview) || !strings.Contains(body, "Guardar rascunho") || !strings.Contains(body, "instruções de base") {
+		t.Fatal("canonical draft preview missing")
+	}
+}
+
+func TestFocusedWaterCreatePriorProofSurvivesNativeDraftAndEditBack(t *testing.T) {
+	p := waterCreateFixture()
+	p.ProposalJSON = `{"session":"same-id","text":"</script><img onerror=x>&\""}`
+	p.ReviewToken = `original"token<&`
+	p.Values.Set("prior_proposal", "raw-value-must-never-be-copied")
+	p.Values.Set("prior_review_token", "raw-token-must-never-be-copied")
+	p.Removed = []StructuredWorkoutRemoval{{Kind: "PHASE", Key: "r_1", Label: "Fase retirada", Payload: `{"phase":"p_removed"}`}}
+	body := renderWorkout(t, p)
+	assertWorkoutValue(t, body, "prior_proposal", p.ProposalJSON)
+	assertWorkoutValue(t, body, "prior_review_token", p.ReviewToken)
+	if strings.Contains(body, "raw-value-must-never-be-copied") || strings.Contains(body, "raw-token-must-never-be-copied") || strings.Contains(body, "<img") {
+		t.Fatal("proof is escaped page transport, not raw values")
+	}
+	forms := regexp.MustCompile(`(?s)<form\b.*?</form>`).FindAllString(body, -1)
+	if len(forms) != 1 || strings.Count(forms[0], `name="prior_proposal"`) != 1 || strings.Count(forms[0], `name="prior_review_token"`) != 1 {
+		t.Fatal("editor proof must share the single native command form")
+	}
+	for _, command := range []string{"phase_add:a_1", "phase_remove:a_1:p_2", "phase_up:a_1:p_2", "phase_down:a_1:p_2", "restore:r_1"} {
+		if !strings.Contains(forms[0], `value="`+command+`"`) {
+			t.Fatal(command)
+		}
+	}
+	p.Reviewing = true
+	p.Preview = templ.Raw(`<p>Pré-visualização canónica fornecida pelo servidor.</p>`)
+	body = renderWorkout(t, p)
+	forms = regexp.MustCompile(`(?s)<form\b.*?</form>`).FindAllString(body, -1)
+	if len(forms) != 2 || !strings.Contains(forms[0], `name="prior_proposal"`) || !strings.Contains(forms[0], `name="prior_review_token"`) || strings.Contains(forms[1], `name="prior_`) {
+		t.Fatal("edit-back must retain proof; signed confirmation stays separate")
+	}
+	assertWorkoutValue(t, forms[1], "proposal", p.ProposalJSON)
+	assertWorkoutValue(t, forms[1], "review_token", p.ReviewToken)
+	p.Reviewing = false
+	p.ProposalJSON = ""
+	p.ReviewToken = ""
+	if body = renderWorkout(t, p); strings.Contains(body, `name="prior_`) {
+		t.Fatal("first editor manufactured prior proof from raw values")
+	}
+	p.WaterCreateOnly = false
+	p.ProposalJSON = "generic-proposal"
+	p.ReviewToken = "generic-token"
+	if body = renderWorkout(t, p); strings.Contains(body, `name="prior_`) {
+		t.Fatal("generic editor behavior changed")
+	}
+}
+
+func TestFocusedWorkoutInstructionHeadingsMatchRenderingContext(t *testing.T) {
+	session := focusedInstructionFixture()
+	p := waterCreateFixture()
+	p.Reviewing = true
+	p.Preview = StructuredWorkoutInstructions(session)
+	preview := renderWorkout(t, p)
+	for _, want := range []string{`<h2 id="workout-preview-heading">`, `<h3 id="structured-session-preview-session">`, `<h4 id="segment-segment">`} {
+		if !strings.Contains(preview, want) {
+			t.Fatalf("standalone preview missing contextual heading %s", want)
+		}
+	}
+	if strings.Contains(preview, "<h5") || strings.Contains(preview, "<h6") {
+		t.Fatal("standalone preview must not inherit deeply nested plan headings")
+	}
+	page := StructuredTrainingPage{Audiences: []StructuredTrainingAudience{{GroupName: "Grupo", Weeks: []StructuredTrainingWeek{{ID: "week", Sessions: []StructuredTrainingSession{session}}}}}}
+	var out bytes.Buffer
+	if err := structuredTrainingPlan(page).Render(context.Background(), &out); err != nil {
+		t.Fatal(err)
+	}
+	nested := out.String()
+	for _, want := range []string{`<h5 id="structured-session-preview-session">`, `<h6 id="segment-segment">`} {
+		if !strings.Contains(nested, want) {
+			t.Fatalf("nested plan lost existing heading %s", want)
+		}
+	}
+	if strings.Contains(nested, `<h3 id="structured-session-`) || strings.Contains(nested, `<h4 id="segment-`) {
+		t.Fatal("standalone heading context leaked into nested plan")
+	}
+	for _, body := range []string{preview, nested} {
+		if strings.Count(body, "Água livre") != 1 || strings.Count(body, "Objetivo do treinador") != 1 {
+			t.Fatal("heading context must not duplicate instruction content")
+		}
+	}
+}
+
+func TestFocusedWorkoutUnavailablePreviewRetainsEditableRecoveryDraft(t *testing.T) {
+	for _, waterOnly := range []bool{true, false} {
+		p := waterCreateFixture()
+		p.WaterCreateOnly = waterOnly
+		p.PreviewURL = ""
+		p.Message = "Não foi possível validar a revisão anterior. Consulte a semana antes de iniciar uma nova tarefa."
+		p.ProposalJSON = `{"original":"unchanged-proof"}`
+		p.ReviewToken = `original-token<&"`
+		p.Values.Set("title", `Título incompleto <copiar>`)
+		p.Values.Set("schedule.start_time", "25:92")
+		p.Values.Set("activities[a_1].phases[p_2].instructions", "Texto original\nSegunda linha <segura>")
+		body := renderWorkout(t, p)
+		assertWorkoutValue(t, body, "title", p.Values.Get("title"))
+		assertWorkoutValue(t, body, "schedule.start_time", "25:92")
+		if strings.Contains(body, "Pré-visualizar treino") || strings.Contains(body, `value="preview"`) {
+			t.Fatal("unavailable preview must not offer a submission")
+		}
+		if !strings.Contains(body, html.EscapeString(p.Values.Get("activities[a_1].phases[p_2].instructions"))) || !strings.Contains(body, `href="`+html.EscapeString(p.ReturnURL)+`"`) || !strings.Contains(body, p.Message) {
+			t.Fatal("raw instructions, honest message or week recovery missing")
+		}
+		if _, readonly := workoutAttr(workoutControl(t, body, "title"), "readonly"); readonly {
+			t.Fatal("recovery must keep own raw draft editable/copyable")
+		}
+		if waterOnly {
+			assertWorkoutValue(t, body, "prior_proposal", p.ProposalJSON)
+			assertWorkoutValue(t, body, "prior_review_token", p.ReviewToken)
+		}
+		p.PreviewURL = "/workout/preview"
+		body = renderWorkout(t, p)
+		if !strings.Contains(body, `name="command" value="preview" formaction="/workout/preview"`) {
+			t.Fatal("valid context lost ordinary preview action")
+		}
 	}
 }

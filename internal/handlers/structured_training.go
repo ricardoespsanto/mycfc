@@ -29,6 +29,7 @@ import (
 )
 
 type StructuredTraining struct {
+	Workouts         *StructuredWorkout
 	HTTPWriteTimeout time.Duration
 	Publications     recipientPublicationStore
 	Setup            TrainingSetupStore

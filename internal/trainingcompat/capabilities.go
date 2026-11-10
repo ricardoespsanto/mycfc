@@ -6,7 +6,7 @@ package trainingcompat
 import "github.com/cfcoimbra/mycfc/internal/releasecontract"
 
 const ReaderGeneration int32 = 3
-const WriterGeneration int32 = 1
+const WriterGeneration int32 = 2
 
 type Capabilities struct {
 	Protocol         int      `json:"protocol"`
@@ -20,5 +20,5 @@ type Capabilities struct {
 }
 
 func Compiled() Capabilities {
-	return Capabilities{Protocol: 1, Version: releasecontract.Version, Candidate: releasecontract.Candidate, ReaderGeneration: ReaderGeneration, WriterGeneration: WriterGeneration, SnapshotRead: []int{1, 2}, SchemaRead: []string{"schedule-c1", "schedule-p1"}, Write: []string{"INTERVAL", "snapshot-v1"}}
+	return Capabilities{Protocol: 1, Version: releasecontract.Version, Candidate: releasecontract.Candidate, ReaderGeneration: ReaderGeneration, WriterGeneration: WriterGeneration, SnapshotRead: []int{1, 2}, SchemaRead: []string{"schedule-c1", "schedule-p1"}, Write: []string{"INTERVAL", "START_ONLY", "snapshot-v1"}}
 }

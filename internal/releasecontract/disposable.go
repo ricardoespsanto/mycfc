@@ -24,10 +24,13 @@ const FinalDigest = "88bdc8ccf003c6a4994310c11e2d1c18ce5d4b212ccb6eff8113f8499b9
 const BaselineDigest = "fc8f9dbb96dcfd7f49aa81e562bf53684416a32282a26d4d9a9d329f20c14a1f"
 
 // NormalBaselineDigest is for corrected normal fresh/forward verification, not reset.
-const NormalBaselineDigest = "2237c6e0b0843d2dc3f951bd663dff1001becaae97fdf87dce0e4936b2c03334"
+const NormalBaselineDigest = "fc6a1662514ccc42cad6d33df3524dd0e74bb1b456b9028bfd80b25a54b52476"
 
 // NormalFinalDigest is independent of the retired disposable FinalDigest pin.
-const NormalFinalDigest = "c90c7f02fcc0859420133135bd4b12ea0a4aa27cfccdf150eaea08a9fb08c335"
+const NormalFinalDigest = "d35f88da495d5818ae924cb7ca2dabe1488039c0a0d00aa5472847ebe3f579e1"
+
+// NormalAuthoringParentDigest identifies the exact closed C/recipient80 schema.
+const NormalAuthoringParentDigest = "c90c7f02fcc0859420133135bd4b12ea0a4aa27cfccdf150eaea08a9fb08c335"
 
 // NormalRecipientParentDigest is the reviewed compatibility79 inventory.
 const NormalRecipientParentDigest = "88bdc8ccf003c6a4994310c11e2d1c18ce5d4b212ccb6eff8113f8499b9152ec"

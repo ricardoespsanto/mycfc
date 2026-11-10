@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const TrainingPartialAuthoringMigration = "202611100003_training_partial_authoring"
+
 const TrainingRecipientRevisionMigration = "202611100002_training_publication_recipient_revision"
 const TrainingRecipientReaderGeneration int32 = 3
 
@@ -23,6 +25,7 @@ const (
 	RecipientReviewed77 RecipientSchemaPhase = "reviewed77"
 	RecipientReviewed78 RecipientSchemaPhase = "reviewed78"
 	RecipientReviewed79 RecipientSchemaPhase = "reviewed79"
+	RecipientReviewed80 RecipientSchemaPhase = "reviewed80"
 	RecipientFinal      RecipientSchemaPhase = "recipient-final"
 )
 
@@ -52,14 +55,21 @@ func InspectTrainingRecipientParent(ctx context.Context, q TrainingScheduleQuery
 	if err := verifyTrainingScheduleAdmissionSchema(ctx, q, actualDigest); err != nil {
 		return result, err
 	}
-	if err := verifyTrainingRecipientCatalog(ctx, q, phase != RecipientFinal, phase == RecipientReviewed79 || phase == RecipientFinal); err != nil {
+	if err := verifyTrainingRecipientCatalog(ctx, q, phase != RecipientFinal && phase != RecipientReviewed80, phase == RecipientReviewed79 || phase == RecipientReviewed80 || phase == RecipientFinal); err != nil {
 		return result, err
 	}
 	result.Phase = phase
-	if phase == RecipientReviewed79 || phase == RecipientFinal {
+	if phase == RecipientReviewed79 || phase == RecipientReviewed80 || phase == RecipientFinal {
 		state, err := TrainingScheduleStatus(ctx, q)
 		if err != nil {
 			return result, err
+		}
+		if phase == RecipientFinal {
+			if state.SchemaContract != TrainingScheduleContractP {
+				return result, errors.New("training recipient final schedule phase mismatch")
+			}
+		} else if state.SchemaContract != TrainingScheduleContractC || state.PartialV2Enabled || state.EverPartialV2Enabled {
+			return result, errors.New("training recipient closed parent schedule phase mismatch")
 		}
 		result.ScheduleState = &state
 	}
@@ -72,6 +82,9 @@ func trainingRecipientInventory(digest string) ([]string, RecipientSchemaPhase) 
 	switch digest {
 	case releasecontract.NormalFinalDigest:
 		phase = RecipientFinal
+	case releasecontract.NormalAuthoringParentDigest:
+		phase = RecipientReviewed80
+		excluded[TrainingPartialAuthoringMigration] = true
 	case releasecontract.NormalRecipientParentDigest:
 		phase = RecipientReviewed79
 		excluded[TrainingRecipientRevisionMigration] = true
@@ -86,6 +99,9 @@ func trainingRecipientInventory(digest string) ([]string, RecipientSchemaPhase) 
 		excluded["202610010003_privacy_attachment_trigger_runtime"] = true
 	default:
 		return nil, ""
+	}
+	if phase != RecipientFinal {
+		excluded[TrainingPartialAuthoringMigration] = true
 	}
 	var inventory []string
 	for _, version := range EmbeddedMigrationInventory() {

@@ -18,18 +18,20 @@ import (
 )
 
 type localRecipientManifest struct {
-	Contract       string                     `json:"contract"`
-	ProjectPath    string                     `json:"project_path"`
-	SystemID       string                     `json:"system_identifier"`
-	Database       string                     `json:"database"`
-	DatabaseOID    uint32                     `json:"database_oid"`
-	EndpointSHA256 string                     `json:"endpoint_sha256"`
-	MigrationRole  string                     `json:"migration_role"`
-	PublisherRole  string                     `json:"publisher_role"`
-	PublisherOID   *uint32                    `json:"publisher_oid"`
-	OriginalLogin  *bool                      `json:"original_login"`
-	Phase          string                     `json:"phase"`
-	Intent         *localRecipientFloorIntent `json:"intent"`
+	AuthoringExpectedEpoch *int64                     `json:"authoring_expected_epoch,omitempty"`
+	AuthoringPreparedEpoch *int64                     `json:"authoring_prepared_epoch,omitempty"`
+	Contract               string                     `json:"contract"`
+	ProjectPath            string                     `json:"project_path"`
+	SystemID               string                     `json:"system_identifier"`
+	Database               string                     `json:"database"`
+	DatabaseOID            uint32                     `json:"database_oid"`
+	EndpointSHA256         string                     `json:"endpoint_sha256"`
+	MigrationRole          string                     `json:"migration_role"`
+	PublisherRole          string                     `json:"publisher_role"`
+	PublisherOID           *uint32                    `json:"publisher_oid"`
+	OriginalLogin          *bool                      `json:"original_login"`
+	Phase                  string                     `json:"phase"`
+	Intent                 *localRecipientFloorIntent `json:"intent"`
 }
 type localRecipientFloorIntent struct {
 	Incarnation    string `json:"incarnation"`
