@@ -174,3 +174,22 @@ func TestClassificationConfirmationHandlesRevokedWriter(t *testing.T) {
 		t.Fatal("revoked writer not masked")
 	}
 }
+
+func TestClassificationConfirmationReportsUnknownCommitWithoutRetry(t *testing.T) {
+	actor, member := uuid.New(), uuid.New()
+	f := &classificationFake{allowed: true, name: "Ana", code: "Leisure", writeErr: db.ErrCommitOutcomeUnknown}
+	h := Classification{Store: f}
+	values := url.Values{
+		"scope":     {"11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222"},
+		"starts_on": {time.Now().In(lisbonLocation()).Format("2006-01-02")},
+	}
+	preview := httptest.NewRecorder()
+	h.Post(preview, classificationBoundaryRequest("POST", actor, member, values))
+	values.Set("preview_token", extractPreviewToken(t, preview.Body.String()))
+	values.Set("confirm", "yes")
+	w := httptest.NewRecorder()
+	h.Post(w, classificationBoundaryRequest("POST", actor, member, values))
+	if w.Code != 503 || f.writes != 1 || !strings.Contains(w.Body.String(), "Confirme a participação atual") || strings.Contains(w.Body.String(), "preview_token") {
+		t.Fatalf("unknown commit did not direct the actor to inspect current participation: status %d, writes %d", w.Code, f.writes)
+	}
+}

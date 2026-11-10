@@ -113,3 +113,17 @@ func TestClassificationSearchEscapesNamesAndDoesNotAutoSelect(t *testing.T) {
 		t.Fatalf("unsafe search %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestClassificationSearchRejectsUnavailableOriginBeforeSearch(t *testing.T) {
+	store := &classificationSearchFake{people: []ClassificationPerson{{ID: uuid.New(), Name: "Private result"}}}
+	r := httptest.NewRequest("GET", "/equipa/classificacao?q=Ana&origin_group="+uuid.NewString(), nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: uuid.New()}))
+	w := httptest.NewRecorder()
+	(Classification{Store: store}).Search(w, r)
+	if w.Code != 404 || store.query != "" || store.page != 0 || strings.Contains(w.Body.String(), "Private result") {
+		t.Fatalf("unavailable origin reached name search: status %d, query %q", w.Code, store.query)
+	}
+	if w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Referrer-Policy") != "no-referrer" {
+		t.Fatal("unavailable origin lost private response headers")
+	}
+}
