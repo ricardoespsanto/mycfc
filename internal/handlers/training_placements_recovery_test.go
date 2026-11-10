@@ -186,3 +186,71 @@ func TestPlacementTransactionErrorKeepsConflictsDistinctFromUnknownCommit(t *tes
 		t.Fatalf("unknown outcome mapped as constraint: %v", got)
 	}
 }
+
+func TestPlacementCancellationPreviewRefusesMissingOrRevokedFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		alter  func(*placementHTTPStoreFake, url.Values)
+		status int
+		reads  int
+	}{
+		{"invalid person", func(_ *placementHTTPStoreFake, v url.Values) { v.Set("person_id", "bad") }, 404, 0},
+		{"invalid change", func(_ *placementHTTPStoreFake, v url.Values) { v.Set("change_id", "bad") }, 404, 0},
+		{"revoked group", func(s *placementHTTPStoreFake, _ url.Values) { s.contextErr = pgx.ErrNoRows }, 404, 0},
+		{"revoked change", func(s *placementHTTPStoreFake, _ url.Values) { s.cancelReadErr = pgx.ErrNoRows }, 404, 1},
+		{"invalid form identity and revision", func(_ *placementHTTPStoreFake, v url.Values) {
+			v.Set("cancellation_id", "bad")
+			v.Set("head_revision", "007")
+		}, 422, 1},
+		{"already effective", func(s *placementHTTPStoreFake, _ url.Values) { s.cancellation.CanCancel = false }, 409, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, h := placementHTTPFixture(t)
+			v := cancellationFormForTest(s)
+			tc.alter(s, v)
+			w := publicationPost(t, h, trainingPlacementsPath+"/cancelar/prever", v)
+			body := w.Body.String()
+			if w.Code != tc.status || s.cancelReads != tc.reads || s.cancelCalls != 0 || s.writes != 0 || strings.Contains(body, "Confirmar cancelamento") {
+				t.Fatalf("status=%d reads=%d cancellation attempts=%d", w.Code, s.cancelReads, s.cancelCalls)
+			}
+			if tc.status == 404 && strings.Contains(body, "Pessoa privada sintética") {
+				t.Fatal("denial disclosed private cancellation facts")
+			}
+		})
+	}
+}
+
+func TestPlacementCancellationBackRechecksCurrentScopeAndEffectiveState(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		alter    func(*placementHTTPStoreFake)
+		status   int
+		editable bool
+	}{
+		{"group no longer accessible", func(s *placementHTTPStoreFake) { s.contextErr = pgx.ErrNoRows }, 404, false},
+		{"change no longer accessible", func(s *placementHTTPStoreFake) { s.cancelReadErr = pgx.ErrNoRows }, 404, false},
+		{"change already effective", func(s *placementHTTPStoreFake) { s.cancellation.CanCancel = false }, 200, false},
+		{"still scheduled", func(*placementHTTPStoreFake) {}, 200, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, h := placementHTTPFixture(t)
+			form := cancellationFormForTest(s)
+			w := publicationPost(t, h, trainingPlacementsPath+"/cancelar/prever", form)
+			if w.Code != 200 {
+				t.Fatalf("could not prepare review: %d", w.Code)
+			}
+			for k, v := range placementHTTPProof(t, w.Body.String()) {
+				form[k] = v
+			}
+			tc.alter(s)
+			back := publicationPost(t, h, trainingPlacementsPath, form)
+			body := back.Body.String()
+			if back.Code != tc.status || strings.Contains(body, "/cancelar/prever") != tc.editable || s.cancelCalls != 0 || s.writes != 0 {
+				t.Fatalf("back status=%d editable=%t", back.Code, strings.Contains(body, "/cancelar/prever"))
+			}
+			if tc.status == 404 && strings.Contains(body, "Pessoa privada sintética") {
+				t.Fatal("back showed revoked cancellation facts")
+			}
+		})
+	}
+}

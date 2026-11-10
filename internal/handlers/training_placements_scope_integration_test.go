@@ -5,12 +5,75 @@ package handlers
 import (
 	"errors"
 	"testing"
+	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestTrainingGroupStoreScopesRosterAndPreventsStaleRename(t *testing.T) {
+	f := newPublicationDomainFixture(t)
+	ctx := t.Context()
+	store := PostgresTrainingGroupStore{Pool: f.web}
+	groups, err := store.ListGroups(ctx, f.actor, 0)
+	if err != nil || len(groups) != 1 || groups[0].ID != f.group {
+		t.Fatalf("admin group listing=%+v err=%v", groups, err)
+	}
+	scopes, err := store.ListScopes(ctx, f.actor)
+	if err != nil || len(scopes) == 0 {
+		t.Fatalf("admin group scopes=%+v err=%v", scopes, err)
+	}
+	if rows, err := store.ListRoster(ctx, f.subject, f.group, 0); !errors.Is(err, pgx.ErrNoRows) || len(rows) != 0 {
+		t.Fatalf("athlete accessed the staff roster: %d rows, err=%v", len(rows), err)
+	}
+	date := placementDate(f.day(t, 2)).Time
+	if rows, err := store.SearchAthletesForDate(ctx, f.subject, f.group, f.season, date, "Recipient", 0); !errors.Is(err, pgx.ErrNoRows) || len(rows) != 0 {
+		t.Fatalf("athlete accessed dated staff search: %d rows, err=%v", len(rows), err)
+	}
+	if _, err := store.SearchAthletesForDate(ctx, f.actor, f.group, f.season, time.Time{}, "Recipient", 0); !errors.Is(err, ErrTrainingGroupEligibility) {
+		t.Fatalf("dated search accepted missing effective date: %v", err)
+	}
+	choices, err := store.SearchAthletesForDate(ctx, f.actor, f.group, f.season, date, "Recipient", 0)
+	if err != nil || len(choices) != 1 || choices[0].UserID != f.subject || choices[0].MembershipID != f.membership || !choices[0].AlreadyMember {
+		t.Fatalf("admin dated search=%+v err=%v", choices, err)
+	}
+	other, err := store.CreateGroup(ctx, TrainingGroupCreateInput{ActorID: f.actor, ProgrammeID: &f.programme, Name: "Temporary destination"})
+	if err != nil || other.ID == uuid.Nil {
+		t.Fatalf("create permitted group: %+v %v", other, err)
+	}
+	saved := f.changePlacement(t, trainingPlacementCommand{Kind: placementTemporary, SubjectID: f.subject, ContextGroupID: f.group, SourcePlacementID: f.placement, TargetGroupID: other.ID, EffectiveOn: f.day(t, 2), TemporaryUntil: f.day(t, 4)})
+	for _, tc := range []struct {
+		group, placement uuid.UUID
+		status           string
+	}{
+		{f.group, f.placement, "Em vigor; tem colocações agendadas"},
+		{other.ID, saved.DestinationPlacementID, "Agendada para " + f.day(t, 2)},
+	} {
+		roster, err := store.ListRoster(ctx, f.actor, tc.group, 0)
+		if err != nil || len(roster) != 1 || roster[0].UserID != f.subject || roster[0].PlacementID != tc.placement || roster[0].PlacementStatus != tc.status || roster[0].Unavailable {
+			t.Fatalf("roster for %s = %+v err=%v", tc.group, roster, err)
+		}
+	}
+	edit := TrainingGroupRenameInput{ActorID: f.actor, GroupID: other.ID, Name: "Reviewed destination", ExpectedUpdatedAt: other.UpdatedAt}
+	renamed, err := store.RenameGroup(ctx, edit)
+	if err != nil || renamed.Name != edit.Name || !renamed.UpdatedAt.After(edit.ExpectedUpdatedAt) {
+		t.Fatalf("rename permitted group: %+v %v", renamed, err)
+	}
+	edit.Name = "Stale overwrite"
+	if _, err = store.RenameGroup(ctx, edit); !errors.Is(err, ErrTrainingGroupConflict) {
+		t.Fatalf("accepted stale rename: %v", err)
+	}
+	edit.ExpectedUpdatedAt, edit.ActorID = renamed.UpdatedAt, f.subject
+	if _, err = store.RenameGroup(ctx, edit); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("accepted rename outside staff scope: %v", err)
+	}
+	current, err := store.GetGroup(ctx, f.actor, other.ID)
+	if err != nil || current.Name != renamed.Name || !current.UpdatedAt.Equal(renamed.UpdatedAt) {
+		t.Fatalf("rejected rename changed group: %+v %v", current, err)
+	}
+}
 
 func TestPlacementStoreOnlyReturnsScopedTimelineAndRetainedSource(t *testing.T) {
 	f := newPublicationDomainFixture(t)

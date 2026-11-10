@@ -125,6 +125,11 @@ func TestTrainingPlacementNativeStoreTemporaryExactReplayAndCancellation(t *test
 	if e = f.web.QueryRow(t.Context(), `SELECT count(*) FROM training_group_placements WHERE subject_user_id=$1 AND group_id=$2 AND superseded_by_change_id IS NULL AND cancelled_by_change_id IS NULL`, f.subject, f.group).Scan(&active); e != nil || active != 1 {
 		t.Fatal("cancellation did not restore exact original source", e, active)
 	}
+	setPublicationFixtureEnabled(t, f, true)
+	stale, e := store.ConfirmPlacementCancellation(t.Context(), cancel)
+	if !errors.Is(e, errTrainingPlacementChanged) || stale != (trainingPlacementSaveResult{}) || f.placementAggregate(t) != before {
+		t.Fatalf("previous-epoch cancellation proof produced a receipt or changed placements: %+v %v", stale, e)
+	}
 }
 func TestTrainingPlacementReturnRequiresExplicitNewPublicationWithSameBody(t *testing.T) {
 	f := newPublicationDomainFixture(t)

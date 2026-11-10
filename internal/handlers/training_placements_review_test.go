@@ -116,3 +116,30 @@ func TestTrainingPlacementReviewRejectsInconsistentOrSmuggledPayload(t *testing.
 		t.Fatal("accepted duplicate JSON key")
 	}
 }
+
+func TestTrainingPlacementReviewRefusesUnversionedSourceAndNoncanonicalPayload(t *testing.T) {
+	p := placementReviewTestPayload(t)
+	now := time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)
+	s := focusedWorkoutSigner{key: [32]byte{5}}
+	p.Source.Version = 0
+	var err error
+	p.Projection, err = projectTrainingPlacement(p.Command, p.Source, p.TargetName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, token, err := s.signPlacement(p, now); err != errTrainingPlacementInvalid || raw != "" || token != "" {
+		t.Fatalf("unversioned source produced a signed review: %v", err)
+	}
+	p = placementReviewTestPayload(t)
+	raw, err := json.MarshalIndent(p, "", " ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, token, err := s.signNativeFields(raw, p.Values, nil, trainingPlacementReviewPurpose, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.verifyPlacement(signed, token, p.ActorID, p.Command.ContextGroupID, p.Command.SubjectID, now); err != errTrainingPlacementInvalid || got.verified {
+		t.Fatalf("alternate representation became a verified command: %v", err)
+	}
+}

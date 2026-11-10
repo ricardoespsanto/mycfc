@@ -85,3 +85,35 @@ func TestTrainingPlacementSelectionFingerprintBindsExactSubset(t *testing.T) {
 		t.Fatal("subset/token substitution retained intent fingerprint")
 	}
 }
+
+func TestTrainingPlacementSelectionRejectsMalformedOrOversizeOffer(t *testing.T) {
+	p, in, now := placementSelectionFixture(t)
+	s := focusedWorkoutSigner{key: [32]byte{18}}
+	proof, err := s.signPlacementSelection(p, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		proof   string
+		members []uuid.UUID
+	}{
+		{"missing signature", strings.SplitN(proof, ".", 2)[0], in.MembershipIDs},
+		{"malformed encoded offer", "%%%%." + strings.SplitN(proof, ".", 2)[1], in.MembershipIDs},
+		{"oversize offer", strings.Repeat("x", placementSelectionMaxBytes+1), in.MembershipIDs},
+		{"empty selection", proof, nil},
+		{"too many selected", proof, make([]uuid.UUID, 21)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			submitted := in
+			submitted.MembershipIDs = tc.members
+			got, err := s.verifyPlacementSelection(tc.proof, submitted, now)
+			if err != errTrainingPlacementInvalid || got != nil {
+				t.Fatalf("malformed offer produced reviews: %d, %v", len(got), err)
+			}
+		})
+	}
+	if got, err := s.signPlacementSelection(p, time.Unix(-1, 0)); err != errFocusedWorkoutLimit || got != "" {
+		t.Fatalf("invalid issuance clock produced offer: %v", err)
+	}
+}

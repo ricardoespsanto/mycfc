@@ -13,10 +13,17 @@ import (
 
 type placementBatchFake struct {
 	*placementTxFake
-	prepared, touched, groupReads int
-	replayMode                    string
-	groupErr                      error
-	afterTouchClock               time.Time
+	prepared, touched, groupReads  int
+	replayMode                     string
+	clockErr, prepareErr, groupErr error
+	afterGroupClock                time.Time
+}
+
+func (q *placementBatchFake) PlacementDecisionAt(ctx context.Context) (time.Time, error) {
+	if q.clockErr != nil {
+		return time.Time{}, q.clockErr
+	}
+	return q.placementTxFake.PlacementDecisionAt(ctx)
 }
 
 func (q *placementBatchFake) PreparePlacementBatch(_ context.Context, _ TrainingGroupRosterInput, reviews []trainingPlacementReviewed) error {
@@ -26,15 +33,15 @@ func (q *placementBatchFake) PreparePlacementBatch(_ context.Context, _ Training
 			return errTrainingPlacementInvalid
 		}
 	}
-	return nil
+	return q.prepareErr
 }
 func (q *placementBatchFake) PlacementBatchGroup(_ context.Context, _, group uuid.UUID, touch bool) (TrainingGroupRecord, error) {
 	q.groupReads++
 	if touch {
 		q.touched++
-		if !q.afterTouchClock.IsZero() {
-			q.clock = q.afterTouchClock
-		}
+	}
+	if !q.afterGroupClock.IsZero() {
+		q.clock = q.afterGroupClock
 	}
 	return TrainingGroupRecord{ID: group}, q.groupErr
 }
@@ -133,6 +140,9 @@ func TestPlacementBatchStopsBeforeWritesWhenAdmissionOrReceiptChanges(t *testing
 		{"runtime unavailable", func(q *placementBatchFake, _ *TrainingGroupRosterInput, _ []trainingPlacementReviewed) {
 			q.errorRuntime = errTrainingPlacementUnavailable
 		}, errTrainingPlacementUnavailable},
+		{"database clock unavailable", func(q *placementBatchFake, _ *TrainingGroupRosterInput, _ []trainingPlacementReviewed) {
+			q.clockErr = errTrainingPlacementUnavailable
+		}, errTrainingPlacementUnavailable},
 		{"unverified review", func(_ *placementBatchFake, _ *TrainingGroupRosterInput, r []trainingPlacementReviewed) {
 			r[0].verified = false
 		}, errTrainingPlacementInvalid},
@@ -152,6 +162,16 @@ func TestPlacementBatchStopsBeforeWritesWhenAdmissionOrReceiptChanges(t *testing
 			q.replayMode = "all"
 			q.groupErr = pgx.ErrNoRows
 		}, pgx.ErrNoRows},
+		{"retained receipt expires during group read", func(q *placementBatchFake, _ *TrainingGroupRosterInput, r []trainingPlacementReviewed) {
+			q.replayMode = "all"
+			q.afterGroupClock = r[0].expiresAt
+		}, errTrainingPlacementInvalid},
+		{"group version changes before the batch lock", func(q *placementBatchFake, _ *TrainingGroupRosterInput, _ []trainingPlacementReviewed) {
+			q.prepareErr = ErrTrainingGroupConflict
+		}, ErrTrainingGroupConflict},
+		{"athlete leaves scope before fresh validation", func(q *placementBatchFake, _ *TrainingGroupRosterInput, _ []trainingPlacementReviewed) {
+			q.readErrors = map[string]error{"subject": pgx.ErrNoRows}
+		}, pgx.ErrNoRows},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q, in, reviews := placementBatchFixture(t)
@@ -166,9 +186,27 @@ func TestPlacementBatchStopsBeforeWritesWhenAdmissionOrReceiptChanges(t *testing
 
 func TestPlacementBatchRejectsExpiryAfterGroupTouch(t *testing.T) {
 	q, in, reviews := placementBatchFixture(t)
-	q.afterTouchClock = reviews[0].expiresAt
+	q.afterGroupClock = reviews[0].expiresAt
 	out, err := saveTrainingPlacementBatch(t.Context(), q, in, reviews)
 	if !errors.Is(err, errTrainingPlacementInvalid) || q.applyCalls != 1 || q.touched != 1 || out.Added != 0 {
 		t.Fatalf("expired callback returned success %+v err=%v applies=%d touches=%d", out, err, q.applyCalls, q.touched)
+	}
+}
+
+func TestPlacementBatchDoesNotTouchGroupWhenApplyFails(t *testing.T) {
+	q, in, reviews := placementBatchFixture(t)
+	q.applyErr = errTrainingPlacementChanged
+	out, err := saveTrainingPlacementBatch(t.Context(), q, in, reviews)
+	if !errors.Is(err, errTrainingPlacementChanged) || q.applyCalls != 1 || q.groupReads != 0 || out.Added != 0 {
+		t.Fatalf("failed callback returned out=%+v err=%v applies=%d group reads=%d", out, err, q.applyCalls, q.groupReads)
+	}
+}
+
+func TestPlacementBatchRequiresAuthorizedGroupAfterApply(t *testing.T) {
+	q, in, reviews := placementBatchFixture(t)
+	q.groupErr = pgx.ErrNoRows
+	out, err := saveTrainingPlacementBatch(t.Context(), q, in, reviews)
+	if !errors.Is(err, pgx.ErrNoRows) || q.applyCalls != 1 || q.touched != 1 || out.Group.ID != uuid.Nil {
+		t.Fatalf("lost group authority produced a group result: out=%+v err=%v applies=%d touches=%d", out, err, q.applyCalls, q.touched)
 	}
 }
