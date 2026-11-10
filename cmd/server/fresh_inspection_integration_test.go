@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -85,6 +84,10 @@ func TestFreshLedgerInspectionRejectsMigrationOwnedCodeRealPostgres(t *testing.T
 	if ok, err := db.FreshInitializationMatchesWithInspector(ctx, receipt, inspector, "wrong_migration", "mycfc", releasecontract.Version, releasecontract.Candidate); err == nil || ok {
 		t.Fatal("wrong expected migration identity accepted")
 	}
+	// Fresh schema mutation is fenced even when no publisher has served yet.
+	if _, err := receipt.Exec(ctx, `ALTER ROLE inspection_web NOLOGIN`); err != nil {
+		t.Fatal(err)
+	}
 	// Legitimate command dispatch opens the separate migration connection for
 	// privileged bootstrap/hardening and reuses migration authentication for migrate.
 	for _, command := range []string{"bootstrap-db", "harden-db"} {
@@ -103,15 +106,17 @@ func TestFreshLedgerInspectionRejectsMigrationOwnedCodeRealPostgres(t *testing.T
 	}
 	t.Setenv("DATABASE_URL", raw)
 	// Observe real authentication/role catalogs, but fail the regression if
-	// either refused command reaches any migration transaction or statement.
+	// either refused command reaches any migration statement. Catalog-only
+	// inspection now legitimately uses its own read-only transaction.
 	previousConnect := connectDatabaseCommand
 	var deniedExecutionAttempts int
 	connectDatabaseCommand = func(ctx context.Context, raw string) (databaseCommandConnection, error) {
-		conn, err := pgx.Connect(ctx, raw)
+		cfg, err := pgx.ParseConfig(raw)
 		if err != nil {
 			return nil, err
 		}
-		return migrationExecutionCanaryConn{Conn: conn, attempts: &deniedExecutionAttempts}, nil
+		cfg.Tracer = migrationExecutionCanaryTracer{attempts: &deniedExecutionAttempts}
+		return pgx.ConnectConfig(ctx, cfg)
 	}
 	t.Cleanup(func() { connectDatabaseCommand = previousConnect })
 	if err := runServerCommand(ctx, []string{"migrate"}); err == nil || err.Error() != "migration execution requires its authenticated non-superuser identity" {
@@ -280,16 +285,19 @@ func (t *freshLedgerSwapTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn
 }
 func (*freshLedgerSwapTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-type migrationExecutionCanaryConn struct {
-	*pgx.Conn
-	attempts *int
-}
+type migrationExecutionCanaryTracer struct{ attempts *int }
 
-func (c migrationExecutionCanaryConn) Begin(context.Context) (pgx.Tx, error) {
-	*c.attempts++
-	return nil, errors.New("forbidden migration transaction")
+func (c migrationExecutionCanaryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, query pgx.TraceQueryStartData) context.Context {
+	sql := strings.ToUpper(strings.TrimSpace(query.SQL))
+	for _, prefix := range []string{"CREATE", "ALTER", "INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE", "DO "} {
+		if strings.HasPrefix(sql, prefix) {
+			*c.attempts++
+			denied, cancel := context.WithCancel(ctx)
+			cancel()
+			return denied
+		}
+	}
+	return ctx
 }
-func (c migrationExecutionCanaryConn) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
-	*c.attempts++
-	return pgconn.CommandTag{}, errors.New("forbidden migration statement")
+func (migrationExecutionCanaryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
 }

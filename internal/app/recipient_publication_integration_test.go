@@ -78,7 +78,7 @@ func TestFreshRecipientPublicationActualApplicationSessionCSRF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = low.Exec(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,3)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New(), strings.Repeat("a", 64)); err != nil {
+	if _, err = low.Exec(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,5)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New(), strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
 	}
 	u, _ := url.Parse(raw)
@@ -110,6 +110,9 @@ func TestFreshRecipientPublicationActualApplicationSessionCSRF(t *testing.T) {
 		membership := uuid.New()
 		execute(`INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) VALUES($1,$2,$3,$4,CURRENT_DATE,CURRENT_DATE+300)`, membership, subject, season, programme)
 		execute(`INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, group, membership, actor)
+		if subject == adult {
+			joinFreshAppTrainingPlacement(t, u.String(), actor, subject, programme, season, group)
+		}
 	}
 	execute(`INSERT INTO training_plans(id,title,programme_id,training_group_id,season_id,week_start,created_by_id) VALUES($1,'Actual native week',$2,$3,$4,date_trunc('week',CURRENT_DATE)::date+7,$5)`, plan, programme, group, season, actor)
 	execute(`INSERT INTO training_sessions(id,plan_id,title,starts_at,ends_at,created_by_id) SELECT $1,id,'Actual native session',(week_start::timestamp AT TIME ZONE 'Europe/Lisbon')+interval '10 hours',(week_start::timestamp AT TIME ZONE 'Europe/Lisbon')+interval '11 hours',$3 FROM training_plans WHERE id=$2`, session, plan, actor)
@@ -196,6 +199,17 @@ func TestFreshRecipientPublicationActualApplicationSessionCSRF(t *testing.T) {
 	if status != 200 || !strings.Contains(body, "Approved adult") || strings.Contains(body, "Private excluded dependent") || !strings.Contains(headers.Get("Cache-Control"), "no-store") || headers.Get("Referrer-Policy") != "no-referrer" {
 		t.Fatalf("private actual preview status%d", status)
 	}
+	confirmationForm := func(body string) string {
+		t.Helper()
+		for _, form := range regexp.MustCompile(`(?s)<form\b[^>]*>.*?</form>`).FindAllString(body, -1) {
+			if strings.Contains(form, `name="publication_intent" value="confirm"`) {
+				return form
+			}
+		}
+		t.Fatal("native confirmation form missing")
+		return ""
+	}
+	body = confirmationForm(body)
 	confirm := url.Values{}
 	for _, name := range []string{"publication_intent", "confirm", "change_summary", "source_updated_at", "review_token", "reviewed_latest_id", "reviewed_latest_revision", "return_group", "return_week", "return_session", "return_day", "gorilla.csrf.Token"} {
 		confirm.Set(name, field(body, name))
@@ -218,6 +232,7 @@ func TestFreshRecipientPublicationActualApplicationSessionCSRF(t *testing.T) {
 	if status != 200 {
 		t.Fatal("fresh current review", status)
 	}
+	body = confirmationForm(body)
 	fresh := url.Values{}
 	for _, name := range []string{"publication_intent", "confirm", "change_summary", "source_updated_at", "review_token", "reviewed_latest_id", "reviewed_latest_revision", "return_group", "return_week", "return_session", "return_day", "gorilla.csrf.Token"} {
 		fresh.Set(name, field(body, name))

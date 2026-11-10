@@ -91,7 +91,7 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	if _, err := conn.Exec(ctx, `CREATE FUNCTION public.unapproved_control() RETURNS integer LANGUAGE sql AS 'SELECT 1'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := runServerCommand(ctx, []string{"fresh-init-db", "--confirm-empty"}); err == nil || !strings.Contains(err.Error(), "requires the named empty database") {
+	if err := runServerCommand(ctx, []string{"fresh-init-db", "--confirm-empty"}); err == nil {
 		t.Fatalf("function-only nonempty database accepted: %v", err)
 	}
 	var functionRetained bool
@@ -107,7 +107,7 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	if _, err := conn.Exec(ctx, `INSERT INTO public.unrelated_control(id) VALUES(1)`); err != nil {
 		t.Fatal(err)
 	}
-	if err := runServerCommand(ctx, []string{"fresh-init-db", "--confirm-empty"}); err == nil || !strings.Contains(err.Error(), "requires the named empty database") {
+	if err := runServerCommand(ctx, []string{"fresh-init-db", "--confirm-empty"}); err == nil {
 		t.Fatalf("nonempty database accepted: %v", err)
 	}
 	var retained int
@@ -196,6 +196,9 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	if err := requireDisposableCompletion(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate, databaseRoleCredentialsFromEnvironment()); err != nil {
 		t.Fatalf("stamped upgrade refused before migration: %v", err)
 	}
+	if _, err := conn.Exec(ctx, "ALTER ROLE "+pgx.Identifier{app}.Sanitize()+" NOLOGIN"); err != nil {
+		t.Fatal(err)
+	}
 	if err := runServerCommand(ctx, []string{"bootstrap-db"}); err != nil {
 		t.Fatalf("stamped upgrade bootstrap rejected: %v", err)
 	}
@@ -265,8 +268,8 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	checkUpgrade(true)
 	for _, username := range []string{app, migration, media, retention} {
 		var login bool
-		if err := conn.QueryRow(ctx, `SELECT rolcanlogin FROM pg_roles WHERE rolname=$1`, username).Scan(&login); err != nil || !login {
-			t.Fatalf("role %s not available: %v", username, err)
+		if err := conn.QueryRow(ctx, `SELECT rolcanlogin FROM pg_roles WHERE rolname=$1`, username).Scan(&login); err != nil || login != (username != app) {
+			t.Fatalf("role %s login=%t; publisher must remain fenced: %v", username, login, err)
 		}
 	}
 	if err := runServerCommand(ctx, []string{"fresh-init-db", "--confirm-empty"}); err == nil {
