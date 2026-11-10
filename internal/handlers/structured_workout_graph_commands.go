@@ -91,23 +91,27 @@ func focusedGraphPreorder(p focusedGraphPhase) []string {
 }
 func focusedGraphUsedKeys(d focusedGraphDraft) map[string]bool {
 	used := map[string]bool{}
-	remember := func(paths map[string]bool) {
-		for p := range paths {
-			for _, part := range strings.Split(p, "[")[1:] {
-				if i := strings.Index(part, "]"); i >= 0 {
-					used[part[:i]] = true
-				}
+	remember := func(path string) {
+		for _, part := range strings.Split(path, "[")[1:] {
+			if i := strings.Index(part, "]"); i >= 0 {
+				used[part[:i]] = true
 			}
 		}
 	}
-	remember(focusedGraphPaths(d))
+	for path := range focusedGraphPaths(d) {
+		remember(path)
+	}
 	for _, r := range d.Removed {
 		used[r.Key] = true
 		var t focusedGraphTombstone
 		if focusedStrictJSON([]byte(r.Payload), &t) == nil {
-			g, _, _, e := focusedGraphTombstoneGraph(t)
-			if e == nil {
-				remember(focusedGraphPaths(g))
+			for _, key := range []string{t.Activity, t.Phase, t.Item, t.Parent} {
+				if key != "" {
+					used[key] = true
+				}
+			}
+			for path := range t.Values {
+				remember(path)
 			}
 		}
 	}
@@ -117,6 +121,9 @@ func focusedGraphUsedKeys(d focusedGraphDraft) map[string]bool {
 // All commands operate on an already structurally validated draft, clone before
 // mutation, and reparse the complete active+removed transport before returning.
 func applyFocusedGraphCommand(original focusedGraphDraft, command string) (focusedGraphDraft, error) {
+	return applyFocusedGraphCommandUsing(original, command, parseFocusedGraph)
+}
+func applyFocusedGraphCommandUsing(original focusedGraphDraft, command string, parse func(url.Values) (focusedGraphDraft, error)) (focusedGraphDraft, error) {
 	d := original
 	d.Values = cloneFocusedValues(original.Values)
 	d.Removed = append([]focusedGraphRemoval(nil), original.Removed...)
@@ -422,7 +429,7 @@ func applyFocusedGraphCommand(original focusedGraphDraft, command string) (focus
 		key := focusedGraphNewKey("r_", used)
 		d.Removed = append(d.Removed, focusedGraphRemoval{key, tomb.Kind, focusedGraphTombstoneJSON(*tomb)})
 	}
-	reparsed, err := parseFocusedGraph(focusedGraphValues(d))
+	reparsed, err := parse(focusedGraphValues(d))
 	if err != nil {
 		return original, err
 	}

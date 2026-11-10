@@ -14,6 +14,10 @@ import (
 // Shared process-local, purpose-bound envelope for the same native task flow.
 // Semantic parsers remain responsible for their typed normalized payload.
 func (s focusedWorkoutSigner) signNative(raw []byte, draft url.Values, c FocusedWorkoutContext, purpose string, now time.Time) (string, string, error) {
+	fields := map[string]string{"group_id": c.GroupID.String(), "plan_id": c.PlanID.String(), "session_id": "", "day": c.Day, "expected_plan_updated_at": c.PlanUpdatedAt.Format(time.RFC3339Nano), "expected_session_updated_at": "", "source_digest": c.Digest(), "database_incarnation": c.DatabaseIncarnation.String(), "state_epoch": strconv.FormatInt(c.StateEpoch, 10)}
+	return s.signNativeFields(raw, draft, fields, purpose, now)
+}
+func (s focusedWorkoutSigner) signNativeFields(raw []byte, draft url.Values, fields map[string]string, purpose string, now time.Time) (string, string, error) {
 	if len(raw) > focusedWorkoutMaxRequestBytes || now.Unix() < 0 {
 		return "", "", errFocusedWorkoutLimit
 	}
@@ -32,7 +36,7 @@ func (s focusedWorkoutSigner) signNative(raw []byte, draft url.Values, c Focused
 	editor.Set("prior_proposal", string(raw))
 	editor.Set("prior_review_token", token)
 	editor.Set("gorilla.csrf.Token", strings.Repeat("x", 256))
-	for k, v := range map[string]string{"group_id": c.GroupID.String(), "plan_id": c.PlanID.String(), "session_id": "", "day": c.Day, "expected_plan_updated_at": c.PlanUpdatedAt.Format(time.RFC3339Nano), "expected_session_updated_at": "", "source_digest": c.Digest(), "database_incarnation": c.DatabaseIncarnation.String(), "state_epoch": strconv.FormatInt(c.StateEpoch, 10)} {
+	for k, v := range fields {
 		editor.Set(k, v)
 	}
 	if len(confirm.Encode()) > focusedWorkoutMaxRequestBytes || len(editor.Encode()) > focusedWorkoutMaxRequestBytes {

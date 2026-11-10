@@ -14,7 +14,7 @@ type StructuredWorkspaceWeekChoice struct {
 type StructuredWorkspaceAppointment struct {
 	Precision, Band, Label string
 	TimeUnknown, EndUnknown bool
-	ID, Title, StartsOn, EndsOn, StartsAt, EndsAt, EntryKind, Status, URL string
+	ID, Title, StartsOn, EndsOn, StartsAt, EndsAt, EntryKind, Status, URL, EditURL, CancelURL string
 	Modalities                                                            []string
 	Selected                                                              bool
 }
@@ -170,12 +170,22 @@ templ structuredWorkspaceBand(label string, appointments []StructuredWorkspaceAp
 							if appointment.Status == "CANCELLED" {
 								<span class="badge badge--error">Cancelada</span>
 							}
-						</a>
+						</a>@structuredWorkspaceAppointmentActions(appointment)
 					</li>
 				}
 			</ul>
 		}
 	</section>
+}
+
+templ structuredWorkspaceAppointmentActions(appointment StructuredWorkspaceAppointment) {
+
+						if appointment.EditURL != "" {
+							<a class="action action--quiet" href={ templ.SafeURL(appointment.EditURL) } aria-label={ "Alterar · " + appointment.Title + " · " + appointment.StartsOn + " · " + structuredWorkspaceTime(appointment) }>Alterar</a>
+						}
+						if appointment.CancelURL != "" {
+							<a class="action action--quiet" href={ templ.SafeURL(appointment.CancelURL) } aria-label={ "Cancelar · " + appointment.Title + " · " + appointment.StartsOn + " · " + structuredWorkspaceTime(appointment) }>Cancelar</a>
+						}
 }
 
 templ structuredWorkspacePublication(workspace StructuredWeekWorkspace) {

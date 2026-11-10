@@ -830,8 +830,8 @@ func TestGenericWorkoutCreateProofAndHonestDraftReview(t *testing.T) {
 	p.ProposalJSON = `{"existing":true}`
 	p.ReviewToken = "edit-token"
 	body = renderWorkout(t, p)
-	if !strings.Contains(body, "Guardar treino") || strings.Contains(body, "Guardar rascunho") {
-		t.Fatal("future generic EDIT copy must remain unchanged")
+	if !strings.Contains(body, "Guardar alterações") || strings.Contains(body, "Guardar rascunho") {
+		t.Fatal("generic EDIT must label the draft changes explicitly")
 	}
 }
 
@@ -926,5 +926,147 @@ func TestGenericWorkoutCreateOptionalExplicitEndTiming(t *testing.T) {
 		body := renderWorkout(t, p)
 		assertWorkoutValue(t, body, "schedule.end_time", "raw-conflict")
 		p.Values.Del("schedule.end_time")
+	}
+}
+
+func TestWorkoutEditProfilePinsRemainScopedToCurrentFieldValue(t *testing.T) {
+	p := workoutFixture()
+	p.Editing = true
+	p.Context.SessionID = "existing-session"
+	p.Context.EntryKind = "TRAINING"
+	p.Activities[0].Phases = append(p.Activities[0].Phases, StructuredWorkoutPhase{Key: "p_2"})
+	first := "activities[a_1].phases[p_1].water.profile_id"
+	second := "activities[a_1].phases[p_2].water.profile_id"
+	label := "Canoa <retirado> & revisão 2"
+	p.Profiles = []StructuredWorkoutChoice{{Value: "active-profile", Label: "Perfil ativo"}}
+	p.PinnedProfiles = map[string]StructuredWorkoutChoice{first: {Value: "retired-profile", Label: label}}
+	p.Values.Set(first, "retired-profile")
+	selectMarkup := func(body, name string) string {
+		t.Helper()
+		for _, match := range regexp.MustCompile(`(?s)<select\b[^>]*>.*?</select>`).FindAllString(body, -1) {
+			if value, _ := workoutAttr(strings.SplitN(match, ">", 2)[0]+">", "name"); value == name {
+				return match
+			}
+		}
+		t.Fatalf("missing select %s", name)
+		return ""
+	}
+	body := renderWorkout(t, p)
+	if !strings.Contains(selectMarkup(body, first), html.EscapeString(label)) || strings.Contains(body, "<retirado>") {
+		t.Fatal("current field must retain the trusted escaped pinned name")
+	}
+	if got := strings.Join(workoutOptionValues(t, body, second), ","); got != ",active-profile" {
+		t.Fatal("retired pin leaked into a new phase catalog: " + got)
+	}
+	p.Values.Set(second, "retired-profile")
+	body = renderWorkout(t, p)
+	if strings.Contains(selectMarkup(body, second), html.EscapeString(label)) || !strings.Contains(selectMarkup(body, second), "Valor introduzido:") {
+		t.Fatal("unmapped raw reference must stay raw, never acquire another field's pinned name")
+	}
+	p.Values.Del(second)
+	p.Values.Set(first, "")
+	body = renderWorkout(t, p)
+	if strings.Contains(selectMarkup(body, first), "retired-profile") {
+		t.Fatal("cleared own selection must not be restored or offered as a default")
+	}
+	p.Values.Set(first, "active-profile")
+	if body = renderWorkout(t, p); strings.Contains(selectMarkup(body, first), html.EscapeString(label)) {
+		t.Fatal("changed current value must not keep the retired option")
+	}
+	p.Values.Set(first, "retired-profile")
+	p.Profiles = []StructuredWorkoutChoice{{Value: "retired-profile", Label: "Nome do catálogo ativo"}}
+	body = renderWorkout(t, p)
+	if strings.Count(selectMarkup(body, first), `value="retired-profile"`) != 1 || strings.Contains(selectMarkup(body, first), html.EscapeString(label)) {
+		t.Fatal("active catalog choice must not be duplicated/overwritten by a pin")
+	}
+	p.Profiles = nil
+	p.ProfilesMessage = "Não foi possível apresentar o catálogo completo. Não foi selecionado um perfil automaticamente."
+	body = renderWorkout(t, p)
+	if !strings.Contains(body, p.ProfilesMessage) || !strings.Contains(selectMarkup(body, first), html.EscapeString(label)) || strings.Join(workoutOptionValues(t, body, second), ",") != "" {
+		t.Fatal("catalog overflow must retain only the explicit scoped reference and honest message")
+	}
+}
+
+func TestWorkoutStaleEditReloadKeepsOwnRawDraftAndProof(t *testing.T) {
+	p := workoutFixture()
+	p.Editing = true
+	p.Context.SessionID = "existing-session"
+	p.Context.EntryKind = "TRAINING"
+	p.PreviewURL = ""
+	p.ReloadURL = "/workout/current?week=plan&day=2026-11-09"
+	p.Message = "O treino mudou. Copie as suas instruções antes de recarregar o treino atual."
+	p.Values.Set("title", `Título próprio <copiar>`)
+	p.Values.Set("schedule.start_time", "25:92")
+	p.Values.Set("activities[a_1].phases[p_1].instructions", "Texto próprio\nSegunda linha <segura>")
+	p.ProposalJSON = `{"original":"signed-id"}`
+	p.ReviewToken = `original-token<&"`
+	body := renderWorkout(t, p)
+	for name, want := range map[string]string{"title": p.Values.Get("title"), "schedule.start_time": "25:92", "prior_proposal": p.ProposalJSON, "prior_review_token": p.ReviewToken} {
+		assertWorkoutValue(t, body, name, want)
+	}
+	if _, readonly := workoutAttr(workoutControl(t, body, "title"), "readonly"); readonly {
+		t.Fatal("stale edit must keep own text copyable/editable")
+	}
+	if _, readonly := workoutAttr(workoutControl(t, body, "schedule.date"), "readonly"); readonly {
+		t.Fatal("existing EDIT date behavior must remain")
+	}
+	if !strings.Contains(body, html.EscapeString(p.Values.Get("activities[a_1].phases[p_1].instructions"))) || !strings.Contains(body, p.Message) || strings.Contains(body, `value="preview"`) {
+		t.Fatal("stale draft retention/preview suppression changed")
+	}
+	for _, href := range []string{p.ReturnURL, p.ReloadURL} {
+		if !strings.Contains(body, `href="`+html.EscapeString(href)+`"`) {
+			t.Fatal("missing distinct week/reload recovery")
+		}
+	}
+	if !strings.Contains(body, "Recarregar treino atual") || strings.Contains(body, "Treino disponível para consulta") {
+		t.Fatal("reload recovery must not enter raw-hiding ReadOnly mode")
+	}
+	for _, tag := range workoutTags(body, "a") {
+		href, _ := workoutAttr(tag, "href")
+		if strings.Contains(href, "original-token") || strings.Contains(href, "signed-id") {
+			t.Fatal("proof must never enter a recovery URL")
+		}
+	}
+	p.ReloadURL = ""
+	if body = renderWorkout(t, p); strings.Contains(body, "Recarregar treino atual") {
+		t.Fatal("default absent reload URL must not offer an empty action")
+	}
+}
+
+func TestWorkoutEditReviewExplainsDraftChangesAndPreservesCreateCopy(t *testing.T) {
+	for _, tc := range []struct {
+		editing   bool
+		sessionID string
+	}{{false, ""}, {true, ""}, {false, "existing-session"}, {true, "existing-session"}} {
+		p := workoutFixture()
+		p.Editing = tc.editing
+		p.Context.SessionID = tc.sessionID
+		p.Context.EntryKind = "TRAINING"
+		p.Reviewing = true
+		p.Preview = StructuredWorkoutInstructions(focusedInstructionFixture())
+		p.ProposalJSON = `{"review":"same-identity"}`
+		p.ReviewToken = "signed-review"
+		body := renderWorkout(t, p)
+		isEdit := tc.editing || tc.sessionID != ""
+		if !strings.Contains(body, "instruções de base") {
+			t.Fatal("both contexts must distinguish base instructions")
+		}
+		if isEdit {
+			if !strings.Contains(body, "Confirmar guarda as alterações no rascunho") || !strings.Contains(body, "a publicação para os atletas é uma ação separada") || !strings.Contains(body, "Guardar alterações") || strings.Contains(body, "Guardar rascunho") {
+				t.Fatal("EDIT must review draft changes without implying athlete publication")
+			}
+		} else if !strings.Contains(body, "Confirmar guarda um rascunho; não publica para os atletas.") || !strings.Contains(body, "Guardar rascunho") || strings.Contains(body, "Guardar alterações") {
+			t.Fatal("CREATE review copy changed")
+		}
+		forms := regexp.MustCompile(`(?s)<form\b.*?</form>`).FindAllString(body, -1)
+		if len(forms) != 2 || strings.Contains(forms[1], `name="prior_`) {
+			t.Fatal("confirm transport must stay separate")
+		}
+		assertWorkoutValue(t, forms[0], "prior_proposal", p.ProposalJSON)
+		assertWorkoutValue(t, forms[1], "proposal", p.ProposalJSON)
+		p.ReviewToken = ""
+		if body = renderWorkout(t, p); strings.Contains(body, `action="/workout/confirm"`) {
+			t.Fatal("copy change must not bypass signed confirmation requirements")
+		}
 	}
 }

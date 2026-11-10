@@ -212,6 +212,14 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 		mux.Handle("POST "+base+"/rascunho", protect(task.Draft))
 		mux.Handle("POST "+base+"/prever", protect(task.Preview))
 		mux.Handle("POST "+base+"/confirmar", protect(task.Confirm))
+		edit := "/admin/treinos/estruturados/semanas/{plan}/treinos/{id}/editar"
+		mux.Handle("GET "+edit, protect(task.Edit))
+		mux.Handle("POST "+edit+"/rascunho", protect(task.EditDraft))
+		mux.Handle("POST "+edit+"/prever", protect(task.EditPreview))
+		mux.Handle("POST "+edit+"/confirmar", protect(task.EditConfirm))
+		cancellation := "/admin/treinos/estruturados/semanas/{plan}/treinos/{id}/cancelar"
+		mux.Handle("GET "+cancellation, protect(task.CancelEdit))
+		mux.Handle("POST "+cancellation, protect(task.CancelEdit))
 	}
 	mux.Handle("POST /admin/treinos/estruturados/sessoes", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateSession))))
 	mux.Handle("POST /admin/treinos/estruturados/sessoes/{id}/segmentos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateSegment))))

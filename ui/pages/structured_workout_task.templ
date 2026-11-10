@@ -31,17 +31,18 @@ type StructuredWorkoutWaterNode struct{ Key, ID, ParentKey string }
 type StructuredWorkoutExercise struct{ Key, ID string }
 type StructuredWorkoutRemoval struct{ Kind, Key, ID, Label, Payload string }
 type StructuredWorkoutTaskPage struct {
-	Meta                                                                           components.PageMeta
-	CSRFField, Preview                                                             templ.Component
-	DraftURL, PreviewURL, ConfirmURL, ReturnURL, AdvancedURL, GroupName, WeekTitle string
-	Context                                                                        StructuredWorkoutContext
-	Values                                                                         url.Values
-	Errors                                                                         validation.FieldErrors
-	Activities                                                                     []StructuredWorkoutActivity
-	Removed                                                                        []StructuredWorkoutRemoval
-	Profiles, StartOccurrences, EndOccurrences                                     []StructuredWorkoutChoice
-	ProfilesMessage, Message, ProposalJSON, ReviewToken                            string
-	Editing, ReadOnly, Reviewing, WaterCreateOnly                                  bool
+	Meta                                                                                      components.PageMeta
+	CSRFField, Preview                                                                        templ.Component
+	DraftURL, PreviewURL, ConfirmURL, ReturnURL, ReloadURL, AdvancedURL, GroupName, WeekTitle string
+	Context                                                                                   StructuredWorkoutContext
+	Values                                                                                    url.Values
+	Errors                                                                                    validation.FieldErrors
+	Activities                                                                                []StructuredWorkoutActivity
+	Removed                                                                                   []StructuredWorkoutRemoval
+	Profiles, StartOccurrences, EndOccurrences                                                []StructuredWorkoutChoice
+	PinnedProfiles                                                                            map[string]StructuredWorkoutChoice
+	ProfilesMessage, Message, ProposalJSON, ReviewToken                                       string
+	Editing, ReadOnly, Reviewing, WaterCreateOnly                                             bool
 }
 type workoutHiddenField struct{ Name, Value string }
 
@@ -129,6 +130,20 @@ func workoutHasOption(options []StructuredWorkoutChoice, value string) bool {
 	}
 	return false
 }
+
+// Pinned names are caller-scoped to one exact profile field, never a catalog.
+func workoutProfileOptions(page StructuredWorkoutTaskPage, fieldName string) []StructuredWorkoutChoice {
+	pin, ok := page.PinnedProfiles[fieldName]
+	if !ok || pin.Value == "" || page.Values.Get(fieldName) != pin.Value || workoutHasOption(page.Profiles, pin.Value) {
+		return page.Profiles
+	}
+	out := append([]StructuredWorkoutChoice(nil), page.Profiles...)
+	return append(out, pin)
+}
+func workoutReviewIsEdit(page StructuredWorkoutTaskPage) bool {
+	return page.Editing || page.Context.SessionID != ""
+}
+
 func workoutScheduleOptions(page StructuredWorkoutTaskPage) []StructuredWorkoutChoice {
 	startLabel := "Só hora de início"
 	if page.Context.SessionID == "" {
@@ -569,6 +584,9 @@ templ structuredWorkoutRecovery(page StructuredWorkoutTaskPage) {
 		if page.ReturnURL!="" {
 			<a class="action action--quiet" href={ templ.SafeURL(page.ReturnURL) }>Voltar à semana</a>
 		}
+		if page.ReloadURL != "" {
+			<a class="action action--quiet" href={ templ.SafeURL(page.ReloadURL) }>Recarregar treino atual</a>
+		}
 		if page.AdvancedURL!="" {
 			<a class="action action--quiet" href={ templ.SafeURL(page.AdvancedURL) }>Mais opções de planeamento</a>
 		}
@@ -746,7 +764,7 @@ templ structuredWorkoutWater(page StructuredWorkoutTaskPage, a StructuredWorkout
 	<details open?={ len(p.WaterNodes)>0||page.Values.Get(workoutPrefix(a.Key,p.Key)+".detail_mode")=="WATER"||workoutSectionOpen(page,workoutPrefix(a.Key,p.Key)+".water") }>
 		<summary>Detalhar intervalos de água</summary>
 		@structuredWorkoutSelect(page, workoutPrefix(a.Key, p.Key)+".water.method", "Método", []StructuredWorkoutChoice{{"CONTINUOUS", "Contínuo"}, {"INTERVALS", "Intervalado"}, {"FARTLEK", "Fartlek"}, {"TECHNIQUE", "Técnica"}, {"STARTS", "Partidas"}, {"RACE_SIMULATION", "Simulação de prova"}, {"TACTICAL_DRILL", "Tático"}, {"CUSTOM", "Personalizado"}}, page.Values.Get(workoutPrefix(a.Key, p.Key)+".detail_mode") == "WATER", "")
-		@structuredWorkoutSelect(page, workoutPrefix(a.Key, p.Key)+".water.profile_id", "Perfil de intensidade (opcional)", page.Profiles, false, "Escolha uma revisão apenas quando estiver confirmada. Não é escolhido um perfil automaticamente.")
+		@structuredWorkoutSelect(page, workoutPrefix(a.Key, p.Key)+".water.profile_id", "Perfil de intensidade (opcional)", workoutProfileOptions(page, workoutPrefix(a.Key, p.Key)+".water.profile_id"), false, "Escolha uma revisão apenas quando estiver confirmada. Não é escolhido um perfil automaticamente.")
 		if page.ProfilesMessage!="" {
 			<p>{ page.ProfilesMessage }</p>
 		}
@@ -856,7 +874,9 @@ templ structuredWorkoutExerciseForm(page StructuredWorkoutTaskPage, a Structured
 templ structuredWorkoutReview(page StructuredWorkoutTaskPage) {
 	<section aria-labelledby="workout-preview-heading">
 		<h2 id="workout-preview-heading">Pré-visualização do treino</h2>
-		if page.WaterCreateOnly || page.Context.SessionID == "" {
+		if workoutReviewIsEdit(page) {
+			<p>Estas são as instruções de base do treino, antes de adaptações individuais. Confirmar guarda as alterações no rascunho; a publicação para os atletas é uma ação separada.</p>
+		} else {
 			<p>Estas são as instruções de base do treino, antes de adaptações individuais. Confirmar guarda um rascunho; não publica para os atletas.</p>
 		}
 		if page.Message!="" {
@@ -879,10 +899,10 @@ templ structuredWorkoutReview(page StructuredWorkoutTaskPage) {
 					<input type="hidden" name="proposal" value={ page.ProposalJSON }/>
 					<input type="hidden" name="review_token" value={ page.ReviewToken }/>
 					<button class="action action--primary" type="submit">
-						if page.WaterCreateOnly || page.Context.SessionID == "" {
-							Guardar rascunho
+						if workoutReviewIsEdit(page) {
+							Guardar alterações
 						} else {
-							Guardar treino
+							Guardar rascunho
 						}
 					</button>
 				</form>

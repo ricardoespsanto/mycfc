@@ -216,3 +216,19 @@ func buildStructuredWeekWorkspace(audiences []pages.StructuredTrainingAudience, 
 	}
 	return out
 }
+
+// The manager overview has already scoped each row. Links are advisory only;
+// task GETs and transactions independently recheck scope and the actual DB clock.
+func applyFocusedWorkoutEditLinks(workspace *pages.StructuredWeekWorkspace, eligible map[string]bool) {
+	for i := range workspace.Days {
+		day := &workspace.Days[i]
+		for _, items := range [][]pages.StructuredWorkspaceAppointment{day.Morning, day.Afternoon, day.Unscheduled} {
+			for j := range items {
+				if eligible[items[j].ID] {
+					items[j].EditURL = focusedWorkoutEditURL(workspace.WeekID, items[j].ID)
+					items[j].CancelURL = focusedWorkoutCancelURL(workspace.WeekID, items[j].ID)
+				}
+			}
+		}
+	}
+}

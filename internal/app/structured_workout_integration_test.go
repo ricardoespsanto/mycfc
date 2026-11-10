@@ -451,6 +451,119 @@ func TestFreshWaterCreateActualApplicationSessionCSRF(t *testing.T) {
 			t.Fatal("native mixed duplicate identity", after, err)
 		}
 	})
+
+	t.Run("saved workout native edit and scoped cancellation", func(t *testing.T) {
+		futurePlan := uuid.New()
+		execute(`INSERT INTO training_plans(id,title,programme_id,training_group_id,season_id,week_start,created_by_id) VALUES($1,'Actual editable week',$2,$3,$4,date_trunc('week',CURRENT_DATE)::date+7,$5)`, futurePlan, programme, group, season, actor)
+		var sourceDay, proposedDay string
+		if err = root.QueryRow(t.Context(), `SELECT week_start::text,(week_start+1)::text FROM training_plans WHERE id=$1`, futurePlan).Scan(&sourceDay, &proposedDay); err != nil {
+			t.Fatal(err)
+		}
+		createBase := "/admin/treinos/estruturados/semanas/" + futurePlan.String() + "/treinos/criar"
+		status, body, _ = request("GET", createBase+"?day="+sourceDay, nil)
+		if status != 200 {
+			t.Fatal("edit fixture create", status)
+		}
+		editor := focusedNativeEditor(t, body)
+		editor.Set("title", "Treino original para alterar")
+		editor.Set("description", "Instruções de água originais.")
+		editor.Set("schedule.start_time", "15:00")
+		editor.Set("command", "preview")
+		status, body, _ = request("POST", createBase+"/prever", editor)
+		if status != 200 {
+			t.Fatal("edit fixture preview", status)
+		}
+		createApproval := url.Values{"intent": {"confirm"}, "proposal": {field(body, "proposal")}, "review_token": {field(body, "review_token")}, "gorilla.csrf.Token": {field(body, "gorilla.csrf.Token")}}
+		var created struct {
+			Proposal struct {
+				SessionID uuid.UUID `json:"session_id"`
+			} `json:"proposal"`
+		}
+		if err = json.Unmarshal([]byte(createApproval.Get("proposal")), &created); err != nil {
+			t.Fatal(err)
+		}
+		status, _, _ = request("POST", createBase+"/confirmar", createApproval)
+		if status != 303 {
+			t.Fatal("edit fixture save", status)
+		}
+		editBase := "/admin/treinos/estruturados/semanas/" + futurePlan.String() + "/treinos/" + created.Proposal.SessionID.String() + "/editar"
+		status, body, headers = request("GET", editBase, nil)
+		if status != 200 || !strings.Contains(headers.Get("Cache-Control"), "no-store") {
+			t.Fatal("actual private edit", status)
+		}
+		change := focusedNativeEditor(t, body)
+		oldVersion := change.Get("expected_session_updated_at")
+		if change.Get("session_id") != created.Proposal.SessionID.String() {
+			t.Fatal("edit lost session identity")
+		}
+		change.Set("title", "Título próprio alterado")
+		change.Set("description", "Texto editado\r\n\tcom identidade estável.")
+		change.Set("schedule.date", proposedDay)
+		change.Set("command", "preview")
+		status, body, _ = request("POST", editBase+"/prever", change)
+		if status != 200 || !strings.Contains(body, "Guardar alterações") {
+			t.Fatal("native edit preview", status, body[:min(len(body), 1200)])
+		}
+		approval := url.Values{"intent": {"confirm"}, "proposal": {field(body, "proposal")}, "review_token": {field(body, "review_token")}, "gorilla.csrf.Token": {field(body, "gorilla.csrf.Token")}}
+		// A real independent CREATE changes only the plan version. Confirmation is
+		// strict; deliberate re-preview may refresh only this unchanged own source.
+		status, body, _ = request("GET", createBase+"?day="+sourceDay, nil)
+		other := focusedNativeEditor(t, body)
+		other.Set("title", "Outro treino independente")
+		other.Set("description", "Instruções do outro treino.")
+		other.Set("schedule.start_time", "18:00")
+		other.Set("command", "preview")
+		status, body, _ = request("POST", createBase+"/prever", other)
+		if status != 200 {
+			t.Fatal("other preview", status)
+		}
+		otherApproval := url.Values{"intent": {"confirm"}, "proposal": {field(body, "proposal")}, "review_token": {field(body, "review_token")}, "gorilla.csrf.Token": {field(body, "gorilla.csrf.Token")}}
+		status, _, _ = request("POST", createBase+"/confirmar", otherApproval)
+		if status != 303 {
+			t.Fatal("other save", status)
+		}
+		status, body, _ = request("POST", editBase+"/confirmar", approval)
+		if status != 409 || field(body, "prior_proposal") != approval.Get("proposal") {
+			t.Fatal("plan-only stale edit", status)
+		}
+		retained := focusedNativeEditor(t, body)
+		if retained.Get("title") != "Título próprio alterado" || retained.Get("expected_session_updated_at") != oldVersion {
+			t.Fatal("stale edit rebased/lost own input")
+		}
+		retained.Set("command", "preview")
+		status, body, _ = request("POST", editBase+"/prever", retained)
+		if status != 200 {
+			t.Fatal("deliberate own-unchanged edit repreview", status)
+		}
+		revised := url.Values{"intent": {"confirm"}, "proposal": {field(body, "proposal")}, "review_token": {field(body, "review_token")}, "gorilla.csrf.Token": {field(body, "gorilla.csrf.Token")}}
+		status, _, headers = request("POST", editBase+"/confirmar", revised)
+		if status != 303 || !strings.Contains(headers.Get("Location"), "day="+proposedDay) || !strings.Contains(headers.Get("Location"), "session_id="+created.Proposal.SessionID.String()) {
+			t.Fatal("edit actual destination", status, headers.Get("Location"))
+		}
+		status, body, _ = request("POST", editBase+"/confirmar", revised)
+		if status != 409 || regexp.MustCompile(`<button\b[^>]*value="preview"`).MatchString(body) || !strings.Contains(body, `<textarea id="workout-description"`) {
+			t.Fatal("changed-own replay didn't give copyable terminal recovery", status)
+		}
+		var savedTitle string
+		var sameIDs bool
+		if err = root.QueryRow(t.Context(), `SELECT title,id=$1 FROM training_sessions WHERE id=$1`, created.Proposal.SessionID).Scan(&savedTitle, &sameIDs); err != nil || savedTitle != "Título próprio alterado" || !sameIDs {
+			t.Fatal("edit identity", savedTitle, err)
+		}
+		cancelBase := strings.TrimSuffix(editBase, "editar") + "cancelar"
+		status, body, _ = request("GET", cancelBase, nil)
+		if status != 200 || !strings.Contains(body, `action="`+cancelBase+`"`) {
+			t.Fatal("scoped cancel GET", status)
+		}
+		cancelApproval := url.Values{"expected_updated_at": {field(body, "expected_updated_at")}, "cancellation_reason": {"Motivo próprio mantido"}, "confirm_cancellation": {"yes"}, "gorilla.csrf.Token": {field(body, "gorilla.csrf.Token")}}
+		status, _, _ = request("POST", cancelBase, cancelApproval)
+		if status != 303 {
+			t.Fatal("actual scoped cancel", status)
+		}
+		status, body, _ = request("POST", cancelBase, cancelApproval)
+		if status != 409 || !strings.Contains(body, "Motivo próprio mantido") || strings.Contains(body, `data-task-submit`) {
+			t.Fatal("cancel stale own reason/version", status)
+		}
+	})
 	execute(`UPDATE staff_grants SET revoked_at=now(),revoked_by_id=$1 WHERE user_id=$1 AND programme_id=$2`, actor, programme)
 	status, body, _ = request("POST", base+"/confirmar", refreshed)
 	if status != 404 || strings.Contains(body, "Treino histórico de água") || strings.Contains(body, "Remar com atenção") {

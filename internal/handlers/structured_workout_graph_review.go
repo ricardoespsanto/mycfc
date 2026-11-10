@@ -65,13 +65,21 @@ func focusedGraphSelectedProfileIDs(p focusedWorkoutGraph) []uuid.UUID {
 	return out
 }
 func validateFocusedGraphReferences(p focusedWorkoutGraph) error {
+	for _, profile := range p.References.Profiles {
+		if !profile.IsActive {
+			return errFocusedWorkoutInvalid
+		}
+	}
+	return validateFocusedReferenceShape(p)
+}
+func validateFocusedReferenceShape(p focusedWorkoutGraph) error {
 	ids := focusedGraphSelectedProfileIDs(p)
 	if len(ids) > 32 || len(p.References.Profiles) != len(ids) || len(p.References.Zones) > 256 {
 		return errFocusedWorkoutInvalid
 	}
 	selected := map[uuid.UUID]bool{}
 	for i, profile := range p.References.Profiles {
-		if profile.ID == uuid.Nil || profile.ID != ids[i] || !profile.IsActive || profile.Revision < 1 {
+		if profile.ID == uuid.Nil || profile.ID != ids[i] || profile.Revision < 1 {
 			return errFocusedWorkoutInvalid
 		}
 		selected[profile.ID] = true

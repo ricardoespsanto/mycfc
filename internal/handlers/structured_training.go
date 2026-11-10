@@ -106,6 +106,7 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 	}
 	page.CanManageWaterProfiles = page.Management && user.IsAdmin
 	var selectedSubject *structuredTrainingSubject
+	var focusedEligible = map[string]bool{}
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
 	if page.Management {
@@ -115,6 +116,14 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		page.Audiences = assembleStructuredTraining(managerStructuredRows(rows), h.location())
+		if h.Workouts != nil && h.Workouts.editStore() != nil {
+			for _, row := range rows {
+				if row.SessionID == nil {
+					continue
+				}
+				focusedEligible[row.SessionID.String()] = focusedEditEligible(dbgen.GetFocusedWorkoutSessionRow{Status: stringValue(row.SessionStatus), SchedulePrecision: stringValue(row.SchedulePrecision), ScheduledOn: row.ScheduledOn, StartsAt: row.StartsAt, EndsAt: row.EndsAt, DayBand: row.DayBand}, time.Now())
+			}
+		}
 		page.RoutineQuery = strings.TrimSpace(r.URL.Query().Get("routine_query"))
 		page.RoutineModality = r.URL.Query().Get("routine_modality")
 		page.RoutineObjective = r.URL.Query().Get("routine_objective")
@@ -248,6 +257,7 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 			day = returned
 		}
 		page.Workspace = buildStructuredWeekWorkspace(page.Audiences, page.Publications, page.PublicationUnavailable, currentGroup, user, page.SelectedGroupID, page.SelectedWeekID, page.SelectedSessionID, day, time.Now().In(h.location()))
+		applyFocusedWorkoutEditLinks(&page.Workspace, focusedEligible)
 		page.SelectedDay = page.Workspace.SelectedDay
 		page.PlannerReturnURL = structuredPlannerURL(page.SelectedGroupID, page.SelectedWeekID, page.SelectedSessionID, page.SelectedDay)
 		if page.OpenForm == "" {

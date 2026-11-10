@@ -56,6 +56,9 @@ func focusedGraphActivityHasContent(v url.Values, a focusedGraphActivity) bool {
 }
 
 func normalizeFocusedGraph(c FocusedWorkoutContext, d focusedGraphDraft) (focusedWorkoutGraph, validation.FieldErrors) {
+	return normalizeFocusedGraphWithSource(c, d, nil)
+}
+func normalizeFocusedGraphWithSource(c FocusedWorkoutContext, d focusedGraphDraft, saved *focusedWorkoutGraph) (focusedWorkoutGraph, validation.FieldErrors) {
 	e := focusedWorkoutErrors()
 	v := d.Values
 	p := focusedWorkoutGraph{Context: c, Kind: dbgen.TrainingEntryKind(v.Get("entry_kind")), Title: focusedText(v, "title", 2, 180, e), Description: focusedText(v, "description", 0, 4000, e), Activities: []focusedGraphActivityInput{}, References: focusedGraphProfileFacts{Profiles: []dbgen.WaterIntensityProfile{}, Zones: []dbgen.WaterIntensityZone{}}}
@@ -85,10 +88,23 @@ func normalizeFocusedGraph(c FocusedWorkoutContext, d focusedGraphDraft) (focuse
 			mode := v.Get(pp + ".detail_mode")
 			hasWater := len(phase.Nodes) > 0 || focusedGraphHasValues(v, pp+".water")
 			hasGym := len(phase.Exercises) > 0 || focusedGraphHasValues(v, pp+".gym")
-			if v.Get(pp+".title") == "" && v.Get(pp+".instructions") == "" && mode == "" && !hasWater && !hasGym {
+			retained := false
+			if saved != nil {
+				for _, oldA := range saved.Activities {
+					if oldA.Key == a.Key {
+						for _, oldB := range oldA.Phases {
+							if oldB.Key == phase.Key {
+								retained = true
+							}
+						}
+					}
+				}
+			}
+			if v.Get(pp+".title") == "" && v.Get(pp+".instructions") == "" && mode == "" && !hasWater && !hasGym && !retained {
 				continue
 			}
-			block := focusedGraphPhaseInput{Key: phase.Key, Purpose: dbgen.TrainingBlockPurpose(v.Get(pp + ".purpose")), Title: focusedText(v, pp+".title", 0, 120, e), Instructions: focusedText(v, pp+".instructions", 2, 4000, e)}
+			minimumInstructions := 2
+			block := focusedGraphPhaseInput{Key: phase.Key, Purpose: dbgen.TrainingBlockPurpose(v.Get(pp + ".purpose")), Title: focusedText(v, pp+".title", 0, 120, e), Instructions: focusedText(v, pp+".instructions", minimumInstructions, 4000, e)}
 			if !validTrainingBlockPurpose(block.Purpose) {
 				focusedGraphError(e, pp+".purpose", "Escolha a fase.")
 			}
@@ -117,7 +133,7 @@ func normalizeFocusedGraph(c FocusedWorkoutContext, d focusedGraphDraft) (focuse
 		}
 		p.Activities = append(p.Activities, input)
 	}
-	if (p.Kind == "TRAINING" || p.Kind == "COMPETITION") && p.Description == "" {
+	if saved == nil && (p.Kind == "TRAINING" || p.Kind == "COMPETITION") && p.Description == "" {
 		meaningful := false
 		for _, a := range p.Activities {
 			meaningful = meaningful || len(a.Phases) > 0

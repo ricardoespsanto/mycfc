@@ -400,7 +400,7 @@ func focusedGraphValues(d focusedGraphDraft) url.Values {
 		out.Add("removed_order", r.Key)
 		p := "removed[" + r.Key + "]"
 		out.Set(p+".kind", r.Kind)
-		out.Set(p+".id", "")
+		out.Set(p+".id", focusedGraphRemovedID(r))
 		out.Set(p+".key", r.Key)
 		out.Set(p+".payload", r.Payload)
 	}

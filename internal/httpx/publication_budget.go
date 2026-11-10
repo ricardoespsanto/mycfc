@@ -78,8 +78,17 @@ func focusedWorkoutPostPath(r *http.Request) bool {
 		return false
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, prefix), "/")
-	if len(parts) != 4 || parts[0] == "" || parts[1] != "treinos" || parts[2] != "criar" {
+	if len(parts) < 4 || parts[0] == "" || parts[1] != "treinos" {
 		return false
 	}
-	return parts[3] == "rascunho" || parts[3] == "prever" || parts[3] == "confirmar"
+	if len(parts) == 4 && parts[2] == "criar" {
+		return parts[3] == "rascunho" || parts[3] == "prever" || parts[3] == "confirmar"
+	}
+	if parts[2] == "" {
+		return false
+	}
+	if len(parts) == 4 {
+		return parts[3] == "cancelar"
+	}
+	return len(parts) == 5 && parts[3] == "editar" && (parts[4] == "rascunho" || parts[4] == "prever" || parts[4] == "confirmar")
 }

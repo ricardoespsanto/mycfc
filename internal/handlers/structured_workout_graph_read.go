@@ -52,6 +52,25 @@ func readFocusedGraph(ctx context.Context, q *dbgen.Queries, expected focusedWor
 	if len(segments) > 8 || len(blocks) > 32 || len(waters)+len(gyms) > 32 || len(steps) > 256 || len(exercises) > 256 {
 		return p, errFocusedWorkoutLimit
 	}
+	return focusedGraphFromRaw(focusedEditRaw{row, segments, blocks, waters, steps, gyms, exercises}, expected, true)
+}
+
+// The same complete raw mapper serves create readback and saved-workout editing.
+// Editing preserves identity independently of sparse historical position values.
+func focusedGraphFromRaw(raw focusedEditRaw, expected focusedWorkoutGraph, contiguous bool) (focusedWorkoutGraph, error) {
+	c := expected.Context
+	p := focusedWorkoutGraph{Context: c, References: expected.References, Activities: []focusedGraphActivityInput{}}
+	row := raw.Session
+	p.SessionID, p.Kind, p.Title, p.Description = row.ID, row.EntryKind, row.Title, row.Description
+	var err error
+	p.Schedule, err = trainingScheduleFromRecord(row.SchedulePrecision, row.ScheduledOn, row.StartsAt, row.EndsAt, row.DayBand)
+	if err != nil {
+		return p, err
+	}
+	segments, blocks, waters, steps, gyms, exercises := raw.Segments, raw.Blocks, raw.Water, raw.Steps, raw.Gym, raw.Exercises
+	if len(segments) > 8 || len(blocks) > 32 || len(waters)+len(gyms) > 32 || len(steps) > 256 || len(exercises) > 256 {
+		return p, errFocusedWorkoutLimit
+	}
 	aByID := map[uuid.UUID]focusedGraphActivityInput{}
 	bByID := map[uuid.UUID]focusedGraphPhaseInput{}
 	nByID := map[uuid.UUID]focusedGraphWaterNodeInput{}
@@ -103,13 +122,13 @@ func readFocusedGraph(ctx context.Context, q *dbgen.Queries, expected focusedWor
 	usedBlocks, usedWaters, usedSteps, usedGyms, usedExercises := 0, 0, 0, 0, 0
 	for ai, a := range segments {
 		original, ok := aByID[a.ID]
-		if !ok || a.Position != int32(ai+1) || a.SessionID != row.ID {
+		if !ok || (contiguous && a.Position != int32(ai+1)) || a.SessionID != row.ID {
 			return p, errFocusedWorkoutConflict
 		}
 		activity := focusedGraphActivityInput{Key: original.Key, ID: a.ID, Modality: a.Modality, Title: a.Title, Location: a.Location, Equipment: a.EquipmentNotes, DurationMinutes: a.PlannedDurationMinutes, StartOffsetMinutes: a.PlannedStartOffsetMinutes, TransitionMinutes: a.TransitionDurationMinutes, Phases: []focusedGraphPhaseInput{}}
 		for bi, b := range bySegment[a.ID] {
 			old, ok := bByID[b.ID]
-			if !ok || b.Position != int32(bi+1) || b.SegmentID != a.ID {
+			if !ok || (contiguous && b.Position != int32(bi+1)) || b.SegmentID != a.ID {
 				return p, errFocusedWorkoutConflict
 			}
 			usedBlocks++
@@ -139,7 +158,7 @@ func readFocusedGraph(ctx context.Context, q *dbgen.Queries, expected focusedWor
 						parentID = *n.ParentStepID
 					}
 					positions[parentID]++
-					if n.Position != positions[parentID] {
+					if contiguous && n.Position != positions[parentID] {
 						return p, errFocusedWorkoutConflict
 					}
 					water.Nodes = append(water.Nodes, focusedGraphWaterNodeInput{Key: old.Key, ID: n.ID, ParentKey: parent, Kind: n.Kind, Name: n.Name, Repeats: n.Repeats, Duration: n.DurationSeconds, DurationCertainty: n.DurationCertainty, Distance: n.DistanceMetres, DistanceCertainty: n.DistanceCertainty, Recovery: n.RecoverySeconds, Intensity: n.IntensityCode, Cadence: n.CadenceSpm, DrillFocus: n.DrillFocus, DrillFormat: n.DrillFormat, RoleNotes: n.RoleNotes, Instructions: n.Instructions})
@@ -152,7 +171,7 @@ func readFocusedGraph(ctx context.Context, q *dbgen.Queries, expected focusedWor
 				gym := &focusedGraphGymInput{Structure: g.Structure, Objective: g.Objective, Rounds: g.Rounds, RoundRecovery: g.RoundRecoverySeconds, Exercises: []focusedGraphExerciseInput{}}
 				for xi, x := range byBlockExercise[b.ID] {
 					old, ok := xByID[x.ID]
-					if !ok || x.Position != int32(xi+1) {
+					if !ok || (contiguous && x.Position != int32(xi+1)) {
 						return p, errFocusedWorkoutConflict
 					}
 					gym.Exercises = append(gym.Exercises, focusedGraphExerciseInput{Key: old.Key, ID: x.ID, Name: x.Name, Sets: x.Sets, Repetitions: x.Repetitions, Duration: x.DurationSeconds, Distance: x.DistanceMetres, Recovery: x.RecoverySeconds, ResistanceKind: x.ResistanceKind, ResistanceValue: x.ResistanceValue, ResistanceText: x.ResistanceText, Intent: x.ExecutionIntent, Tempo: x.Tempo, Notes: x.Notes})

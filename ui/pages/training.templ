@@ -47,6 +47,7 @@ type TrainingSessionCancelPage struct {
 	UnsupportedMessage string
 	Meta components.PageMeta
 	SessionID, Title, When, ExpectedUpdatedAt, Conflict, CancellationReason string
+	ActionURL, ReturnURL, ReloadURL string
 	CancellationErrors validation.FieldErrors
 	CSRFField templ.Component
 }
@@ -428,23 +429,26 @@ if page.Form.EndsAt != "" {
 templ TrainingSessionCancel(page TrainingSessionCancelPage) { @components.Base(page.Meta, trainingSessionCancelContent(page)) }
 templ trainingSessionCancelContent(page TrainingSessionCancelPage) {
 	<div class="task-route-page">
-		@components.TaskRoute(components.TaskSurfaceConfig{ID: "cancelar-sessao", TitleID: "cancel-training-session-title", Eyebrow: "Confirmação", Title: "Cancelar sessão", Description: page.Title + " · " + page.When, Variant: "confirmation", ReturnURL: "/admin/treinos"}) {
+		@components.TaskRoute(components.TaskSurfaceConfig{ID: "cancelar-sessao", TitleID: "cancel-training-session-title", Eyebrow: "Confirmação", Title: "Cancelar sessão", Description: page.Title + " · " + page.When, Variant: "confirmation", ReturnURL: trainingSessionCancelReturnURL(page)}) {
 			if page.WriteUnsupported {
 <div class="task-form">@components.Callout("Sessão disponível para consulta", trainingUnsupportedMessage(page.UnsupportedMessage), "info")
 @components.StatusMessage(page.Conflict, "error")
 if page.CancellationReason != "" {
 <dl class="status-summary"><div><dt>Motivo apresentado</dt><dd>{ page.CancellationReason }</dd></div></dl>
 }
-<p><a class="action action--secondary" href="/admin/treinos">Voltar aos treinos</a></p></div>
+<p><a class="action action--secondary" href={ templ.SafeURL(trainingSessionCancelReturnURL(page)) }>{ trainingSessionCancelReturnLabel(page) }</a></p>
+if page.ReloadURL != "" {
+<p><a class="action action--quiet" href={ templ.SafeURL(page.ReloadURL) }>Recarregar sessão atual</a></p>
+}</div>
 } else {
-			<form class="form-layout task-form destructive-region" method="post" action={ templ.SafeURL("/admin/treinos/sessoes/" + page.SessionID + "/cancelar") } data-task-form>
+			<form class="form-layout task-form destructive-region" method="post" action={ templ.SafeURL(trainingSessionCancelActionURL(page)) } data-task-form>
 				@page.CSRFField<input type="hidden" name="expected_updated_at" value={ page.ExpectedUpdatedAt }/>
-				@components.TaskConflict("A sessão foi alterada", page.Conflict, "", "/admin/treinos", "Voltar aos treinos")
+				@components.TaskConflict("A sessão foi alterada", page.Conflict, "", trainingSessionCancelRecoveryURL(page), trainingSessionCancelRecoveryLabel(page))
 				<p>A sessão mantém-se legível, incluindo resultados existentes, mas deixa de aceitar novas ações.</p>
 				@components.ErrorSummary(components.FieldErrorsFor(map[string]string(page.CancellationErrors), []components.FieldErrorRef{{Key: "cancellation_reason", Field: "training-session-cancellation-reason"}, {Key: "confirm_cancellation", Field: "confirm-training-session-cancellation"}}))
 				@components.FieldLabel("training-session-cancellation-reason", "Motivo", true)<textarea id="training-session-cancellation-reason" name="cancellation_reason" minlength="2" maxlength="500" required>{ page.CancellationReason }</textarea>@components.FieldErrorMessage("cancellation_reason", page.CancellationErrors["cancellation_reason"])
 				<label for="confirm-training-session-cancellation"><input id="confirm-training-session-cancellation" type="checkbox" name="confirm_cancellation" value="yes" required/> Confirmo que pretendo cancelar definitivamente a sessão { page.Title }.</label>@components.FieldErrorMessage("confirm_cancellation", page.CancellationErrors["confirm_cancellation"])
-				@components.TaskActions("/admin/treinos") {
+				@components.TaskActions(trainingSessionCancelReturnURL(page)) {
 					if page.Conflict == "" {
 						<button class="action action--danger" type="submit" data-task-submit>Cancelar sessão</button>
 					}
@@ -453,6 +457,27 @@ if page.CancellationReason != "" {
 }
 		}
 	</div>
+}
+
+func trainingSessionCancelActionURL(page TrainingSessionCancelPage) string {
+	if page.ActionURL != "" { return page.ActionURL }
+	return "/admin/treinos/sessoes/" + page.SessionID + "/cancelar"
+}
+func trainingSessionCancelReturnURL(page TrainingSessionCancelPage) string {
+	if page.ReturnURL != "" { return page.ReturnURL }
+	return "/admin/treinos"
+}
+func trainingSessionCancelReturnLabel(page TrainingSessionCancelPage) string {
+	if page.ReturnURL != "" { return "Voltar à semana" }
+	return "Voltar aos treinos"
+}
+func trainingSessionCancelRecoveryURL(page TrainingSessionCancelPage) string {
+	if page.ReloadURL != "" { return page.ReloadURL }
+	return trainingSessionCancelReturnURL(page)
+}
+func trainingSessionCancelRecoveryLabel(page TrainingSessionCancelPage) string {
+	if page.ReloadURL != "" { return "Recarregar sessão atual" }
+	return trainingSessionCancelReturnLabel(page)
 }
 
 templ trainingScopeChoices(page TrainingPage, prefix, programmeID, teamID string) {

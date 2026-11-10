@@ -310,3 +310,42 @@ func TestWeekWorkspaceFocusedWaterEntryRetainsGenericPaths(t *testing.T) {
 		t.Fatal("no week must retain explicit week creation")
 	}
 }
+
+func TestWorkspaceAppointmentMutationLinksAreScopedSiblingActions(t *testing.T) {
+	a := workspaceFixture().Workspace.Days[0].Afternoon[0]
+	a.Title = "Água <própria>"
+	a.EditURL = "/admin/treinos/estruturados/semanas/week/treinos/hybrid/editar?day=2026-11-09&scope=week"
+	a.CancelURL = "/admin/treinos/estruturados/semanas/week/treinos/hybrid/cancelar?day=2026-11-09"
+	body := renderScheduleComponent(t, structuredWorkspaceBand("Tarde", []StructuredWorkspaceAppointment{a}))
+	if strings.Count(body, `class="week-appointment"`) != 1 || strings.Count(body, `href="`+a.URL+`"`) != 1 {
+		t.Fatal("existing detail link must stay intact")
+	}
+	anchors := regexp.MustCompile(`(?s)<a\b[^>]*>.*?</a>`).FindAllString(body, -1)
+	if len(anchors) != 3 {
+		t.Fatalf("want detail/edit/cancel sibling links, got%d", len(anchors))
+	}
+	for _, anchor := range anchors {
+		if strings.Count(anchor, "<a ") != 1 {
+			t.Fatal("appointment actions must never nest anchors")
+		}
+	}
+	for _, action := range []struct{ label, href string }{{"Alterar", a.EditURL}, {"Cancelar", a.CancelURL}} {
+		if !strings.Contains(body, `href="`+html.EscapeString(action.href)+`"`) || !strings.Contains(body, `aria-label="`+html.EscapeString(action.label+" · "+a.Title+" · "+a.StartsOn+" · "+structuredWorkspaceTime(a))+`"`) {
+			t.Fatal("missing scoped URL or accessible appointment context")
+		}
+	}
+	if strings.Contains(body, "<própria>") || strings.Index(body, `href="`+html.EscapeString(a.EditURL)+`"`) < strings.Index(body, "</a>") {
+		t.Fatal("unsafe or nested sibling action")
+	}
+	a.CancelURL = ""
+	body = renderScheduleComponent(t, structuredWorkspaceBand("Tarde", []StructuredWorkspaceAppointment{a}))
+	if strings.Contains(body, ">Cancelar</a>") || !strings.Contains(body, ">Alterar</a>") {
+		t.Fatal("empty cancel URL must hide only cancel entry")
+	}
+	a.EditURL = ""
+	a.CancelURL = "/scoped/cancel"
+	body = renderScheduleComponent(t, structuredWorkspaceBand("Tarde", []StructuredWorkspaceAppointment{a}))
+	if strings.Contains(body, ">Alterar</a>") || !strings.Contains(body, ">Cancelar</a>") {
+		t.Fatal("empty edit URL must hide only edit entry")
+	}
+}

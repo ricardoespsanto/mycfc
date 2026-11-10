@@ -110,3 +110,18 @@ func TestFocusedWorkoutIngressActualBodyBoundaryAndPathIsolation(t *testing.T) {
 		})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", path, nil))
 	}
 }
+
+func TestFocusedEditIngressBoundsNewRoutesBeforeParsing(t *testing.T) {
+	for _, suffix := range []string{"editar/rascunho", "editar/prever", "editar/confirmar", "cancelar"} {
+		path := "/admin/treinos/estruturados/semanas/plan/treinos/session/" + suffix
+		PublicationIngressMiddleware(30*time.Second)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := PublicationDeadline(r.Context(), 30*time.Second); !ok {
+				t.Fatal("missing ingress clock", suffix)
+			}
+			_, err := io.ReadAll(r.Body)
+			if err == nil {
+				t.Fatal("unbounded focused EDIT body", suffix)
+			}
+		})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path, strings.NewReader(strings.Repeat("a", (1<<20)+1))))
+	}
+}
