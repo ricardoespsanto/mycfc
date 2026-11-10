@@ -125,3 +125,148 @@ func TestLocalRecipientConnectionRejectsOverridesBeforeAuthentication(t *testing
 		t.Fatal("override reached network/authentication", err)
 	}
 }
+
+func TestLocalRecipientEndpointRequiresUnambiguousConnectionOptions(t *testing.T) {
+	for name, raw := range map[string]string{
+		"fragment":        "postgres://local:synthetic@localhost/mycfc#fragment",
+		"remote":          "postgres://local:synthetic@db.example.invalid/mycfc",
+		"bad query":       "postgres://local:synthetic@localhost/mycfc?sslmode=%ZZ",
+		"repeated option": "postgres://local:synthetic@localhost/mycfc?sslmode=disable&sslmode=require",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if safeLocalDatabaseURL(raw) {
+				t.Fatal("ambiguous endpoint accepted")
+			}
+		})
+	}
+	if !safeLocalDatabaseURL("postgresql://local:synthetic@[::1]:5432/mycfc?sslmode=disable&application_name=fixture") {
+		t.Fatal("canonical IPv6 fixture endpoint refused")
+	}
+	t.Setenv("APP_ENV", "local")
+	t.Setenv("APP_VERSION", "dev")
+	t.Setenv("GIT_SHA", strings.Repeat("0", 40))
+	t.Setenv("TRAINING_SCHEDULE_ADMISSION_FILE", "")
+	t.Setenv("DATABASE_URL", "")
+	cfg := &pgx.ConnConfig{}
+	cfg.Host, cfg.Database = "127.0.0.1", "mycfc"
+	cfg.RuntimeParams = map[string]string{"application_name": "fixture"}
+	if !strictUnstampedLocalConnection(cfg) {
+		t.Fatal("canonical fixture with application label refused")
+	}
+	cfg.RuntimeParams["role"] = "other"
+	if strictUnstampedLocalConnection(cfg) {
+		t.Fatal("runtime role override accepted")
+	}
+	delete(cfg.RuntimeParams, "role")
+	t.Setenv("PGSERVICE", "synthetic")
+	if strictUnstampedLocalConnection(cfg) {
+		t.Fatal("PostgreSQL service override accepted")
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	dial := &pgx.ConnConfig{}
+	installLocalRecipientDialGuard(dial)
+	if conn, err := dial.DialFunc(ctx, "tcp", "127.0.0.1:1"); err == nil || conn != nil {
+		t.Fatal("a canceled loopback dial returned a connection")
+	}
+}
+
+func TestLocalRecipientManifestRejectsInterruptedAndUnknownRecords(t *testing.T) {
+	t.Chdir(t.TempDir())
+	binding := localRecipientManifest{Contract: "mycfc/local-recipient-floor/v1", ProjectPath: mustLocalCwd(t), SystemID: "123", Database: "mycfc_test", DatabaseOID: 42, EndpointSHA256: strings.Repeat("a", 64), MigrationRole: "migration", PublisherRole: "publisher"}
+	record, err := openLocalRecipientManifest(binding, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Value.Phase = "captured"
+	if err := record.Save(); err != nil {
+		t.Fatal(err)
+	}
+	path := record.path
+	record.Close()
+	valid, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, data, message string }{
+		{"oversized", strings.Repeat(" ", 8193), "exceeds bound"},
+		{"incomplete", "{", "manifest rejected"},
+		{"trailing", string(valid) + " {}", "trailing data"},
+		{"unknown phase", strings.Replace(string(valid), `"phase":"captured"`, `"phase":"future"`, 1), "phase rejected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(tc.data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := openLocalRecipientManifest(binding, false)
+			if got != nil {
+				got.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.message) {
+				t.Fatalf("err = %v, want %q", err, tc.message)
+			}
+		})
+	}
+	if err := os.WriteFile(path, valid, 0600); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := openLocalRecipientManifest(binding, false)
+	if err != nil {
+		t.Fatal("rejected input retained the local lock", err)
+	}
+	recovered.Close()
+}
+
+func TestLocalRecipientManifestRefusesUnsafeStorage(t *testing.T) {
+	for _, name := range []string{"symlinked scratch", "writable journal directory", "symlinked lock", "invalid lock mode", "replacement cannot overwrite directory"} {
+		t.Run(name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			binding := localRecipientManifest{Contract: "mycfc/local-recipient-floor/v1", ProjectPath: mustLocalCwd(t), SystemID: "123", Database: "mycfc_test", DatabaseOID: 42, EndpointSHA256: strings.Repeat("a", 64), MigrationRole: "migration", PublisherRole: "publisher"}
+			if name == "symlinked scratch" {
+				if err := os.Symlink(t.TempDir(), "tmp"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				record, err := openLocalRecipientManifest(binding, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := record.path
+				switch name {
+				case "writable journal directory":
+					record.Close()
+					if err := os.Chmod(filepath.Dir(path), 0777); err != nil {
+						t.Fatal(err)
+					}
+				case "symlinked lock":
+					record.Close()
+					if err := os.Remove(path + ".lock"); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(filepath.Base(path), path+".lock"); err != nil {
+						t.Fatal(err)
+					}
+				case "invalid lock mode":
+					record.Close()
+					if err := os.Chmod(path+".lock", 0644); err != nil {
+						t.Fatal(err)
+					}
+				case "replacement cannot overwrite directory":
+					defer record.Close()
+					if err := os.Mkdir(path, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := record.Save(); err == nil {
+						t.Fatal("journal save overwrote a directory")
+					}
+					return
+				}
+			}
+			if record, err := openLocalRecipientManifest(binding, true); err == nil {
+				record.Close()
+				t.Fatal("unsafe journal storage accepted")
+			}
+		})
+	}
+}

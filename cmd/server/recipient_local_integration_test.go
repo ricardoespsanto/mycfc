@@ -41,12 +41,18 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	if err := runServerCommand(t.Context(), []string{"migrate"}); err != nil {
 		t.Fatal("prepared exact migration", err)
 	}
+	if err := runServerCommand(t.Context(), []string{"migrate"}); err == nil || !strings.Contains(err.Error(), "publisher NOLOGIN and proved drain") {
+		t.Fatalf("pre-floor final ledger accepted a live publisher: %v", err)
+	}
 	// Role LOGIN is global: an unrelated-database backend must prevent fencing.
 	root, err := pgx.Connect(t.Context(), raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer root.Close(context.Background())
+	t.Run("recorded preparation refusals", func(t *testing.T) {
+		testLocalPreparationRefusals(t, root, migration.String())
+	})
 	other := *parsed
 	other.Path = "/postgres"
 	other.User = url.UserPassword("local_recipient_web", "synthetic-web")
@@ -70,6 +76,20 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	if err != nil || state.RequiredReader != trainingcompat.ReaderGeneration || state.FloorCommitID == nil || !state.PartialV2Enabled || state.SchemaContract != db.TrainingScheduleContractP {
 		t.Fatal("floor not acknowledged", err)
 	}
+	t.Run("serving precision status", func(t *testing.T) {
+		web := *parsed
+		web.User = url.UserPassword("local_recipient_web", "synthetic-web")
+		testPreparedPrecisionStatus(t, web.String(), state)
+	})
+	t.Run("publisher and floor transaction refusals", func(t *testing.T) {
+		testLocalPublisherAndFloorRefusals(t, root, low, state)
+	})
+	t.Run("independent inspection refuses mismatched target or credentials", func(t *testing.T) {
+		testIndependentRecipientInspectionRefusals(t, root, low)
+	})
+	t.Run("authoring requires its exact activation witness", func(t *testing.T) {
+		testLocalAuthoringRejectsMissingActivationWitness(t, root, low, state)
+	})
 	original := state
 	if err = runServerCommand(t.Context(), []string{"prepare-local-recipient-floor"}); err != nil {
 		t.Fatal("idempotent local floor", err)
@@ -138,6 +158,9 @@ func TestLocalRecipientConstructiveBootstrapFloorRealPostgres(t *testing.T) {
 	}
 	if err = runServerCommand(t.Context(), []string{"prepare-local-recipient-floor"}); err == nil {
 		t.Fatal("future reader floor adopted")
+	}
+	if err = runServerCommand(t.Context(), []string{"migrate"}); err == nil || !strings.Contains(err.Error(), "newer reader generation") {
+		t.Fatalf("migration accepted the future reader floor: %v", err)
 	}
 	// A different project directory cannot retroactively adopt this populated DB.
 	t.Chdir(t.TempDir())

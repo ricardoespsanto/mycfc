@@ -94,3 +94,95 @@ func TestAdmissionFileRejectsWritableLocalAncestorAndSymlink(t *testing.T) {
 		}
 	}
 }
+
+func TestAdmissionRejectsAmbiguousImageAndFloorEvidence(t *testing.T) {
+	raw, _, _ := admissionFixture()
+	var projection Admission
+	if err := json.Unmarshal(raw, &projection); err != nil {
+		t.Fatal(err)
+	}
+	image := projection.Images[0]
+	floorID := "22222222-2222-4222-8222-222222222222"
+	floorHash := strings.Repeat("c", 64)
+	t.Run("same binary declared by two digests", func(t *testing.T) {
+		p := projection
+		second := image
+		second.Digest = "sha256:" + strings.Repeat("d", 64)
+		p.Images = []AdmissionImage{image, second}
+		raw, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParseAdmission(raw); err == nil {
+			t.Fatal("accepted two digests for the same binary identity")
+		}
+	})
+	for name, change := range map[string]func(Admission) Admission{
+		"no image": func(p Admission) Admission {
+			p.Images = []AdmissionImage{}
+			return p
+		},
+		"floor without compatible reader": func(p Admission) Admission {
+			p.FloorCommitID, p.FloorManifestSHA256 = &floorID, &floorHash
+			return p
+		},
+		"empty capabilities": func(p Admission) Admission {
+			incomplete := image
+			incomplete.Capabilities.SnapshotRead = []int{}
+			p.Images = []AdmissionImage{incomplete}
+			return p
+		},
+		"empty write set": func(p Admission) Admission {
+			incomplete := image
+			incomplete.Capabilities.Write = []string{}
+			p.Images = []AdmissionImage{incomplete}
+			return p
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := json.Marshal(change(projection))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ParseAdmission(raw); err == nil {
+				t.Fatal("accepted incomplete admission evidence")
+			}
+		})
+	}
+	valid := string(raw)
+	for name, invalid := range map[string]string{
+		"replaced required key":  strings.Replace(valid, `"minimum_reader":1`, `"unknown_reader":1`, 1),
+		"extra image field":      strings.Replace(valid, `"image_digest":`, `"unexpected":true,"image_digest":`, 1),
+		"extra capability field": strings.Replace(valid, `"protocol":1`, `"unexpected":true,"protocol":1`, 1),
+		"excessive nesting":      strings.Repeat("[", 18) + "1" + strings.Repeat("]", 18),
+		"truncated object":       strings.TrimSuffix(valid, "}"),
+		"truncated value":        `{"contract":`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseAdmission([]byte(invalid)); err == nil {
+				t.Fatal("accepted malformed projection")
+			}
+		})
+	}
+}
+
+func TestAdmissionAcceptsOnlyTheRecordedFloorAndManifest(t *testing.T) {
+	raw, compiled, state := admissionFixture()
+	projection, err := ParseAdmission(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "22222222-2222-4222-8222-222222222222"
+	digest := strings.Repeat("c", 64)
+	projection.FloorCommitID, projection.FloorManifestSHA256 = &id, &digest
+	projection.MinimumReader, state.RequiredReader = 2, 2
+	actualID, actualDigest := id, digest
+	state.FloorCommitID, state.FloorManifestSHA256 = &actualID, &actualDigest
+	if err := projection.Verify(state, compiled); err != nil {
+		t.Fatal("recorded floor refused", err)
+	}
+	actualDigest = strings.Repeat("d", 64)
+	if err := projection.Verify(state, compiled); err == nil {
+		t.Fatal("different floor manifest admitted")
+	}
+}
