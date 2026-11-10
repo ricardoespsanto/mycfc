@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -51,5 +52,50 @@ func TestPublicationPreviewDoesNotCollapseIdenticalNames(t *testing.T) {
 	}
 	if len(state.Recipients) != 2 || state.Recipients[0].Name != "Ana" || state.Recipients[1].Name != "Ana" || len(state.Materialization.Prescriptions) != 2 {
 		t.Fatal("distinct people collapsed by name")
+	}
+}
+
+func TestPublicationPreviewDoesNotSignMismatchedWeekOrEmptyFirstReview(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*publicationSourceEnvelope, *trainingPublicationReturnContext)
+		want   error
+	}{
+		{"another week", func(_ *publicationSourceEnvelope, c *trainingPublicationReturnContext) { c.WeekID = uuid.New() }, errTrainingPublicationReviewInvalid},
+		{"no dated recipients", func(s *publicationSourceEnvelope, _ *trainingPublicationReturnContext) {
+			s.EligibleRecipients = s.EligibleRecipients[:0]
+		}, errPublicationFirstEmpty},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := publicationSourceFixture()
+			returned := trainingPublicationReturnContext{GroupID: source.Header.GroupID, WeekID: source.Header.PlanID}
+			tc.change(&source, &returned)
+			state, err := makePublicationPreview(source, uuid.New(), "Resumo revisto", returned, time.UTC, source.Header.SourceUpdatedAt.Time)
+			if !errors.Is(err, tc.want) || state.Token != "" || state.CanConfirm {
+				t.Fatalf("invalid review produced a confirmation: %t, %v", state.CanConfirm, err)
+			}
+		})
+	}
+}
+
+func TestPublicationPreviewRejectsInconsistentPrivateRecipientIdentity(t *testing.T) {
+	for _, tc := range []string{"missing athlete", "missing session", "different names for one athlete"} {
+		t.Run(tc, func(t *testing.T) {
+			source := publicationSourceFixture()
+			second := source.EligibleRecipients[0]
+			switch tc {
+			case "missing athlete":
+				second.AthleteUserID = nil
+			case "missing session":
+				second.SessionID = uuid.Nil
+			default:
+				second.AthleteName = "Outro nome"
+			}
+			source.EligibleRecipients = append(source.EligibleRecipients, second)
+			recipients, err := publicationPreviewRecipients(source)
+			if !errors.Is(err, errPublicationSourceUnavailable) || recipients != nil {
+				t.Fatalf("inconsistent recipient data leaked into review: %v", err)
+			}
+		})
 	}
 }
