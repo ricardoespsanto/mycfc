@@ -327,3 +327,61 @@ func TestFocusedEditRecoveryKeepsRawProofAndReloadWithoutPreview(t *testing.T) {
 		}
 	}
 }
+
+func TestFocusedEditSourceRejectsIdentityAliasesAcrossActivities(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*focusedWorkoutGraph)
+	}{
+		{"missing workout identity", func(g *focusedWorkoutGraph) { g.SessionID = uuid.Nil }},
+		{"activity aliases workout", func(g *focusedWorkoutGraph) { g.Activities[0].ID = g.SessionID }},
+		{"phase aliases activity", func(g *focusedWorkoutGraph) { g.Activities[0].Phases[0].ID = g.Activities[0].ID }},
+		{"water step aliases phase", func(g *focusedWorkoutGraph) {
+			g.Activities[0].Phases[0].Water.Nodes[0].ID = g.Activities[0].Phases[0].ID
+		}},
+		{"gym exercise aliases a water step", func(g *focusedWorkoutGraph) {
+			id := g.Activities[0].Phases[0].Water.Nodes[0].ID
+			g.Activities = append(g.Activities, focusedGraphActivityInput{
+				Key: "a_2", ID: uuid.New(), Modality: dbgen.TrainingSegmentModalityGYM,
+				Phases: []focusedGraphPhaseInput{{
+					Key: "p_1", ID: uuid.New(),
+					Gym: &focusedGraphGymInput{Exercises: []focusedGraphExerciseInput{{Key: "x_1", ID: id}}},
+				}},
+			})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := focusedEditFixture(t)
+			draft, err := focusedEditLosslessDraft(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.change(&source.Graph)
+			parsed, err := parseFocusedEditGraph(focusedGraphValues(draft), source.Graph)
+			if !errors.Is(err, errFocusedWorkoutInvalid) || len(parsed.Activities) != 0 {
+				t.Fatalf("ambiguous source graph was admitted: %v", err)
+			}
+		})
+	}
+}
+
+func TestFocusedEditRefusesMalformedRemovalPayload(t *testing.T) {
+	source := focusedEditFixture(t)
+	draft, err := focusedEditLosslessDraft(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := applyFocusedEditCommand(draft, "water_remove:a_1:p_1:n_1", source.Graph)
+	if err != nil || len(removed.Removed) != 1 {
+		t.Fatalf("could not construct reviewed removal: %v", err)
+	}
+	key := "removed[" + removed.Removed[0].Key + "].payload"
+	for _, malformed := range []string{`{"kind":`, `{"kind":"water","kind":"gym"}`} {
+		raw := focusedGraphValues(removed)
+		raw.Set(key, malformed)
+		got, err := parseFocusedEditGraph(raw, source.Graph)
+		if !errors.Is(err, errFocusedWorkoutInvalid) || len(got.Removed) != 0 {
+			t.Fatalf("invalid removal survived parsing: %v", err)
+		}
+	}
+}

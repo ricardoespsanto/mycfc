@@ -324,3 +324,59 @@ func TestReuseFragmentCompatibilityUsesExistingStructuredContentRules(t *testing
 		t.Fatal("aggregate destination limit not enforced before preview", err)
 	}
 }
+
+func TestReuseMappingRejectsMalformedTransport(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		keys   []string
+		values url.Values
+		want   error
+	}{
+		{"oversize transport", []string{"m_1"}, url.Values{"mapping_order": {"m_1"}, "week_title": {strings.Repeat("ç", focusedWorkoutMaxRequestBytes)}}, errFocusedWorkoutLimit},
+		{"invalid key", []string{"m_1.extra"}, url.Values{"mapping_order": {"m_1.extra"}}, errFocusedWorkoutInvalid},
+		{"missing order", []string{"m_1"}, url.Values{}, errFocusedWorkoutInvalid},
+		{"reordered sources", []string{"m_1", "m_2"}, url.Values{"mapping_order": {"m_2", "m_1"}}, errFocusedWorkoutInvalid},
+		{"binary text", []string{"m_1"}, url.Values{"mapping_order": {"m_1"}, "week_title": {"Título\x00"}}, errFocusedWorkoutInvalid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values, err := parseReuseValues(tc.values, tc.keys)
+			if !errors.Is(err, tc.want) || values != nil {
+				t.Fatalf("invalid mapping reached the editor: %v, %v", values, err)
+			}
+		})
+	}
+}
+
+func TestReuseScheduleRejectsInconsistentDestinationFacts(t *testing.T) {
+	week := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name                                string
+		precision                           TrainingSchedulePrecision
+		duration                            *int64
+		day, start, occurrence, endDay, end string
+		want                                string
+	}{
+		{name: "forged fold occurrence", precision: TrainingScheduleStartOnly, day: "2026-10-25", start: "01:30:00.123456", occurrence: "2026-10-25T05:30:00Z", want: "start_occurrence"},
+		{name: "outside target week", precision: TrainingScheduleStartOnly, day: "2026-10-26", start: "10:00", want: "date"},
+		{name: "interval crosses week boundary", precision: TrainingScheduleInterval, day: "2026-10-25", start: "22:00", endDay: "2026-10-26", end: "00:01", want: "end_time"},
+		{name: "interval ends before start", precision: TrainingScheduleInterval, day: "2026-10-24", start: "14:00", endDay: "2026-10-24", end: "12:00", want: "date"},
+		{name: "start-only origin cannot acquire an end", precision: TrainingScheduleStartOnly, day: "2026-10-24", start: "14:00", end: "16:00", want: "end_time"},
+		{name: "stored routine cannot acquire a custom end", precision: TrainingScheduleInterval, duration: focusedPointer(int64(3600)), day: "2026-10-24", start: "14:00", end: "16:00", want: "end_time"},
+		{name: "invalid stored duration", precision: TrainingScheduleInterval, duration: focusedPointer(int64(0)), day: "2026-10-24", start: "14:00", want: "start_time"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			item := reuseExample(t).Source.Items[0]
+			item.Graph.Kind = "LOGISTICS"
+			item.Graph.Schedule = TrainingSessionSchedule{Precision: tc.precision}
+			item.DurationSeconds = tc.duration
+			p := reuseMappingPrefix(item.Key)
+			_, errs := normalizeReuseSchedule(item, url.Values{
+				p + ".date": {tc.day}, p + ".start_time": {tc.start}, p + ".start_occurrence": {tc.occurrence},
+				p + ".end_date": {tc.endDay}, p + ".end_time": {tc.end},
+			}, week)
+			if errs[p+"."+tc.want] == "" {
+				t.Fatalf("inconsistent destination did not surface its field error: %v", errs)
+			}
+		})
+	}
+}
