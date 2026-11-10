@@ -273,3 +273,17 @@ func TestPublicationRhythmReferencesRequireCanonicalBlockOverride(t *testing.T) 
 		})
 	}
 }
+
+func TestPublicationRhythmRejectsReversedCadenceAndMissingCraftFacts(t *testing.T) {
+	source := rhythmFixture()
+	source.Rhythm.Zones[0].CadenceMin = rhythmInt(70)
+	source.Rhythm.Zones[0].CadenceMax = rhythmInt(60)
+	if err := validatePublicationRhythmFacts(source, *source.Rhythm); !errors.Is(err, errPublicationRhythmReference) {
+		t.Fatalf("reversed cadence was accepted: %v", err)
+	}
+	source = rhythmFixture()
+	source.Rhythm.Crafts = source.Rhythm.Crafts[:1]
+	if err := validatePublicationRhythmFacts(source, *source.Rhythm); !errors.Is(err, errPublicationSourceUnavailable) {
+		t.Fatalf("absent craft authority was treated as known: %v", err)
+	}
+}

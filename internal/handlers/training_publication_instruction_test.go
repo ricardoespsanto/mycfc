@@ -160,3 +160,15 @@ func TestPublicationInstructionReviewRefusesAmbiguousPrivateRecords(t *testing.T
 		})
 	}
 }
+
+func TestPublicationInstructionReviewAllowsEmptySuccessorWithoutStaleSelection(t *testing.T) {
+	source := publicationSourceFixture()
+	if view, err := publicationInstructionReview(source, publicationMaterialization{}, "", time.UTC); err != nil || view != nil {
+		t.Fatalf("empty successor fabricated recipient instructions: %v", err)
+	}
+	person := source.EligibleRecipients[0]
+	stale := publicationInstructionKey(*person.AthleteUserID, person.SessionID)
+	if view, err := publicationInstructionReview(source, publicationMaterialization{}, stale, time.UTC); !errors.Is(err, errTrainingPublicationReviewInvalid) || view != nil {
+		t.Fatalf("empty successor retained a withdrawn instruction selection: %v", err)
+	}
+}
