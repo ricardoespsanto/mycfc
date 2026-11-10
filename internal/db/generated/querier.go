@@ -91,6 +91,7 @@ type Querier interface {
 	CreatePasswordReset(ctx context.Context, arg CreatePasswordResetParams) (uuid.UUID, error)
 	CreatePhotoAlbum(ctx context.Context, arg CreatePhotoAlbumParams) (PhotoAlbum, error)
 	CreateRepairRequest(ctx context.Context, arg CreateRepairRequestParams) (RepairRequest, error)
+	CreateReuseWeek(ctx context.Context, arg CreateReuseWeekParams) (TrainingPlan, error)
 	CreateSeason(ctx context.Context, arg CreateSeasonParams) (Season, error)
 	CreateStructuredTrainingGroup(ctx context.Context, arg CreateStructuredTrainingGroupParams) (TrainingGroup, error)
 	CreateStructuredTrainingSession(ctx context.Context, arg CreateStructuredTrainingSessionParams) (TrainingSession, error)
@@ -177,6 +178,10 @@ type Querier interface {
 	GetRepairByIdempotencyKey(ctx context.Context, idempotencyKey uuid.UUID) (RepairRequest, error)
 	GetRepairRequestByID(ctx context.Context, id uuid.UUID) (RepairRequest, error)
 	GetRespondableEvent(ctx context.Context, arg GetRespondableEventParams) (GetRespondableEventRow, error)
+	GetReuseCopyEventsByIDs(ctx context.Context, arg GetReuseCopyEventsByIDsParams) ([]TrainingCopyEvent, error)
+	GetReusePlan(ctx context.Context, arg GetReusePlanParams) (GetReusePlanRow, error)
+	GetReuseRoutine(ctx context.Context, arg GetReuseRoutineParams) (GetReuseRoutineRow, error)
+	GetReuseTargetContext(ctx context.Context, arg GetReuseTargetContextParams) (GetReuseTargetContextRow, error)
 	GetSegmentRoutineSource(ctx context.Context, sourceID uuid.UUID) (GetSegmentRoutineSourceRow, error)
 	GetSessionRoutineSource(ctx context.Context, sourceID uuid.UUID) (GetSessionRoutineSourceRow, error)
 	GetStructuredBlockPlanID(ctx context.Context, blockID uuid.UUID) (uuid.UUID, error)
@@ -202,6 +207,8 @@ type Querier interface {
 	HasCurrentGuardianAuthorityForSubject(ctx context.Context, subjectID uuid.UUID) (bool, error)
 	HasFocusedWorkoutRemovalReferences(ctx context.Context, arg HasFocusedWorkoutRemovalReferencesParams) (bool, error)
 	HasVerifiedGuardianAuthority(ctx context.Context, actorID uuid.UUID) (bool, error)
+	InsertCopiedWaterPrescription(ctx context.Context, arg InsertCopiedWaterPrescriptionParams) (WaterBlockPrescription, error)
+	InsertCopiedWorkoutSession(ctx context.Context, arg InsertCopiedWorkoutSessionParams) (TrainingSession, error)
 	InsertFocusedWaterPhase(ctx context.Context, arg InsertFocusedWaterPhaseParams) (TrainingSegmentBlock, error)
 	InsertFocusedWaterSegment(ctx context.Context, arg InsertFocusedWaterSegmentParams) (TrainingSessionSegment, error)
 	InsertFocusedWaterSession(ctx context.Context, arg InsertFocusedWaterSessionParams) (TrainingSession, error)
@@ -214,6 +221,7 @@ type Querier interface {
 	InsertFocusedWorkoutWaterStep(ctx context.Context, arg InsertFocusedWorkoutWaterStepParams) (WaterWorkStep, error)
 	InsertPrescription(ctx context.Context, arg InsertPrescriptionParams) (TrainingPrescription, error)
 	InsertPublication(ctx context.Context, arg InsertPublicationParams) (TrainingPlanPublication, error)
+	InsertReuseCopyEvent(ctx context.Context, arg InsertReuseCopyEventParams) (TrainingCopyEvent, error)
 	InsertTaskTrainingGroup(ctx context.Context, arg InsertTaskTrainingGroupParams) (TrainingGroup, error)
 	IsGuardianAuthorityCurrent(ctx context.Context, arg IsGuardianAuthorityCurrentParams) (bool, error)
 	IssueGuardianAuthorityInvitation(ctx context.Context, arg IssueGuardianAuthorityInvitationParams) (IssueGuardianAuthorityInvitationRow, error)
@@ -293,6 +301,13 @@ type Querier interface {
 	ListRecentSyncedActivitiesForUser(ctx context.Context, arg ListRecentSyncedActivitiesForUserParams) ([]SyncedActivity, error)
 	ListRecentTrainingLogs(ctx context.Context, arg ListRecentTrainingLogsParams) ([]TrainingLog, error)
 	ListRepairRequestsForMembers(ctx context.Context, arg ListRepairRequestsForMembersParams) ([]ListRepairRequestsForMembersRow, error)
+	ListReusePinnedProfiles(ctx context.Context, arg ListReusePinnedProfilesParams) ([]WaterIntensityProfile, error)
+	ListReusePinnedZones(ctx context.Context, arg ListReusePinnedZonesParams) ([]WaterIntensityZone, error)
+	ListReuseRoutines(ctx context.Context, arg ListReuseRoutinesParams) ([]ListReuseRoutinesRow, error)
+	ListReuseSourceSessions(ctx context.Context, arg ListReuseSourceSessionsParams) ([]ListReuseSourceSessionsRow, error)
+	// Scoped P-capable reuse primitives. Store owns signed complete-source/target/ref protocol.
+	// No schema change, arbitrary inactive selection, exact-path relaxation or history rewrite.
+	ListReuseTargetSeasons(ctx context.Context, arg ListReuseTargetSeasonsParams) ([]ListReuseTargetSeasonsRow, error)
 	// The legacy modalities table remains the read model for dated training/events and
 	// already-published prescriptions. These queries only write the new vocabulary.
 	ListSportingModalities(ctx context.Context) ([]SportingModality, error)
@@ -337,6 +352,9 @@ type Querier interface {
 	LockPublicationCandidateUsers(ctx context.Context, arg LockPublicationCandidateUsersParams) ([]uuid.UUID, error)
 	LockPublicationPlan(ctx context.Context, arg LockPublicationPlanParams) (LockPublicationPlanRow, error)
 	LockPublicationReferencedEvents(ctx context.Context, arg LockPublicationReferencedEventsParams) ([]LockPublicationReferencedEventsRow, error)
+	LockReusePinnedProfiles(ctx context.Context, arg LockReusePinnedProfilesParams) ([]WaterIntensityProfile, error)
+	LockReuseRoutine(ctx context.Context, arg LockReuseRoutineParams) (LockReuseRoutineRow, error)
+	LockReuseTargetContext(ctx context.Context, arg LockReuseTargetContextParams) (LockReuseTargetContextRow, error)
 	// Lock every intended row in UUID order before any prescription insert. A
 	// concurrent non-key ends_on update must finish (or abort the serializable
 	// publication) before final eligibility is accepted.
