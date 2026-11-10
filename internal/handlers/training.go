@@ -364,18 +364,10 @@ func (h Training) UpdateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		latest, getErr := h.Store.GetTrainingSessionForEdit(ctx, sessionID)
-		if getErr != nil {
-			h.System.InternalError(w, r)
-			return
-		}
-		message := "A sessão foi alterada entretanto, já começou ou já foi cancelada."
-		recoveryForm := h.trainingSessionFormFromRecord(latest)
-		if !trainingEditableSchedule(latest) {
-			recoveryForm = form
-			message = trainingScheduleUnsupportedMessage
-		}
-		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, recoveryForm, message, "", validation.FieldErrors{})
+		// Keep the reviewed version and submitted values. Fetching the current
+		// unscoped row here would replace the proposal and silently rebase it.
+		message := "A sessão foi alterada entretanto, já começou ou já foi cancelada. Nada foi guardado; os valores introduzidos foram mantidos. Volte aos treinos e abra a sessão para rever os dados atuais antes de tentar novamente."
+		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, form, message, "", validation.FieldErrors{})
 		return
 	}
 	if err != nil {
