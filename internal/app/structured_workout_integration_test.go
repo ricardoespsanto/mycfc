@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -62,6 +64,25 @@ func TestFreshWaterCreateActualApplicationSessionCSRF(t *testing.T) {
 	if err = db.BootstrapRoles(t.Context(), root, "mycfc", roles); err != nil {
 		t.Fatal(err)
 	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword(roles.AppUsername, roles.AppPassword)
+	probePool, err := pgxpool.New(t.Context(), u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer probePool.Close()
+	probe := newTrainingReadiness(probePool, config.Config{AppEnv: "test"})
+	if err = probePool.Ping(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []func(context.Context) error{probe.Ping, func(ctx context.Context) error { return pingApplicationPool(ctx, probePool) }} {
+		if err := check(t.Context()); err == nil || !strings.Contains(err.Error(), "dated participation postcondition") {
+			t.Fatalf("prepared empty database accepted by readiness: %v", err)
+		}
+	}
 	lowConfig := root.Config().Copy()
 	lowConfig.User, lowConfig.Password = roles.MigrationUsername, roles.MigrationPassword
 	low, err := pgx.ConnectConfig(t.Context(), lowConfig)
@@ -74,6 +95,12 @@ func TestFreshWaterCreateActualApplicationSessionCSRF(t *testing.T) {
 	}
 	if err = db.HardenPrivacyExecutionRoles(t.Context(), root, "mycfc", roles); err != nil {
 		t.Fatal(err)
+	}
+	if err = db.VerifyDatedParticipationRuntime(t.Context(), probePool); err != nil {
+		t.Fatal(err)
+	}
+	if err = probe.Ping(t.Context()); err == nil || !strings.Contains(err.Error(), "reader floor") {
+		t.Fatalf("final schema without reader floor accepted by readiness: %v", err)
 	}
 	state, err := db.TrainingScheduleStatus(t.Context(), low)
 	if err != nil {
@@ -89,8 +116,13 @@ func TestFreshWaterCreateActualApplicationSessionCSRF(t *testing.T) {
 	if _, err = low.Exec(t.Context(), `SELECT training_schedule_control.set_enabled($1,$2,true)`, state.DatabaseIncarnation, state.StateEpoch); err != nil {
 		t.Fatal(err)
 	}
-	u, _ := url.Parse(raw)
-	u.User = url.UserPassword(roles.AppUsername, roles.AppPassword)
+	if err = probe.Ping(t.Context()); err != nil {
+		t.Fatalf("admitted local fixture rejected: %v", err)
+	}
+	probePool.Close()
+	if err = probe.Ping(t.Context()); err == nil {
+		t.Fatal("readiness accepted closed pool")
+	}
 	actor, adult, hidden, season, group, plan, session := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	email := actor.String() + "@example.test"
 	hash, err := bcrypt.GenerateFromPassword([]byte("Synthetic-test-password"), bcrypt.MinCost)
@@ -138,6 +170,16 @@ func TestFreshWaterCreateActualApplicationSessionCSRF(t *testing.T) {
 	loadApplicationAWS = func(context.Context, ...func(*awsconfig.LoadOptions) error) (aws.Config, error) {
 		return aws.Config{Region: "eu-west-1"}, nil
 	}
+	// An explicit projection is required even in a local/test binary. A missing
+	// file must fail startup after the database has passed its runtime checks.
+	cfg.TrainingScheduleAdmissionFile = filepath.Join(t.TempDir(), "missing-admission.json")
+	if failed, err := New(t.Context()); err == nil {
+		failed.Close()
+		t.Fatal("application started without its required admission file")
+	} else if err.Error() != "training schedule external admission failed" {
+		t.Fatalf("unexpected startup failure: %v", err)
+	}
+	cfg.TrainingScheduleAdmissionFile = ""
 	application, err = New(t.Context())
 	if err != nil {
 		t.Fatal("fresh actual app startup", err)

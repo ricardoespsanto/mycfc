@@ -259,3 +259,32 @@ func (freshScheduleStatusRow) Scan(dest ...any) error {
 	*dest[7].(*bool) = false
 	return nil
 }
+
+func TestFreshLedgerInspectionRequiresIndependentTransaction(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		inspector FreshInitializationInspector
+	}{
+		{name: "missing inspector"},
+		{name: "failed transaction", inspector: bootstrapConnectionFake{err: errors.New("synthetic connection interruption")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The receipt connection must never substitute for the independent
+			// inspector when no valid read-only transaction can be started.
+			tx, digest, err := inspectFreshInitializationLedger(t.Context(), nil, tc.inspector, "migration", "mycfc")
+			if tx != nil || digest != "" || !errors.Is(err, errFreshInspection) {
+				t.Fatalf("missing independent transaction accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestRecipientLocalBootstrapRejectsInvalidIdentityOrInspectionFailure(t *testing.T) {
+	if phase, err := InspectTrainingRecipientLocalBootstrapTarget(t.Context(), nil, "mycfc", "same_role", "same_role"); phase != "" || err == nil || err.Error() != "local bootstrap inspection identity invalid" {
+		t.Fatalf("shared publisher and migration identity accepted: phase=%q error=%v", phase, err)
+	}
+	conn := &freshTestConn{rows: []freshTestRow{{err: errors.New("synthetic catalog connection interruption")}}}
+	if phase, err := InspectTrainingRecipientLocalBootstrapTarget(t.Context(), conn, "mycfc", "migration", "publisher"); phase != "" || err == nil || err.Error() != "training recipient empty target inspection failed" {
+		t.Fatalf("failed catalog inspection accepted: phase=%q error=%v", phase, err)
+	}
+}

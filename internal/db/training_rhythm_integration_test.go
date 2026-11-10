@@ -4,12 +4,13 @@ package db
 
 import (
 	"context"
+	"strings"
+	"testing"
+
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"strings"
-	"testing"
 )
 
 func rhythmFloor(t *testing.T, w placementFixture) {
@@ -35,6 +36,17 @@ func TestTrainingRhythmActualRuntimeAndFloor(t *testing.T) {
 	if _, err := VerifyTrainingRhythmRuntime(t.Context(), w.web, TrainingScheduleCapabilities{ReaderVersion: 4, WriterVersion: 2}); err == nil {
 		t.Fatal("Reader4 admitted new rhythm semantic")
 	}
+	t.Run("function definition drift", func(t *testing.T) {
+		tx, err := w.f.low.Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(t.Context())
+		recipientSchemaExec(t, tx, `ALTER FUNCTION public.guard_training_rhythm_variation() SET search_path=pg_catalog`)
+		if err = verifyTrainingRhythmDefinition(t.Context(), tx); err == nil || !strings.Contains(err.Error(), "training rhythm function contract mismatch: guard_training_rhythm_variation") {
+			t.Fatalf("drifted guard function accepted: %v", err)
+		}
+	})
 	recipientSchemaExec(t, w.f.low, `DROP TRIGGER water_intensity_zones_rhythm_parent_witness ON public.water_intensity_zones`)
 	if _, err := VerifyTrainingRhythmRuntime(t.Context(), w.web, TrainingScheduleCapabilities{ReaderVersion: 5, WriterVersion: 2}); err == nil {
 		t.Fatal("missing actual first-zone witness admitted")
