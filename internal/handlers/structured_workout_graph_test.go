@@ -404,3 +404,17 @@ func TestStoredWaterTotalsDoNotReportPartialNumbersForMalformedGraphs(t *testing
 		})
 	}
 }
+
+func TestStoredWaterTotalsRejectDepthBeyondSupportedGraph(t *testing.T) {
+	var steps []pages.StructuredWaterStep
+	var parent string
+	for i := 0; i < focusedMaxWaterDepth; i++ {
+		id := fmt.Sprintf("group-%d", i)
+		steps = append(steps, pages.StructuredWaterStep{ID: id, ParentID: parent, Kind: "REPEAT_GROUP", Repeats: 1})
+		parent = id
+	}
+	steps = append(steps, pages.StructuredWaterStep{ID: "leaf", ParentID: parent, Kind: "EFFORT", DurationSeconds: 60})
+	if totals, err := calculateWaterTotalsChecked(steps); totals != nil || !errors.Is(err, errFocusedArithmetic) {
+		t.Fatalf("overdeep graph returned totals %v and error %v", totals, err)
+	}
+}
