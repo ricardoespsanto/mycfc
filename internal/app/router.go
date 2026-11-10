@@ -202,6 +202,22 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("POST /admin/treinos/estruturados/ciclos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateCycle))))
 	mux.Handle("POST /admin/treinos/estruturados/ciclos/{id}", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.UpdateCycle))))
 	mux.Handle("POST /admin/treinos/estruturados/ciclos/{id}/copiar", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CopyCycle))))
+	if structuredTraining.Placements != nil {
+		task := *structuredTraining.Placements
+		for _, route := range []struct {
+			pattern string
+			handler http.HandlerFunc
+		}{
+			{"GET /admin/treinos/estruturados/colocacoes", task.Index},
+			{"POST /admin/treinos/estruturados/colocacoes", task.Editor},
+			{"POST /admin/treinos/estruturados/colocacoes/prever", task.Preview},
+			{"POST /admin/treinos/estruturados/colocacoes/confirmar", task.Confirm},
+			{"POST /admin/treinos/estruturados/colocacoes/cancelar/prever", task.CancelPreview},
+			{"POST /admin/treinos/estruturados/colocacoes/cancelar/confirmar", task.CancelConfirm},
+		} {
+			mux.Handle(route.pattern, auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(route.handler)))
+		}
+	}
 	if structuredTraining.Workouts != nil {
 		task := *structuredTraining.Workouts
 		protect := func(handler http.HandlerFunc) http.Handler {

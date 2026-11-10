@@ -26,8 +26,8 @@ func publicationReviewFixture(t *testing.T) (trainingPublicationReviewSigner, tr
 		ActorID: uuid.New(), PlanID: plan, SourceUpdatedAt: now.Add(-time.Hour), LatestPublicationID: uuid.New(), LatestRevision: 2,
 		ChangeSummary: "Plano revisto", Return: trainingPublicationReturnContext{GroupID: uuid.New(), WeekID: plan, SessionID: uuid.New(), Day: "2026-11-10"},
 	}, Prescriptions: []StructuredPrescriptionInput{
-		{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: uuid.New(), Snapshot: []byte(`{"SchemaVersion":1,"Title":"Primeiro treino"}`)},
-		{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: uuid.New(), Snapshot: []byte(`{"SchemaVersion":1,"Title":"Segundo treino"}`)},
+		{PlacementID: uuid.New(), SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: uuid.New(), Snapshot: []byte(`{"SchemaVersion":1,"Title":"Primeiro treino"}`)},
+		{PlacementID: uuid.New(), SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: uuid.New(), Snapshot: []byte(`{"SchemaVersion":1,"Title":"Segundo treino"}`)},
 	}}
 	return signer, input, now
 }
@@ -361,7 +361,7 @@ func TestTrainingPublicationReviewTupleAndAggregateByteBoundaries(t *testing.T) 
 	signer, input, now := publicationReviewFixture(t)
 	tuples := make([]StructuredPrescriptionInput, trainingPublicationReviewMaxTuples)
 	for i := range tuples {
-		tuples[i] = StructuredPrescriptionInput{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: uuid.New(), Snapshot: []byte(`{}`)}
+		tuples[i] = StructuredPrescriptionInput{PlacementID: uuid.New(), SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: uuid.New(), Snapshot: []byte(`{}`)}
 	}
 	input.Prescriptions = tuples
 	if _, err := signer.sign(input, now); err != nil {
@@ -380,7 +380,7 @@ func TestTrainingPublicationReviewTupleAndAggregateByteBoundaries(t *testing.T) 
 	}
 	input.Prescriptions = make([]StructuredPrescriptionInput, trainingPublicationReviewMaxSnapshotBytes/size)
 	for i := range input.Prescriptions {
-		input.Prescriptions[i] = StructuredPrescriptionInput{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: uuid.New(), Snapshot: raw}
+		input.Prescriptions[i] = StructuredPrescriptionInput{PlacementID: uuid.New(), SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: uuid.New(), Snapshot: raw}
 	}
 	token, err := signer.sign(input, now)
 	if err != nil {
@@ -483,5 +483,22 @@ func TestTrainingPublicationReviewRejectsNoncanonicalBase64Segments(t *testing.T
 				}
 			})
 		}
+	}
+}
+
+func TestTrainingPublicationReviewBindsPlacementWhenSnapshotIsIdentical(t *testing.T) {
+	signer, input, now := publicationReviewFixture(t)
+	token, e := signer.sign(input, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	claims, e := signer.verify(token, input.trainingPublicationReviewMetadata, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	changed := clonePublicationReviewInput(input)
+	changed.Prescriptions[0].PlacementID = uuid.New()
+	if e = claims.matches(changed, now); e == nil {
+		t.Fatal("same membership/person/session/body with a new placement retained review approval")
 	}
 }

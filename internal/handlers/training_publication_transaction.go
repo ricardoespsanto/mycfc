@@ -12,6 +12,7 @@ import (
 )
 
 type publicationRecipientTuple struct {
+	PlacementID   uuid.UUID `json:"placement_id"`
 	SessionID     uuid.UUID `json:"session_id"`
 	MembershipID  uuid.UUID `json:"membership_id"`
 	AthleteUserID uuid.UUID `json:"athlete_user_id"`
@@ -54,6 +55,7 @@ type publicationTransactionQueries interface {
 	LockPlan(context.Context, uuid.UUID, uuid.UUID) (publicationPlanHeader, error)
 	SourceBudget(context.Context, uuid.UUID, uuid.UUID) (publicationSourceBudget, error)
 	StructuralCandidates(context.Context, uuid.UUID, uuid.UUID) ([]publicationCandidate, error)
+	LockPlacementHeads(context.Context, uuid.UUID, uuid.UUID) ([]dbgen.TrainingPlacementHead, error)
 	LockMemberships(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error)
 	LockEvents(context.Context, uuid.UUID, uuid.UUID) ([]publicationEvent, error)
 	LockUsers(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error)
@@ -105,6 +107,13 @@ func savePublicationInTransaction(ctx context.Context, q publicationTransactionQ
 		return result, err
 	}
 	if int64(len(candidates)) != budget.RawTupleCount {
+		return result, errStructuredTrainingPublicationConflict
+	}
+	heads, err := q.LockPlacementHeads(ctx, input.ActorID, input.PlanID)
+	if err != nil {
+		return result, publicationNowaitError(err)
+	}
+	if !publicationCandidateHeadsLocked(candidates, heads) {
 		return result, errStructuredTrainingPublicationConflict
 	}
 	memberships, err := q.LockMemberships(ctx, input.ActorID, input.PlanID)
@@ -237,7 +246,7 @@ func publicationCandidateUsersLocked(candidates []publicationCandidate, users []
 		set[id] = true
 	}
 	for _, c := range candidates {
-		if c.SubjectID != nil && !set[*c.SubjectID] {
+		if c.SubjectID == uuid.Nil || !set[c.SubjectID] {
 			return false
 		}
 	}
@@ -247,20 +256,20 @@ func publicationSameCandidates(a, b []publicationCandidate) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	set := map[[2]uuid.UUID]publicationCandidate{}
+	set := map[[3]uuid.UUID]publicationCandidate{}
 	for _, c := range a {
-		key := [2]uuid.UUID{c.SessionID, c.MembershipID}
+		key := publicationCandidateKey(c)
 		if _, ok := set[key]; ok {
 			return false
 		}
 		set[key] = c
 	}
 	for _, c := range b {
-		previous, ok := set[[2]uuid.UUID{c.SessionID, c.MembershipID}]
-		if !ok || !publicationSameOptionalID(c.SubjectID, previous.SubjectID) || c.StartsOn != previous.StartsOn || c.EndsOn != previous.EndsOn || c.SessionOn != previous.SessionOn {
+		previous, ok := set[publicationCandidateKey(c)]
+		if !ok || c.SubjectID != previous.SubjectID || c.PlacementID != previous.PlacementID || !publicationSameOptionalID(c.MembershipID, previous.MembershipID) || c.StartsOn != previous.StartsOn || c.EndsOn != previous.EndsOn || c.SessionOn != previous.SessionOn {
 			return false
 		}
-		delete(set, [2]uuid.UUID{c.SessionID, c.MembershipID})
+		delete(set, publicationCandidateKey(c))
 	}
 	return len(set) == 0
 }
@@ -329,7 +338,7 @@ func checkPublicationFinalFacts(input publicationConfirmInput, current trainingP
 	for _, r := range f.RecipientTuples {
 		key := [2]uuid.UUID{r.SessionID, r.MembershipID}
 		p, ok := desired[key]
-		if !ok || seen[key] || r.AthleteUserID != p.AthleteUserID {
+		if !ok || seen[key] || r.AthleteUserID != p.AthleteUserID || r.PlacementID != p.PlacementID {
 			return errStructuredTrainingPublicationConflict
 		}
 		seen[key] = true
@@ -338,10 +347,37 @@ func checkPublicationFinalFacts(input publicationConfirmInput, current trainingP
 	for _, r := range f.PublicationTuples {
 		key := [2]uuid.UUID{r.SessionID, r.MembershipID}
 		p, ok := desired[key]
-		if !ok || seen[key] || r.AthleteUserID == nil || *r.AthleteUserID != p.AthleteUserID || r.SnapshotSHA256 != p.SnapshotSHA256 {
+		if !ok || seen[key] || r.AthleteUserID == nil || *r.AthleteUserID != p.AthleteUserID || r.SnapshotSHA256 != p.SnapshotSHA256 || r.PlacementID == nil || *r.PlacementID != p.PlacementID {
 			return errStructuredTrainingPublicationConflict
 		}
 		seen[key] = true
 	}
 	return input.Review.matches(current, f.DecisionAt.Time)
+}
+
+func publicationCandidateHeadsLocked(candidates []publicationCandidate, heads []dbgen.TrainingPlacementHead) bool {
+	if len(heads) > trainingPublicationReviewMaxTuples {
+		return false
+	}
+	seen := map[[2]uuid.UUID]bool{}
+	subjects := map[uuid.UUID]bool{}
+	for _, head := range heads {
+		if head.SubjectUserID == uuid.Nil || head.ProgrammeID == uuid.Nil || head.Revision < 1 {
+			return false
+		}
+		key := [2]uuid.UUID{head.SubjectUserID, head.ProgrammeID}
+		if seen[key] {
+			return false
+		}
+		seen[key] = true
+		subjects[head.SubjectUserID] = true
+	}
+	wanted := map[uuid.UUID]bool{}
+	for _, c := range candidates {
+		wanted[c.SubjectID] = true
+		if c.SubjectID == uuid.Nil || !subjects[c.SubjectID] {
+			return false
+		}
+	}
+	return len(wanted) == len(heads)
 }

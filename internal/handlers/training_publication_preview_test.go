@@ -37,11 +37,13 @@ func TestPublicationPreviewDoesNotCollapseIdenticalNames(t *testing.T) {
 	source := publicationSourceFixture()
 	second := source.EligibleRecipients[0]
 	second.MembershipID = uuid.New()
+	second.PlacementID = uuid.New()
 	second.AthleteUserID = testUUIDPtr(uuid.New())
 	source.EligibleRecipients = append(source.EligibleRecipients, second)
 	original := source.Candidates[0]
-	original.MembershipID = second.MembershipID
-	original.SubjectID = second.AthleteUserID
+	original.MembershipID = &second.MembershipID
+	original.PlacementID = second.PlacementID
+	original.SubjectID = *second.AthleteUserID
 	source.Candidates = append(source.Candidates, original)
 	state, err := makePublicationPreview(source, uuid.New(), "Resumo confirmado", trainingPublicationReturnContext{GroupID: source.Header.GroupID, WeekID: source.Header.PlanID}, time.UTC, source.Header.SourceUpdatedAt.Time)
 	if err != nil {

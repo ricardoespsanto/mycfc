@@ -128,7 +128,7 @@ func TestWeekWorkspaceRawMetadataCannotChangePrescriptionJSONOrHash(t *testing.T
 	}
 	// Exercise the actual canonical prescription builder as well as raw JSON.
 	planID, memberID, athleteID := uuid.MustParse(base.PlanID), uuid.New(), uuid.New()
-	recipient := []dbgen.ListStructuredTrainingPublicationMembersRow{{MembershipID: memberID, AthleteUserID: &athleteID, SessionID: uuid.MustParse(base.Session.ID)}}
+	recipient := []dbgen.ListStructuredTrainingPublicationMembersRow{{PlacementID: uuid.New(), MembershipID: memberID, AthleteUserID: &athleteID, SessionID: uuid.MustParse(base.Session.ID)}}
 	var plain structuredPrescriptionSnapshot
 	if err := json.Unmarshal(original, &plain); err != nil {
 		t.Fatal(err)
@@ -275,12 +275,12 @@ func TestPublicationComparisonFailuresAndRosterChangesCannotClaimCurrent(t *test
 	sessionID := uuid.MustParse(week.Sessions[0].ID)
 	member, athlete := uuid.New(), uuid.New()
 	yes := true
-	recipients := []dbgen.ListStructuredTrainingPublicationMembersRow{{MembershipID: member, AthleteUserID: &athlete, SessionID: sessionID}}
+	recipients := []dbgen.ListStructuredTrainingPublicationMembersRow{{PlacementID: uuid.New(), MembershipID: member, AthleteUserID: &athlete, SessionID: sessionID}}
 	candidate, err := buildStructuredPrescriptionInputs(planID, audience, week, recipients, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	existing := []dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{{MembershipID: member, SessionID: sessionID, SnapshotSha256: candidate[0].SnapshotSHA256}}
+	existing := []dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{{PlacementID: &candidate[0].PlacementID, MembershipID: member, SessionID: sessionID, SnapshotSha256: candidate[0].SnapshotSHA256}}
 	for _, tc := range []struct {
 		name                 string
 		hashErr              error

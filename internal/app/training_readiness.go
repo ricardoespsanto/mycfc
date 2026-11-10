@@ -35,7 +35,7 @@ func (p trainingReadiness) Ping(ctx context.Context) error {
 	if e := db.VerifyDatedParticipationRuntime(ctx, p.pool); e != nil {
 		return e
 	}
-	state, e := db.VerifyTrainingRecipientRuntime(ctx, p.pool, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
+	state, e := db.VerifyTrainingPlacementRuntime(ctx, p.pool, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
 	if e != nil {
 		return e
 	}

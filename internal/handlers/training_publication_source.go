@@ -33,8 +33,9 @@ type publicationPlanHeader struct {
 
 type publicationCandidate struct {
 	SessionID    uuid.UUID   `json:"session_id"`
-	MembershipID uuid.UUID   `json:"membership_id"`
-	SubjectID    *uuid.UUID  `json:"subject_id"`
+	PlacementID  uuid.UUID   `json:"placement_id"`
+	MembershipID *uuid.UUID  `json:"membership_id"`
+	SubjectID    uuid.UUID   `json:"subject_id"`
 	StartsOn     pgtype.Date `json:"starts_on"`
 	EndsOn       pgtype.Date `json:"ends_on"`
 	SessionOn    pgtype.Date `json:"session_on"`
@@ -77,6 +78,7 @@ type publicationEvent struct {
 }
 
 type publicationHashTuple struct {
+	PlacementID    *uuid.UUID `json:"placement_id"`
 	SessionID      uuid.UUID  `json:"session_id"`
 	MembershipID   uuid.UUID  `json:"membership_id"`
 	AthleteUserID  *uuid.UUID `json:"athlete_user_id"`
@@ -159,22 +161,25 @@ func validatePublicationSource(source publicationSourceEnvelope) error {
 		return errPublicationSourceUnavailable
 	}
 	type pair struct{ session, membership uuid.UUID }
-	candidates := map[pair]*uuid.UUID{}
+	candidates := map[[3]uuid.UUID]publicationCandidate{}
 	for _, c := range source.Candidates {
-		key := pair{c.SessionID, c.MembershipID}
-		if !sessions[c.SessionID] || c.MembershipID == uuid.Nil || !c.StartsOn.Valid || !c.SessionOn.Valid {
+		key := publicationCandidateKey(c)
+		if !sessions[c.SessionID] || c.PlacementID == uuid.Nil || c.SubjectID == uuid.Nil || !c.SessionOn.Valid || c.MembershipID != nil && (*c.MembershipID == uuid.Nil || !c.StartsOn.Valid) {
 			return errPublicationSourceUnavailable
 		}
 		if _, exists := candidates[key]; exists {
 			return errPublicationSourceUnavailable
 		}
-		candidates[key] = c.SubjectID
+		candidates[key] = c
 	}
 	eligible := map[pair]bool{}
 	for _, r := range source.EligibleRecipients {
+		if r.PlacementID == uuid.Nil || r.AthleteUserID == nil || *r.AthleteUserID == uuid.Nil || r.MembershipID == uuid.Nil {
+			return errPublicationSourceUnavailable
+		}
+		c, ok := candidates[[3]uuid.UUID{r.SessionID, r.PlacementID, *r.AthleteUserID}]
 		key := pair{r.SessionID, r.MembershipID}
-		subject, ok := candidates[key]
-		if !ok || subject == nil || r.AthleteUserID == nil || *subject != *r.AthleteUserID || *subject == uuid.Nil || eligible[key] {
+		if !ok || c.MembershipID == nil || *c.MembershipID != r.MembershipID || eligible[key] {
 			return errPublicationSourceUnavailable
 		}
 		eligible[key] = true
@@ -267,7 +272,7 @@ func materializePublicationSource(source publicationSourceEnvelope, location *ti
 		old, exists := previous[key]
 		if !exists {
 			result.Added++
-		} else if old.AthleteUserID != nil && *old.AthleteUserID == p.AthleteUserID && old.SnapshotSHA256 == p.SnapshotSHA256 {
+		} else if old.PlacementID != nil && *old.PlacementID == p.PlacementID && old.AthleteUserID != nil && *old.AthleteUserID == p.AthleteUserID && old.SnapshotSHA256 == p.SnapshotSHA256 {
 			result.Unchanged++
 		} else {
 			result.Changed++
@@ -285,7 +290,9 @@ func materializePublicationSource(source publicationSourceEnvelope, location *ti
 func publicationMembershipIDs(source publicationSourceEnvelope) []uuid.UUID {
 	set := map[uuid.UUID]bool{}
 	for _, c := range source.Candidates {
-		set[c.MembershipID] = true
+		if c.MembershipID != nil && *c.MembershipID != uuid.Nil {
+			set[*c.MembershipID] = true
+		}
 	}
 	ids := make([]uuid.UUID, 0, len(set))
 	for id := range set {
@@ -293,4 +300,8 @@ func publicationMembershipIDs(source publicationSourceEnvelope) []uuid.UUID {
 	}
 	sort.Slice(ids, func(i, j int) bool { return bytes.Compare(ids[i][:], ids[j][:]) < 0 })
 	return ids
+}
+
+func publicationCandidateKey(c publicationCandidate) [3]uuid.UUID {
+	return [3]uuid.UUID{c.SessionID, c.PlacementID, c.SubjectID}
 }

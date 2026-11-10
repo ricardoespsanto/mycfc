@@ -16,14 +16,14 @@ import (
 )
 
 func (s PostgresStructuredTrainingStore) AuthorizePublication(ctx context.Context, actor, plan uuid.UUID) (publicationPlanHeader, error) {
-	if _, err := db.VerifyTrainingRecipientRuntime(ctx, s.Pool, publicationRuntimeCapabilities()); err != nil {
+	if _, err := db.VerifyTrainingPlacementRuntime(ctx, s.Pool, publicationRuntimeCapabilities()); err != nil {
 		return publicationPlanHeader{}, err
 	}
 	row, err := s.queries().PublicationPlanForReview(ctx, dbgen.PublicationPlanForReviewParams{ActorID: actor, PlanID: plan})
 	return publicationPlanHeader(row), err
 }
 func (s PostgresStructuredTrainingStore) ReadPublicationSource(ctx context.Context, actor, plan uuid.UUID) (publicationSourceEnvelope, error) {
-	state, err := db.VerifyTrainingRecipientRuntime(ctx, s.Pool, publicationRuntimeCapabilities())
+	state, err := db.VerifyTrainingPlacementRuntime(ctx, s.Pool, publicationRuntimeCapabilities())
 	if err != nil {
 		return publicationSourceEnvelope{}, err
 	}
@@ -117,7 +117,7 @@ func (q publicationPostgresQueries) AdmitScheduleWrites(ctx context.Context) (bo
 			return false, trainingScheduleWriteError(err)
 		}
 	}
-	actual, err := db.VerifyTrainingRecipientRuntime(ctx, q.commands, publicationRuntimeCapabilities())
+	actual, err := db.VerifyTrainingPlacementRuntime(ctx, q.commands, publicationRuntimeCapabilities())
 	if err != nil {
 		return false, err
 	}
@@ -130,7 +130,7 @@ func (q publicationPostgresQueries) CheckArtifactSizes(ctx context.Context, inpu
 	return checkPublicationArtifactSizes(ctx, q.commands, inputs)
 }
 func (q publicationPostgresQueries) VerifyRuntime(ctx context.Context) error {
-	_, err := db.VerifyTrainingRecipientRuntime(ctx, q.commands, publicationRuntimeCapabilities())
+	_, err := db.VerifyTrainingPlacementRuntime(ctx, q.commands, publicationRuntimeCapabilities())
 	return err
 }
 func (q publicationPostgresQueries) LockActor(ctx context.Context, actor uuid.UUID) error {
@@ -159,6 +159,9 @@ func (q publicationPostgresQueries) StructuralCandidates(ctx context.Context, ac
 	}
 	return result, nil
 }
+func (q publicationPostgresQueries) LockPlacementHeads(ctx context.Context, actor, plan uuid.UUID) ([]dbgen.TrainingPlacementHead, error) {
+	return q.queries.LockPublicationPlacementHeads(ctx, dbgen.LockPublicationPlacementHeadsParams{ActorID: actor, PlanID: plan})
+}
 func (q publicationPostgresQueries) LockMemberships(ctx context.Context, actor, plan uuid.UUID) ([]uuid.UUID, error) {
 	return q.queries.LockPublicationCandidateMemberships(ctx, dbgen.LockPublicationCandidateMembershipsParams{ActorID: actor, PlanID: plan})
 }
@@ -186,7 +189,7 @@ func (q publicationPostgresQueries) InsertPublication(ctx context.Context, actor
 	return q.queries.InsertPublication(ctx, dbgen.InsertPublicationParams{ActorID: actor, PlanID: h.PlanID, SourceUpdatedAt: h.SourceUpdatedAt, ExpectedLatestPublicationID: h.LatestPublicationID, ExpectedLatestRevision: h.LatestRevision, ChangeSummary: summary})
 }
 func (q publicationPostgresQueries) InsertPrescription(ctx context.Context, actor, pub uuid.UUID, p StructuredPrescriptionInput) error {
-	_, err := q.queries.InsertPrescription(ctx, dbgen.InsertPrescriptionParams{ActorID: actor, PublicationID: pub, SessionID: p.SessionID, MembershipID: p.MembershipID, AthleteUserID: p.AthleteUserID, Snapshot: p.Snapshot, SnapshotSha256: p.SnapshotSHA256})
+	_, err := q.queries.InsertPrescription(ctx, dbgen.InsertPrescriptionParams{ActorID: actor, PublicationID: pub, SessionID: p.SessionID, MembershipID: p.MembershipID, PlacementID: p.PlacementID, AthleteUserID: p.AthleteUserID, Snapshot: p.Snapshot, SnapshotSha256: p.SnapshotSHA256})
 	return err
 }
 func (q publicationPostgresQueries) FinalFacts(ctx context.Context, actor, plan, pub uuid.UUID) (publicationFinalFacts, error) {

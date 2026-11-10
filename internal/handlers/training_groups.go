@@ -14,6 +14,7 @@ import (
 	csrf "filippo.io/csrf/gorilla"
 	"github.com/a-h/templ"
 	"github.com/alexedwards/scs/v2"
+	"github.com/cfcoimbra/mycfc/internal/db"
 	"github.com/cfcoimbra/mycfc/internal/httpx"
 	"github.com/cfcoimbra/mycfc/internal/validation"
 	"github.com/cfcoimbra/mycfc/ui/components"
@@ -72,7 +73,12 @@ func trainingGroupRow(group TrainingGroupRecord) pages.TrainingGroupRow {
 func trainingGroupAthletes(rows []TrainingGroupAthlete) []pages.TrainingGroupAthleteChoice {
 	out := make([]pages.TrainingGroupAthleteChoice, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, pages.TrainingGroupAthleteChoice{MembershipID: row.MembershipID.String(), Name: row.Name, AlreadyMember: row.AlreadyMember})
+		choice := pages.TrainingGroupAthleteChoice{MembershipID: row.MembershipID.String(), Name: row.Name, AlreadyMember: row.AlreadyMember, Unavailable: row.Unavailable, PlacementStatus: row.PlacementStatus}
+		if row.UserID != uuid.Nil && row.GroupID != uuid.Nil {
+			choice.PersonID = row.UserID.String()
+			choice.PlacementURL = placementURL(row.GroupID, row.UserID, row.SeasonID, row.DisplayOn)
+		}
+		out = append(out, choice)
 	}
 	return out
 }
@@ -89,6 +95,8 @@ func (h TrainingGroups) actor(w http.ResponseWriter, r *http.Request) (CurrentUs
 func (h TrainingGroups) failure(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		h.System.NotFound(w, r)
+	} else if errors.Is(err, errTrainingPlacementUnavailable) {
+		h.System.render(w, r, http.StatusServiceUnavailable, "Treinos", "Tarefa indisponível", "Não foi possível confirmar a disponibilidade desta tarefa. Tente de novo mais tarde.", "")
 	} else {
 		h.System.InternalError(w, r)
 	}
@@ -348,24 +356,48 @@ func (h TrainingGroups) task(ctx context.Context, w http.ResponseWriter, r *http
 		p.ActionURL = p.RenameURL
 	} else {
 		p.ActionURL = p.AddURL
-		p.SearchPerformed = form.Query != ""
+		seasons, err := h.Store.PlacementSeasons(ctx, actor.ID, g.ID)
+		if err != nil {
+			h.failure(w, r, err)
+			return
+		}
+		for _, season := range seasons {
+			p.Seasons = append(p.Seasons, pages.TrainingPlacementSeason{ID: season.ID.String(), Name: season.Name, StartsOn: placementDateString(season.StartsOn), EndsOn: placementDateString(season.EndsOn), Selected: season.ID.String() == form.SeasonID})
+		}
+		seasonID, on, dated := trainingGroupPlacementContext(&form, p.Seasons, form.Query != "")
+		p.Form = form
+		p.SearchPerformed = form.Query != "" && dated
 		n, valid := trainingGroupPageNumber(r.FormValue("page"))
 		if !valid {
 			n = 0
 		}
 		p.SearchPage = n
-		if form.Query != "" && !form.Errors.Has("q") {
-			rows, err := h.Store.SearchAthletes(ctx, actor.ID, g.ID, form.Query, int32(n*20))
+		if p.SearchPerformed && !form.Errors.Has("q") {
+			rows, err := h.Store.SearchAthletesForDate(ctx, actor.ID, g.ID, seasonID, on, form.Query, int32(n*20))
 			if err != nil {
 				h.failure(w, r, err)
 				return
 			}
+			if r.Method == http.MethodGet && len(rows) > 0 {
+				command, commandErr := uuid.Parse(form.CommandID)
+				if commandErr != nil {
+					h.System.InternalError(w, r)
+					return
+				}
+				proof, e := h.Store.ReviewAthleteSelection(ctx, TrainingGroupRosterInput{ActorID: actor.ID, GroupID: g.ID, SeasonID: seasonID, EffectiveOn: on, CommandID: command, ExpectedUpdatedAt: g.UpdatedAt}, rows)
+				if e != nil {
+					h.failure(w, r, e)
+					return
+				}
+				form.SelectionProof = proof
+				p.Form = form
+			}
 			p.Results = trainingGroupAthletes(rows)
 			if n > 0 {
-				p.PreviousURL = trainingGroupContextURL(trainingGroupURL(strings.Split(p.AddURL, "?")[0], form.Query, n-1), p.WeekID)
+				p.PreviousURL = groupPlacementSearchURL(trainingGroupContextURL(trainingGroupURL(strings.Split(p.AddURL, "?")[0], form.Query, n-1), p.WeekID), form)
 			}
 			if len(rows) == 20 && n < 99 {
-				p.NextURL = trainingGroupContextURL(trainingGroupURL(strings.Split(p.AddURL, "?")[0], form.Query, n+1), p.WeekID)
+				p.NextURL = groupPlacementSearchURL(trainingGroupContextURL(trainingGroupURL(strings.Split(p.AddURL, "?")[0], form.Query, n+1), p.WeekID), form)
 			}
 		}
 	}
@@ -378,7 +410,7 @@ func (h TrainingGroups) task(ctx context.Context, w http.ResponseWriter, r *http
 	} else {
 		p.ActionURL = p.AddURL
 	}
-	p.ReviewURL = groupContextDayURL(trainingGroupURL(strings.Split(p.ActionURL, "?")[0], form.Query, 0), p.WeekID, p.ContextDay)
+	p.ReviewURL = groupPlacementSearchURL(groupContextDayURL(trainingGroupURL(strings.Split(p.ActionURL, "?")[0], form.Query, 0), p.WeekID, p.ContextDay), form)
 	h.render(w, r, status, p)
 }
 func (h TrainingGroups) Athletes(w http.ResponseWriter, r *http.Request) {
@@ -392,7 +424,7 @@ func (h TrainingGroups) Athletes(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	form := pages.TrainingGroupForm{Version: g.UpdatedAt.Format(time.RFC3339Nano), Query: strings.TrimSpace(r.URL.Query().Get("q")), SelectedIDs: map[string]bool{}, Errors: validation.FieldErrors{}}
+	form := pages.TrainingGroupForm{Version: g.UpdatedAt.Format(time.RFC3339Nano), SeasonID: r.URL.Query().Get("season_id"), EffectiveOn: r.URL.Query().Get("effective_on"), CommandID: uuid.NewString(), Query: strings.TrimSpace(r.URL.Query().Get("q")), SelectedIDs: map[string]bool{}, Errors: validation.FieldErrors{}}
 	if utf8.RuneCountInString(form.Query) > 100 {
 		form.Errors.Add("q", "Use até 100 caracteres na pesquisa.")
 	}
@@ -417,13 +449,35 @@ func (h TrainingGroups) AddAthletes(w http.ResponseWriter, r *http.Request) {
 		h.System.RequestRejected(w, r)
 		return
 	}
-	form := pages.TrainingGroupForm{Version: r.PostForm.Get("version"), Query: strings.TrimSpace(r.PostForm.Get("q")), SelectedIDs: map[string]bool{}, Errors: validation.FieldErrors{}}
+	form := pages.TrainingGroupForm{Version: r.PostForm.Get("version"), SeasonID: r.PostForm.Get("season_id"), EffectiveOn: r.PostForm.Get("effective_on"), CommandID: r.PostForm.Get("command_id"), SelectionProof: r.PostForm.Get("selection_proof"), Query: strings.TrimSpace(r.PostForm.Get("q")), SelectedIDs: map[string]bool{}, Errors: validation.FieldErrors{}}
 	if utf8.RuneCountInString(form.Query) > 100 {
 		form.Errors.Add("q", "Use até 100 caracteres na pesquisa.")
 	}
 	expected, valid := trainingGroupVersion(form.Version)
 	if !valid {
 		form.Errors.Add("form", "Recarregue o grupo antes de adicionar atletas.")
+	}
+	seasons, err := h.Store.PlacementSeasons(ctx, actor.ID, g.ID)
+	if err != nil {
+		h.failure(w, r, err)
+		return
+	}
+	var options []pages.TrainingPlacementSeason
+	for _, season := range seasons {
+		options = append(options, pages.TrainingPlacementSeason{ID: season.ID.String(), StartsOn: placementDateString(season.StartsOn), EndsOn: placementDateString(season.EndsOn)})
+	}
+	seasonID, on, _ := trainingGroupPlacementContext(&form, options, true)
+	if len(r.PostForm["selection_proof"]) != 1 || form.SelectionProof == "" || len(form.SelectionProof) > placementSelectionMaxBytes {
+		form.Errors.Add("form", "Recarregue a pesquisa e reveja a seleção antes de guardar.")
+	}
+	for _, field := range []string{"version", "q", "season_id", "effective_on", "command_id"} {
+		if len(r.PostForm[field]) > 1 {
+			form.Errors.Add("form", "O formulário contém campos repetidos.")
+		}
+	}
+	commandID, commandErr := uuid.Parse(form.CommandID)
+	if commandErr != nil || commandID == uuid.Nil || commandID.String() != form.CommandID {
+		form.Errors.Add("form", "Reabra a tarefa antes de guardar.")
 	}
 	var ids []uuid.UUID
 	seen := map[uuid.UUID]bool{}
@@ -445,7 +499,11 @@ func (h TrainingGroups) AddAthletes(w http.ResponseWriter, r *http.Request) {
 		h.task(ctx, w, r, actor, g, "add", http.StatusUnprocessableEntity, form, "")
 		return
 	}
-	result, err := h.Store.AddAthletes(ctx, TrainingGroupRosterInput{ActorID: actor.ID, GroupID: g.ID, MembershipIDs: ids, ExpectedUpdatedAt: expected})
+	result, err := h.Store.AddAthletes(ctx, TrainingGroupRosterInput{ActorID: actor.ID, GroupID: g.ID, MembershipIDs: ids, ExpectedUpdatedAt: expected, SeasonID: seasonID, EffectiveOn: on, CommandID: commandID, SelectionProof: form.SelectionProof})
+	if errors.Is(err, db.ErrCommitOutcomeUnknown) {
+		h.System.render(w, r, http.StatusServiceUnavailable, "Treinos", "Não foi possível confirmar a gravação", "Reabra o grupo para verificar as colocações atuais. A operação não foi repetida automaticamente.", "")
+		return
+	}
 	if errors.Is(err, ErrTrainingGroupConflict) {
 		h.task(ctx, w, r, actor, g, "add", http.StatusConflict, form, "O grupo foi alterado desde que abriu esta tarefa. Reveja os dados antes de guardar.")
 		return
@@ -523,4 +581,45 @@ func (h TrainingGroups) Rename(w http.ResponseWriter, r *http.Request) {
 	}
 	h.flash(r, "Nome do grupo alterado; as semanas existentes foram preservadas.")
 	httpx.Redirect(w, r, h.setupGroupDestination(ctx, r, actor, g), http.StatusSeeOther)
+}
+
+// Search requires the exact configured season and date before any candidate read.
+func trainingGroupPlacementContext(form *pages.TrainingGroupForm, seasons []pages.TrainingPlacementSeason, required bool) (uuid.UUID, time.Time, bool) {
+	id, e := uuid.Parse(form.SeasonID)
+	known := false
+	var selected pages.TrainingPlacementSeason
+	for _, s := range seasons {
+		if e == nil && id != uuid.Nil && s.ID == form.SeasonID {
+			known = true
+			selected = s
+			break
+		}
+	}
+	if !known && (required || form.SeasonID != "") {
+		form.Errors.Add("season_id", "Selecione uma época configurada.")
+	}
+	on, e := time.Parse("2006-01-02", form.EffectiveOn)
+	valid := e == nil && validWorkspaceDate(form.EffectiveOn) && on.Year() > 0
+	if valid && known {
+		valid = selected.StartsOn != "" && selected.EndsOn != "" && form.EffectiveOn >= selected.StartsOn && form.EffectiveOn <= selected.EndsOn
+	}
+	if !valid && (required || form.EffectiveOn != "") {
+		form.Errors.Add("effective_on", "Escolha uma data dentro da época configurada.")
+	}
+	return id, on, known && valid
+}
+func groupPlacementSearchURL(raw string, form pages.TrainingGroupForm) string {
+	u, e := url.Parse(raw)
+	if e != nil {
+		return raw
+	}
+	q := u.Query()
+	if form.SeasonID != "" {
+		q.Set("season_id", form.SeasonID)
+	}
+	if form.EffectiveOn != "" {
+		q.Set("effective_on", form.EffectiveOn)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
 }

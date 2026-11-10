@@ -61,7 +61,7 @@ var (
 		if err := db.VerifyDatedParticipationRuntime(ctx, pool); err != nil {
 			return err
 		}
-		_, err := db.VerifyTrainingRecipientRuntime(ctx, pool, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
+		_, err := db.VerifyTrainingPlacementRuntime(ctx, pool, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
 		return err
 	}
 	loadApplicationAWS = awsconfig.LoadDefaultConfig
@@ -274,6 +274,7 @@ func New(ctx context.Context) (*Application, error) {
 	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	training := handlers.Training{Store: handlers.PostgresTrainingScheduleStore{Querier: dbgen.New(pool), Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	structuredTraining := handlers.StructuredTraining{HTTPWriteTimeout: cfg.HTTPWriteTimeout, Setup: handlers.PostgresTrainingSetupStore{Pool: pool}, Groups: handlers.PostgresTrainingGroupStore{Pool: pool}, Store: handlers.PostgresStructuredTrainingStore{Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	structuredTraining.Placements = &handlers.TrainingPlacements{Store: handlers.PostgresTrainingPlacementStore{Pool: pool}, PageMeta: pageMeta, System: system, Sessions: sessions, HTTPWriteTimeout: cfg.HTTPWriteTimeout}
 	structuredTraining.Workouts = &handlers.StructuredWorkout{Store: handlers.PostgresFocusedWorkoutStore{Pool: pool}, PageMeta: pageMeta, System: system, HTTPWriteTimeout: cfg.HTTPWriteTimeout}
 	structuredTraining.Reuse = &handlers.StructuredReuse{Store: handlers.PostgresStructuredReuseStore{Pool: pool}, Groups: handlers.PostgresTrainingGroupStore{Pool: pool}, PageMeta: pageMeta, System: system, HTTPWriteTimeout: cfg.HTTPWriteTimeout}
 	members := handlers.Members{Seasons: handlers.Seasons{Store: handlers.PostgresSeasonStore{Pool: pool}, System: system, PageMeta: pageMeta, Sessions: sessions}, Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, Classification: handlers.Classification{Setup: handlers.PostgresTrainingSetupStore{Pool: pool}, Store: handlers.PostgresClassificationStore{Pool: pool}, Definitions: handlers.PostgresDefinitionStore{Pool: pool}}, Definitions: handlers.Definitions{Setup: handlers.PostgresTrainingSetupStore{Pool: pool}, Store: handlers.PostgresDefinitionStore{Pool: pool}}}

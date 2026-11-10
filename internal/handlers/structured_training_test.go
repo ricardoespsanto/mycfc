@@ -2073,7 +2073,7 @@ func TestStructuredTrainingAuthoringHandlersPersistValidHierarchy(t *testing.T) 
 		"membership_id": {membershipID.String()},
 	}
 	response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/grupos", groupValues, "", "", handler.CreateGroup)
-	if response.Code != http.StatusSeeOther || len(store.groups) != 1 || store.groups[0].Params.ProgrammeID == nil || *store.groups[0].Params.ProgrammeID != programmeID || len(store.groups[0].MembershipIDs) != 1 {
+	if response.Code != http.StatusSeeOther || len(store.groups) != 0 || response.Header().Get("Location") != trainingGroupsPath+"/criar" {
 		t.Fatalf("group response=%d inputs=%#v", response.Code, store.groups)
 	}
 
@@ -2158,21 +2158,13 @@ func TestStructuredTrainingGroupAndSessionSurfacePersistenceOutcomes(t *testing.
 	programmeID, membershipID, planID, actorID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	user := CurrentUser{ID: actorID, CoachProgrammeIDs: map[uuid.UUID]bool{programmeID: true}}
 	groupValues := url.Values{"name": {"Cadetes"}, "programme_id": {programmeID.String()}, "membership_id": {membershipID.String()}}
-	for _, tc := range []struct {
-		name string
-		err  error
-		want int
-	}{
-		{name: "membership moved out of scope", err: errStructuredTrainingMembershipScope, want: http.StatusUnprocessableEntity},
-		{name: "group service failure", err: errors.New("database unavailable"), want: http.StatusInternalServerError},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			store := &structuredTrainingStoreStub{createGroupErr: tc.err}
-			response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/grupos", groupValues, "", "", (StructuredTraining{Store: store, Location: time.UTC}).CreateGroup)
-			if response.Code != tc.want {
-				t.Fatalf("group status=%d, want %d", response.Code, tc.want)
-			}
-		})
+	// The obsolete undated entrypoint cannot reach either persistence outcome.
+	for _, storeErr := range []error{errStructuredTrainingMembershipScope, errors.New("database unavailable")} {
+		store := &structuredTrainingStoreStub{createGroupErr: storeErr}
+		response := performStructuredTrainingRequest(t, user, http.MethodPost, "/admin/treinos/estruturados/grupos", groupValues, "", "", (StructuredTraining{Store: store, Location: time.UTC}).CreateGroup)
+		if response.Code != http.StatusSeeOther || len(store.groups) != 0 || response.Header().Get("Location") != trainingGroupsPath+"/criar" {
+			t.Fatal("obsolete entrypoint reached an undated writer")
+		}
 	}
 
 	sessionValues := url.Values{"plan_id": {planID.String()}, "title": {"Ginásio + água"}, "description": {"Sessão híbrida"}, "starts_at": {"2026-08-18T17:00"}, "ends_at": {"2026-08-18T19:00"}, "entry_kind": {"TRAINING"}}
@@ -2755,7 +2747,7 @@ func TestStructuredPublicationStatesCalculateRecipientChangeCounts(t *testing.T)
 	planID, sessionID, membershipID, athleteID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	updated := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
 	week := pages.StructuredTrainingWeek{ID: planID.String(), Title: "Semana 1", Sessions: []pages.StructuredTrainingSession{{ID: sessionID.String(), Title: "Água"}}}
-	store := &structuredTrainingStoreStub{publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}}}
+	store := &structuredTrainingStoreStub{publicationMembers: []dbgen.ListStructuredTrainingPublicationMembersRow{{PlacementID: uuid.New(), SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)}}}
 	h := StructuredTraining{Store: store, Location: time.UTC}
 	states := h.structuredPublicationStates(context.Background(), []pages.StructuredTrainingAudience{{GroupName: "Competição", Weeks: []pages.StructuredTrainingWeek{week}}}, []dbgen.ListManagedTrainingPublicationStatesRow{{ID: planID, Title: "Semana 1", SourceUpdatedAt: pgtype.Timestamptz{Time: updated, Valid: true}}}, nil)
 	if len(states) != 1 || states[0].Status != "Rascunho nunca publicado" || states[0].AthleteCount != 1 || states[0].PrescriptionCount != 1 || states[0].AddedCount != 1 {
@@ -2770,17 +2762,17 @@ func TestStructuredPublicationStatesDistinguishesAddedChangedRemovedAndUnchanged
 	updated := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
 	week := pages.StructuredTrainingWeek{ID: planID.String(), Title: "Semana 1", Sessions: []pages.StructuredTrainingSession{{ID: sessionID.String(), Title: "Água"}}}
 	recipients := []dbgen.ListStructuredTrainingPublicationMembersRow{
-		{SessionID: sessionID, MembershipID: firstMembership, AthleteUserID: testUUIDPtr(firstAthlete)},
-		{SessionID: sessionID, MembershipID: secondMembership, AthleteUserID: testUUIDPtr(secondAthlete)},
-		{SessionID: sessionID, MembershipID: thirdMembership, AthleteUserID: testUUIDPtr(thirdAthlete)},
+		{PlacementID: uuid.New(), SessionID: sessionID, MembershipID: firstMembership, AthleteUserID: testUUIDPtr(firstAthlete)},
+		{PlacementID: uuid.New(), SessionID: sessionID, MembershipID: secondMembership, AthleteUserID: testUUIDPtr(secondAthlete)},
+		{PlacementID: uuid.New(), SessionID: sessionID, MembershipID: thirdMembership, AthleteUserID: testUUIDPtr(thirdAthlete)},
 	}
 	candidates, err := buildStructuredPrescriptionInputs(planID, pages.StructuredTrainingAudience{GroupName: "Competição"}, week, recipients, nil)
 	if err != nil || len(candidates) != 3 {
 		t.Fatalf("candidates=%#v err=%v", candidates, err)
 	}
 	store := &structuredTrainingStoreStub{publicationMembers: recipients, publicationHashes: []dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{
-		{MembershipID: firstMembership, SessionID: sessionID, SnapshotSha256: candidates[0].SnapshotSHA256},
-		{MembershipID: secondMembership, SessionID: sessionID, SnapshotSha256: "outdated"},
+		{PlacementID: &candidates[0].PlacementID, MembershipID: firstMembership, SessionID: sessionID, SnapshotSha256: candidates[0].SnapshotSHA256},
+		{PlacementID: &candidates[1].PlacementID, MembershipID: secondMembership, SessionID: sessionID, SnapshotSha256: "outdated"},
 		{MembershipID: removedMembership, SessionID: sessionID, SnapshotSha256: "removed"},
 	}}
 	stateCurrent := true
@@ -3436,7 +3428,7 @@ func TestBuildStructuredPrescriptionInputsCreatesPrivateSnapshotAndRejectsIncomp
 		Sessions: []pages.StructuredTrainingSession{{ID: sessionID.String(), Title: "Água", Modalities: []string{"WATER"}}},
 	}
 	recipients := []dbgen.ListStructuredTrainingPublicationMembersRow{
-		{SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)},
+		{PlacementID: uuid.New(), SessionID: sessionID, MembershipID: membershipID, AthleteUserID: testUUIDPtr(athleteID)},
 		{SessionID: sessionID, MembershipID: uuid.New()},
 		{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: testUUIDPtr(uuid.New())},
 	}
@@ -3684,8 +3676,7 @@ func TestParseGymExerciseAcceptsEachResistanceModeAtItsBoundary(t *testing.T) {
 
 func int16Ptr(value int16) *int16 { return &value }
 
-// Successful legacy group creation with an initial roster is covered against
-// PostgreSQL; invalid setup must fail before opening its transaction.
+// Invalid setup and undated initial rosters must fail before opening a transaction.
 func TestPostgresStructuredTrainingStoreRejectsInvalidGroupBeforeTransaction(t *testing.T) {
 	store := PostgresStructuredTrainingStore{Pool: structuredTrainingDBFake{err: errors.New("transaction must not start")}}
 	for _, params := range []dbgen.CreateStructuredTrainingGroupParams{

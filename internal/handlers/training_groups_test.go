@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type taskGroupsFake struct {
@@ -52,6 +54,18 @@ func (s *taskGroupsFake) ListRoster(context.Context, uuid.UUID, uuid.UUID, int32
 func (s *taskGroupsFake) SearchAthletes(context.Context, uuid.UUID, uuid.UUID, string, int32) ([]TrainingGroupAthlete, error) {
 	s.searched++
 	return s.rows, nil
+}
+
+var taskGroupSeason = uuid.MustParse("39100000-0000-0000-0000-000000000091")
+
+func (s *taskGroupsFake) PlacementSeasons(context.Context, uuid.UUID, uuid.UUID) ([]dbgen.ListReuseTargetSeasonsRow, error) {
+	return []dbgen.ListReuseTargetSeasonsRow{{ID: taskGroupSeason, Name: "Configured fixture season", StartsOn: pgtype.Date{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}, EndsOn: pgtype.Date{Time: time.Date(2027, 12, 31, 0, 0, 0, 0, time.UTC), Valid: true}}}, nil
+}
+func (s *taskGroupsFake) SearchAthletesForDate(ctx context.Context, a, g, season uuid.UUID, on time.Time, q string, offset int32) ([]TrainingGroupAthlete, error) {
+	return s.SearchAthletes(ctx, a, g, q, offset)
+}
+func (s *taskGroupsFake) ReviewAthleteSelection(context.Context, TrainingGroupRosterInput, []TrainingGroupAthlete) (string, error) {
+	return "opaque-fixture-selection-proof", nil
 }
 func (s *taskGroupsFake) CreateGroup(_ context.Context, in TrainingGroupCreateInput) (TrainingGroupRecord, error) {
 	s.created++
@@ -117,7 +131,7 @@ func TestTrainingGroupAddConflictRetainsOriginalVersionAndSafeProposal(t *testin
 	member := uuid.New()
 	s.rows = []TrainingGroupAthlete{{MembershipID: member, Name: "Atleta elegível"}}
 	original := s.group.UpdatedAt.Add(-time.Hour).Format(time.RFC3339Nano)
-	w := groupRequest(t, s, "POST", trainingGroupsPath+"/"+s.group.ID.String()+"/atletas", url.Values{"version": {original}, "q": {"Atleta"}, "membership_id": {member.String()}}, func(h TrainingGroups, w http.ResponseWriter, r *http.Request) { h.AddAthletes(w, r) })
+	w := groupRequest(t, s, "POST", trainingGroupsPath+"/"+s.group.ID.String()+"/atletas", url.Values{"version": {original}, "q": {"Atleta"}, "season_id": {taskGroupSeason.String()}, "effective_on": {"2026-11-14"}, "command_id": {uuid.NewString()}, "selection_proof": {"opaque-fixture-selection-proof"}, "membership_id": {member.String()}}, func(h TrainingGroups, w http.ResponseWriter, r *http.Request) { h.AddAthletes(w, r) })
 	if w.Code != 409 || s.added != 1 || s.roster.ExpectedUpdatedAt.Format(time.RFC3339Nano) != original || !strings.Contains(w.Body.String(), `value="`+original+`"`) || !strings.Contains(w.Body.String(), "Atleta elegível") {
 		t.Fatalf("status=%d %s", w.Code, w.Body.String())
 	}
@@ -128,7 +142,7 @@ func TestTrainingGroupRevocationDoesNotRediscloseRetainedRoster(t *testing.T) {
 	s.revokeAfterWrite = true
 	member := uuid.New()
 	s.rows = []TrainingGroupAthlete{{MembershipID: member, Name: "PRIVATE PERSON"}}
-	w := groupRequest(t, s, "POST", trainingGroupsPath+"/"+s.group.ID.String()+"/atletas", url.Values{"version": {s.group.UpdatedAt.Format(time.RFC3339Nano)}, "q": {"PRIVATE PERSON"}, "membership_id": {member.String()}}, func(h TrainingGroups, w http.ResponseWriter, r *http.Request) { h.AddAthletes(w, r) })
+	w := groupRequest(t, s, "POST", trainingGroupsPath+"/"+s.group.ID.String()+"/atletas", url.Values{"version": {s.group.UpdatedAt.Format(time.RFC3339Nano)}, "q": {"PRIVATE PERSON"}, "season_id": {taskGroupSeason.String()}, "effective_on": {"2026-11-14"}, "command_id": {uuid.NewString()}, "selection_proof": {"opaque-fixture-selection-proof"}, "membership_id": {member.String()}}, func(h TrainingGroups, w http.ResponseWriter, r *http.Request) { h.AddAthletes(w, r) })
 	if w.Code != 404 || s.searched != 0 || strings.Contains(w.Body.String(), "PRIVATE PERSON") {
 		t.Fatalf("status=%d search=%d %s", w.Code, s.searched, w.Body.String())
 	}
@@ -173,5 +187,40 @@ func TestTrainingGroupReturnContextRequiresVerifiedWeekAndIgnoresArbitraryURL(t 
 		if w.Code != http.StatusSeeOther || w.Header().Get("Location") != expected {
 			t.Fatalf("allowed=%v status=%d location=%s", allowed, w.Code, w.Header().Get("Location"))
 		}
+	}
+}
+
+func TestTrainingGroupFutureDiscoveryRequiresExplicitConfiguredDate(t *testing.T) {
+	for _, tc := range []struct {
+		season, date string
+		want         int
+	}{{"", "", 0}, {taskGroupSeason.String(), "", 0}, {uuid.NewString(), "2026-12-15", 0}, {taskGroupSeason.String(), "2028-01-01", 0}, {taskGroupSeason.String(), "2026-02-30", 0}, {taskGroupSeason.String(), "2026-12-15", 1}} {
+		s := taskGroupsFixture()
+		person := uuid.New()
+		member := uuid.New()
+		s.rows = []TrainingGroupAthlete{{MembershipID: member, UserID: person, GroupID: s.group.ID, SeasonID: taskGroupSeason, DisplayOn: "2026-12-15", Name: "Future eligible person"}}
+		path := trainingGroupsPath + "/" + s.group.ID.String() + "/atletas?" + url.Values{"q": {"Future"}, "season_id": {tc.season}, "effective_on": {tc.date}}.Encode()
+		w := groupRequest(t, s, "GET", path, nil, func(h TrainingGroups, w http.ResponseWriter, r *http.Request) { h.Athletes(w, r) })
+		if w.Code != 200 || s.searched != tc.want {
+			t.Fatalf("season=%s date=%s status=%d reads=%d", tc.season, tc.date, w.Code, s.searched)
+		}
+		if strings.Contains(w.Body.String(), "Future eligible person") != (tc.want == 1) {
+			t.Fatal("candidate names were not gated on explicit context")
+		}
+		if tc.want == 1 && (!strings.Contains(w.Body.String(), "person_id="+person.String()) || !strings.Contains(w.Body.String(), "effective_on=2026-12-15")) {
+			t.Fatal("future person lacks scoped placement entrypoint")
+		}
+	}
+}
+func TestTrainingGroupGapRosterRetainsSafePersonActionAndStatus(t *testing.T) {
+	s := taskGroupsFixture()
+	person := uuid.New()
+	s.rows = []TrainingGroupAthlete{{UserID: person, GroupID: s.group.ID, Name: "Retained source person", Unavailable: true, AlreadyMember: true, PlacementStatus: "Em vigor; tem colocações agendadas"}}
+	w := groupRequest(t, s, "GET", trainingGroupsPath+"/"+s.group.ID.String(), nil, func(h TrainingGroups, w http.ResponseWriter, r *http.Request) { h.Detail(w, r) })
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "Retained source person") || !strings.Contains(w.Body.String(), "Em vigor; tem colocações agendadas") || !strings.Contains(w.Body.String(), "person_id="+person.String()) {
+		t.Fatalf("status=%d missing retained source roster action", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "season_id=") || strings.Contains(w.Body.String(), "effective_on=") {
+		t.Fatal("roster inferred season or date for action")
 	}
 }

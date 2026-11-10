@@ -13,7 +13,7 @@ import (
 )
 
 func publicationSourceFixture() publicationSourceEnvelope {
-	plan, group, season, session, member, athlete := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	plan, group, season, session, member, athlete, placement := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	week := pgtype.Date{Time: time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC), Valid: true}
 	title, description, seasonName, precision, status := "Semana de treino", "Plano confirmado", "2026/2027", "INTERVAL", "ACTIVE"
 	kind := dbgen.TrainingEntryKindTRAINING
@@ -23,8 +23,8 @@ func publicationSourceFixture() publicationSourceEnvelope {
 		Contract:             publicationSourceContract,
 		Header:               publicationPlanHeader{PlanID: plan, GroupID: group, SeasonID: &season, WeekStart: week, SourceUpdatedAt: starts},
 		Overview:             []dbgen.ListStructuredTrainingOverviewForManagerRow{{GroupID: group, GroupName: "Cadetes", ProgrammeName: "Competição", PlanID: &plan, PlanTitle: &title, PlanDescription: &description, SeasonName: &seasonName, WeekStart: week, SessionID: &session, SessionTitle: &title, SessionDescription: &description, StartsAt: starts, EndsAt: ends, EntryKind: &kind, SchedulePrecision: &precision, SessionOn: week, SessionStatus: &status}},
-		Candidates:           []publicationCandidate{{SessionID: session, MembershipID: member, SubjectID: &athlete, StartsOn: week, SessionOn: week}},
-		EligibleRecipients:   []dbgen.ListStructuredTrainingPublicationMembersRow{{MembershipID: member, AthleteUserID: &athlete, AthleteName: "Ana", StartsOn: week, SessionID: session}},
+		Candidates:           []publicationCandidate{{SessionID: session, PlacementID: placement, MembershipID: &member, SubjectID: athlete, StartsOn: week, SessionOn: week}},
+		EligibleRecipients:   []dbgen.ListStructuredTrainingPublicationMembersRow{{PlacementID: placement, MembershipID: member, AthleteUserID: &athlete, AthleteName: "Ana", StartsOn: week, SessionID: session}},
 		VariationDefinitions: []publicationDefinition{}, VariationTargets: []publicationTarget{}, VariationMatches: []publicationVariationTransport{}, ReferencedEvents: []publicationEvent{}, LatestPrescriptions: []publicationHashTuple{},
 	}
 }
@@ -66,7 +66,7 @@ func TestPublicationTransportPreservesCanonicalV1AndMaterialNoop(t *testing.T) {
 	source.Header.LatestPublicationID = &previous
 	source.Header.LatestRevision = 1
 	p := expected[0]
-	source.LatestPrescriptions = []publicationHashTuple{{SessionID: p.SessionID, MembershipID: p.MembershipID, AthleteUserID: &p.AthleteUserID, SnapshotSHA256: p.SnapshotSHA256}}
+	source.LatestPrescriptions = []publicationHashTuple{{PlacementID: &p.PlacementID, SessionID: p.SessionID, MembershipID: p.MembershipID, AthleteUserID: &p.AthleteUserID, SnapshotSHA256: p.SnapshotSHA256}}
 	// An edit followed by revert may have a new source timestamp. Currentness is
 	// established from exact content/subject equality, not the timestamp hint.
 	source.Header.LatestSourceUpdatedAt = source.Header.SourceUpdatedAt
@@ -172,7 +172,7 @@ func TestPublicationTransportEmptyInitialAndEmptySuccessor(t *testing.T) {
 	latest := uuid.New()
 	source.Header.LatestPublicationID = &latest
 	source.Header.LatestRevision = 1
-	source.LatestPrescriptions = []publicationHashTuple{{SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: testUUIDPtr(uuid.New()), SnapshotSHA256: stringsOfZeroHash()}}
+	source.LatestPrescriptions = []publicationHashTuple{{PlacementID: testUUIDPtr(uuid.New()), SessionID: uuid.New(), MembershipID: uuid.New(), AthleteUserID: testUUIDPtr(uuid.New()), SnapshotSHA256: stringsOfZeroHash()}}
 	result, err := materializePublicationSource(decodeSourceFixture(t, source), time.UTC)
 	if err != nil || result.NoChanges || result.Removed != 1 {
 		t.Fatal("reviewed empty successor omitted removal", err)
@@ -185,4 +185,58 @@ func TestPublicationTransportEmptyInitialAndEmptySuccessor(t *testing.T) {
 }
 func stringsOfZeroHash() string {
 	return "0000000000000000000000000000000000000000000000000000000000000000"
+}
+
+func TestPublicationReturnPlacementWithIdenticalBodyRequiresNewPublication(t *testing.T) {
+	source := publicationSourceFixture()
+	first, e := materializePublicationSource(source, time.UTC)
+	if e != nil {
+		t.Fatal(e)
+	}
+	old := first.Prescriptions[0]
+	publication := uuid.New()
+	source.Header.LatestPublicationID = &publication
+	source.Header.LatestRevision = 1
+	source.LatestPrescriptions = []publicationHashTuple{{PlacementID: &old.PlacementID, SessionID: old.SessionID, MembershipID: old.MembershipID, AthleteUserID: &old.AthleteUserID, SnapshotSHA256: old.SnapshotSHA256}}
+	returnPlacement := uuid.New()
+	source.Candidates[0].PlacementID = returnPlacement
+	source.EligibleRecipients[0].PlacementID = returnPlacement
+	next, e := materializePublicationSource(source, time.UTC)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !bytes.Equal(old.Snapshot, next.Prescriptions[0].Snapshot) || old.SnapshotSHA256 != next.Prescriptions[0].SnapshotSHA256 {
+		t.Fatal("relational return lineage changed immutable snapshot content")
+	}
+	if next.NoChanges || next.Changed != 1 || next.Unchanged != 0 || next.Prescriptions[0].PlacementID != returnPlacement {
+		t.Fatal("A2 return was incorrectly reused from withdrawn A1")
+	}
+}
+func TestPublicationStructuralCandidatesPreserveDistinctMissingEpisodes(t *testing.T) {
+	source := publicationSourceFixture()
+	session := source.Candidates[0].SessionID
+	a := publicationCandidate{SessionID: session, PlacementID: uuid.New(), SubjectID: uuid.New(), SessionOn: source.Header.WeekStart}
+	b := a
+	b.PlacementID = uuid.New()
+	b.SubjectID = uuid.New()
+	source.Candidates = append(source.Candidates, a, b)
+	if e := validatePublicationSource(source); e != nil {
+		t.Fatal("distinct ineligible placements folded by absent membership", e)
+	}
+	if len(publicationMembershipIDs(source)) != 1 {
+		t.Fatal("NULL episode was replaced by zero membership lock")
+	}
+	other := append([]publicationCandidate(nil), source.Candidates...)
+	other[1], other[2] = other[2], other[1]
+	if !publicationSameCandidates(source.Candidates, other) {
+		t.Fatal("structural order affected complete candidate comparison")
+	}
+	other[2].PlacementID = uuid.New()
+	if publicationSameCandidates(source.Candidates, other) {
+		t.Fatal("placement lineage substitution accepted")
+	}
+	source.Candidates = append(source.Candidates, a)
+	if e := validatePublicationSource(source); e == nil {
+		t.Fatal("duplicate structural placement accepted")
+	}
 }

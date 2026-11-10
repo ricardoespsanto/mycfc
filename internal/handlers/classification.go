@@ -625,6 +625,11 @@ func (h Classification) Post(w http.ResponseWriter, r *http.Request) {
 	in.ExpectedVersion = expected
 	err = h.Store.Write(r.Context(), in)
 	if err != nil {
+		if errors.Is(err, db.ErrCommitOutcomeUnknown) {
+			(System{}).render(w, r, http.StatusServiceUnavailable, "Estado do pedido", "Confirme a participação atual", "Não foi possível confirmar se o pedido ficou guardado. Reabra a participação atual antes de continuar; este pedido não será repetido automaticamente.", "")
+			return
+		}
+
 		if errors.Is(err, db.ErrDatedParticipationForbidden) {
 			http.NotFound(w, r)
 			return

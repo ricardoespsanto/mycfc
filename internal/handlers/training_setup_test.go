@@ -229,7 +229,7 @@ func TestOptionalSetupReadCannotBlockReadyGroupTasks(t *testing.T) {
 			}
 			groups := &taskGroupsFake{group: currentGroup, rows: []TrainingGroupAthlete{{MembershipID: uuid.New(), Name: "Visible eligible athlete"}}}
 			h := TrainingGroups{Store: groups, Setup: setup}
-			target := trainingGroupsPath + "/" + group.String() + "?week_id=" + week.String() + "&day=2026-11-14&q=Ana"
+			target := trainingGroupsPath + "/" + group.String() + "?week_id=" + week.String() + "&day=2026-11-14&q=Ana&season_id=" + taskGroupSeason.String() + "&effective_on=2026-11-14"
 			r := setupRequest("GET", target, nil, actor, group)
 			w := httptest.NewRecorder()
 			switch tc.mode {

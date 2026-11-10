@@ -236,14 +236,14 @@ func trainingPublicationReviewBinding(input trainingPublicationReviewInput) (tra
 		return metadata, zero, zero, errTrainingPublicationReviewLimit
 	}
 	type tuple struct {
-		session, membership, subject uuid.UUID
-		hash                         [sha256.Size]byte
+		session, membership, subject, placement uuid.UUID
+		hash                                    [sha256.Size]byte
 	}
 	tuples := make([]tuple, 0, len(input.Prescriptions))
 	subjects := make(map[uuid.UUID]uuid.UUID, len(input.Prescriptions))
 	total := 0
 	for _, p := range input.Prescriptions {
-		if p.SessionID == uuid.Nil || p.MembershipID == uuid.Nil || p.AthleteUserID == uuid.Nil {
+		if p.SessionID == uuid.Nil || p.MembershipID == uuid.Nil || p.AthleteUserID == uuid.Nil || p.PlacementID == uuid.Nil {
 			return metadata, zero, zero, errTrainingPublicationReviewInvalid
 		}
 		if previous, ok := subjects[p.MembershipID]; ok && previous != p.AthleteUserID {
@@ -265,7 +265,7 @@ func trainingPublicationReviewBinding(input trainingPublicationReviewInput) (tra
 				return metadata, zero, zero, errTrainingPublicationReviewInvalid
 			}
 		}
-		tuples = append(tuples, tuple{p.SessionID, p.MembershipID, p.AthleteUserID, digest})
+		tuples = append(tuples, tuple{p.SessionID, p.MembershipID, p.AthleteUserID, p.PlacementID, digest})
 	}
 	sort.Slice(tuples, func(i, j int) bool {
 		a, b := tuples[i], tuples[j]
@@ -285,6 +285,7 @@ func trainingPublicationReviewBinding(input trainingPublicationReviewInput) (tra
 		_, _ = h.Write(t.session[:])
 		_, _ = h.Write(t.membership[:])
 		_, _ = h.Write(t.subject[:])
+		_, _ = h.Write(t.placement[:])
 		_, _ = h.Write(t.hash[:])
 	}
 	var digest [sha256.Size]byte

@@ -43,9 +43,9 @@ func mixedPublicationSourceFixture() publicationSourceEnvelope {
 			row.DayBand = &band
 		}
 		source.Overview = append(source.Overview, row)
-		member, athlete := uuid.New(), uuid.New()
-		source.Candidates = append(source.Candidates, publicationCandidate{SessionID: id, MembershipID: member, SubjectID: &athlete, StartsOn: source.Header.WeekStart, SessionOn: row.SessionOn})
-		source.EligibleRecipients = append(source.EligibleRecipients, dbgen.ListStructuredTrainingPublicationMembersRow{MembershipID: member, AthleteUserID: &athlete, AthleteName: "Synthetic athlete", StartsOn: source.Header.WeekStart, SessionID: id})
+		member, athlete, placement := uuid.New(), uuid.New(), uuid.New()
+		source.Candidates = append(source.Candidates, publicationCandidate{PlacementID: placement, SessionID: id, MembershipID: &member, SubjectID: athlete, StartsOn: source.Header.WeekStart, SessionOn: row.SessionOn})
+		source.EligibleRecipients = append(source.EligibleRecipients, dbgen.ListStructuredTrainingPublicationMembersRow{PlacementID: placement, MembershipID: member, AthleteUserID: &athlete, AthleteName: "Synthetic athlete", StartsOn: source.Header.WeekStart, SessionID: id})
 	}
 	return source
 }
@@ -130,8 +130,9 @@ func TestPublicationRecipientVariationDoesNotMutateNextRecipientsSource(t *testi
 	source.Overview[0].SegmentModality = &modality
 	source.Overview[0].SegmentTitle = publicationScheduleStringPtr("Common instructions")
 	first := source.EligibleRecipients[0]
-	source.EligibleRecipients = append(source.EligibleRecipients, dbgen.ListStructuredTrainingPublicationMembersRow{MembershipID: secondMember, AthleteUserID: &secondAthlete, AthleteName: "Second athlete", StartsOn: source.Header.WeekStart, SessionID: first.SessionID})
-	source.Candidates = append(source.Candidates, publicationCandidate{SessionID: first.SessionID, MembershipID: secondMember, SubjectID: &secondAthlete, StartsOn: source.Header.WeekStart, SessionOn: source.Header.WeekStart})
+	secondPlacement := uuid.New()
+	source.EligibleRecipients = append(source.EligibleRecipients, dbgen.ListStructuredTrainingPublicationMembersRow{PlacementID: secondPlacement, MembershipID: secondMember, AthleteUserID: &secondAthlete, AthleteName: "Second athlete", StartsOn: source.Header.WeekStart, SessionID: first.SessionID})
+	source.Candidates = append(source.Candidates, publicationCandidate{PlacementID: secondPlacement, SessionID: first.SessionID, MembershipID: &secondMember, SubjectID: secondAthlete, StartsOn: source.Header.WeekStart, SessionOn: source.Header.WeekStart})
 	patch := json.RawMessage(`{"title":"First athlete only"}`)
 	source.VariationDefinitions = []publicationDefinition{{VariationID: variation, PlanID: source.Header.PlanID, SubjectID: segment, SubjectKind: dbgen.TrainingVariationSubjectKindSEGMENT, TargetMembershipID: &first.MembershipID, Patch: patch}}
 	source.VariationMatches = []publicationVariationTransport{{ListTrainingVariationMatchesForManagerRow: dbgen.ListTrainingVariationMatchesForManagerRow{VariationID: variation, PlanID: source.Header.PlanID, SessionID: first.SessionID, SubjectKind: dbgen.TrainingVariationSubjectKindSEGMENT, SubjectID: segment, Operation: dbgen.TrainingVariationOperationOVERRIDE, MembershipID: &first.MembershipID, Priority: 2, ChangeSummary: "First athlete only"}, Patch: patch}}

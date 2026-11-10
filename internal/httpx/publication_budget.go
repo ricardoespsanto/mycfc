@@ -10,6 +10,7 @@ import (
 type publicationRequestStartKey struct{}
 
 const PublicationConfirmMaxBytes int64 = 16 << 10
+const TrainingPlacementWriteMaxBytes int64 = 64 << 10
 
 // PublicationIngressMiddleware records the business clock before admission,
 // sessions, CSRF parsing and handler prework. The bounded task body must be
@@ -17,10 +18,13 @@ const PublicationConfirmMaxBytes int64 = 16 << 10
 func PublicationIngressMiddleware(writeTimeout time.Duration) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if publicationPostPath(r) || focusedWorkoutPostPath(r) {
+			if publicationPostPath(r) || focusedWorkoutPostPath(r) || placementPostPath(r) {
 				limit := PublicationConfirmMaxBytes
 				if focusedWorkoutPostPath(r) {
 					limit = 1 << 20
+				}
+				if placementPostPath(r) {
+					limit = TrainingPlacementWriteMaxBytes
 				}
 				started := time.Now()
 				business := min(20*time.Second, writeTimeout-10*time.Second)
@@ -96,4 +100,23 @@ func focusedWorkoutPostPath(r *http.Request) bool {
 		return parts[3] == "cancelar"
 	}
 	return len(parts) == 5 && parts[3] == "editar" && (parts[4] == "rascunho" || parts[4] == "prever" || parts[4] == "confirmar")
+}
+
+func placementPostPath(r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	const groups = "/admin/treinos/estruturados/grupos/"
+	if strings.HasPrefix(r.URL.Path, groups) {
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, groups), "/")
+		if len(parts) == 2 && parts[0] != "" && parts[1] == "atletas" {
+			return true
+		}
+	}
+	const base = "/admin/treinos/estruturados/colocacoes"
+	switch r.URL.Path {
+	case base, base + "/prever", base + "/confirmar", base + "/cancelar/prever", base + "/cancelar/confirmar":
+		return true
+	}
+	return false
 }

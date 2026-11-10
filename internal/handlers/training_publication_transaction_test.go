@@ -56,6 +56,18 @@ func (q *publicationTransactionFake) SourceBudget(context.Context, uuid.UUID, uu
 func (q *publicationTransactionFake) StructuralCandidates(context.Context, uuid.UUID, uuid.UUID) ([]publicationCandidate, error) {
 	return q.source.Candidates, q.step("candidates")
 }
+func (q *publicationTransactionFake) LockPlacementHeads(context.Context, uuid.UUID, uuid.UUID) ([]dbgen.TrainingPlacementHead, error) {
+	heads := []dbgen.TrainingPlacementHead{}
+	seen := map[uuid.UUID]bool{}
+	programme := uuid.New()
+	for _, c := range q.source.Candidates {
+		if !seen[c.SubjectID] {
+			heads = append(heads, dbgen.TrainingPlacementHead{SubjectUserID: c.SubjectID, ProgrammeID: programme, Revision: 1})
+			seen[c.SubjectID] = true
+		}
+	}
+	return heads, q.step("placement-heads")
+}
 func (q *publicationTransactionFake) LockMemberships(context.Context, uuid.UUID, uuid.UUID) ([]uuid.UUID, error) {
 	return publicationMembershipIDs(q.source), q.step("memberships")
 }
@@ -66,9 +78,9 @@ func (q *publicationTransactionFake) LockUsers(context.Context, uuid.UUID, uuid.
 	users := []uuid.UUID{}
 	seen := map[uuid.UUID]bool{}
 	for _, c := range q.source.Candidates {
-		if c.SubjectID != nil && !seen[*c.SubjectID] {
-			users = append(users, *c.SubjectID)
-			seen[*c.SubjectID] = true
+		if c.SubjectID != uuid.Nil && !seen[c.SubjectID] {
+			users = append(users, c.SubjectID)
+			seen[c.SubjectID] = true
 		}
 	}
 	return users, q.step("users")
@@ -88,14 +100,14 @@ func (q *publicationTransactionFake) FinalFacts(_ context.Context, _, _ uuid.UUI
 	h := q.source.Header
 	f := publicationFinalFacts{PlanID: h.PlanID, GroupID: h.GroupID, SourceUpdatedAt: h.SourceUpdatedAt, LatestPublicationID: id, LatestRevision: h.LatestRevision, LatestSupersedesID: h.LatestSupersedesID, TransactionLisbonDate: h.WeekStart, ActualLisbonDate: h.WeekStart, DecisionAt: pgtype.Timestamptz{Time: q.decision, Valid: true}, RawTupleCount: int64(len(q.source.Candidates)), RecipientTuples: []publicationRecipientTuple{}, PublicationTuples: []publicationHashTuple{}}
 	for _, r := range q.source.EligibleRecipients {
-		f.RecipientTuples = append(f.RecipientTuples, publicationRecipientTuple{r.SessionID, r.MembershipID, *r.AthleteUserID})
+		f.RecipientTuples = append(f.RecipientTuples, publicationRecipientTuple{PlacementID: r.PlacementID, SessionID: r.SessionID, MembershipID: r.MembershipID, AthleteUserID: *r.AthleteUserID})
 	}
 	if q.publication.ID != uuid.Nil {
 		f.LatestRevision = q.publication.Revision
 		f.LatestSupersedesID = q.publication.SupersedesID
 		for _, p := range q.inserted {
 			subject := p.AthleteUserID
-			f.PublicationTuples = append(f.PublicationTuples, publicationHashTuple{p.SessionID, p.MembershipID, &subject, p.SnapshotSHA256})
+			f.PublicationTuples = append(f.PublicationTuples, publicationHashTuple{PlacementID: &p.PlacementID, SessionID: p.SessionID, MembershipID: p.MembershipID, AthleteUserID: &subject, SnapshotSHA256: p.SnapshotSHA256})
 		}
 	} else {
 		f.PublicationTuples = q.source.LatestPrescriptions
@@ -142,7 +154,7 @@ func TestPublicationTransactionOrdersPostAdmissionChecksAndOwnSuccessor(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := []string{"admission", "runtime", "actor", "guard", "plan", "budget", "candidates", "memberships", "events", "users", "source", "artifacts", "insert publication", "insert prescription", "final"}
+	expected := []string{"admission", "runtime", "actor", "guard", "plan", "budget", "candidates", "placement-heads", "memberships", "events", "users", "source", "artifacts", "insert publication", "insert prescription", "final"}
 	if !reflect.DeepEqual(q.steps, expected) {
 		t.Fatalf("wrong ordering: %v", q.steps)
 	}
@@ -153,7 +165,7 @@ func TestPublicationTransactionOrdersPostAdmissionChecksAndOwnSuccessor(t *testi
 }
 
 func TestPublicationTransactionStaleLatestAndRuntimeFailBeforeMutation(t *testing.T) {
-	for _, step := range []string{"admission", "runtime", "actor", "guard", "plan", "budget", "candidates", "memberships", "events", "users", "source", "artifacts"} {
+	for _, step := range []string{"admission", "runtime", "actor", "guard", "plan", "budget", "candidates", "placement-heads", "memberships", "events", "users", "source", "artifacts"} {
 		t.Run(step, func(t *testing.T) {
 			q, input, now := publicationTransactionFixture(t)
 			sentinel := errors.New("refused")
@@ -225,7 +237,7 @@ func TestPublicationTransactionFreshMaterialNoopKeepsOriginalRevision(t *testing
 	q.source.Header.SourceUpdatedAt.Time = q.source.Header.SourceUpdatedAt.Time.Add(time.Minute)
 	for _, p := range material.Prescriptions {
 		subject := p.AthleteUserID
-		q.source.LatestPrescriptions = append(q.source.LatestPrescriptions, publicationHashTuple{p.SessionID, p.MembershipID, &subject, p.SnapshotSHA256})
+		q.source.LatestPrescriptions = append(q.source.LatestPrescriptions, publicationHashTuple{PlacementID: &p.PlacementID, SessionID: p.SessionID, MembershipID: p.MembershipID, AthleteUserID: &subject, SnapshotSHA256: p.SnapshotSHA256})
 	}
 	metadata := input.Review.metadata
 	metadata.SourceUpdatedAt = q.source.Header.SourceUpdatedAt.Time

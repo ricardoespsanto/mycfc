@@ -16,15 +16,15 @@ import (
 
 func instructionReviewFixture() publicationSourceEnvelope {
 	source := publicationSourceFixture()
-	segment, variation, secondMember, secondAthlete := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	segment, variation, secondMember, secondAthlete, secondPlacement := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	position, modality, title := int32(1), dbgen.TrainingSegmentModalityGYM, "Common instructions"
 	source.Overview[0].SegmentID, source.Overview[0].SegmentPosition = &segment, &position
 	source.Overview[0].SegmentModality, source.Overview[0].SegmentTitle = &modality, &title
 	other := source.EligibleRecipients[0]
-	other.MembershipID, other.AthleteUserID, other.AthleteName = secondMember, &secondAthlete, "Bruno"
+	other.MembershipID, other.AthleteUserID, other.AthleteName, other.PlacementID = secondMember, &secondAthlete, "Bruno", secondPlacement
 	source.EligibleRecipients = append(source.EligibleRecipients, other)
 	candidate := source.Candidates[0]
-	candidate.MembershipID, candidate.SubjectID = secondMember, &secondAthlete
+	candidate.MembershipID, candidate.SubjectID, candidate.PlacementID = &secondMember, secondAthlete, secondPlacement
 	source.Candidates = append(source.Candidates, candidate)
 	patch := json.RawMessage(`{"title":"Ana only"}`)
 	member := source.EligibleRecipients[0].MembershipID

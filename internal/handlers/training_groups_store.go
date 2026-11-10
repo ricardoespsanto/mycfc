@@ -3,7 +3,8 @@ package handlers
 import (
 	"context"
 	"errors"
-	"sort"
+	"github.com/cfcoimbra/mycfc/internal/db"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -28,9 +29,12 @@ type TrainingGroupScope struct {
 	Name                string
 }
 type TrainingGroupAthlete struct {
-	MembershipID, UserID uuid.UUID
-	Name                 string
-	AlreadyMember        bool
+	MembershipID, UserID           uuid.UUID
+	GroupID, PlacementID, SeasonID uuid.UUID
+	DisplayOn, PlacementStatus     string
+	Unavailable                    bool
+	Name                           string
+	AlreadyMember                  bool
 }
 type TrainingGroupCreateInput struct {
 	ActorID             uuid.UUID
@@ -43,9 +47,12 @@ type TrainingGroupRenameInput struct {
 	ExpectedUpdatedAt time.Time
 }
 type TrainingGroupRosterInput struct {
-	ActorID, GroupID  uuid.UUID
-	MembershipIDs     []uuid.UUID
-	ExpectedUpdatedAt time.Time
+	ActorID, GroupID    uuid.UUID
+	SeasonID, CommandID uuid.UUID
+	SelectionProof      string
+	EffectiveOn         time.Time
+	MembershipIDs       []uuid.UUID
+	ExpectedUpdatedAt   time.Time
 }
 type TrainingGroupRosterResult struct {
 	Group TrainingGroupRecord
@@ -57,6 +64,9 @@ type TrainingGroupStore interface {
 	GetGroup(context.Context, uuid.UUID, uuid.UUID) (TrainingGroupRecord, error)
 	ListRoster(context.Context, uuid.UUID, uuid.UUID, int32) ([]TrainingGroupAthlete, error)
 	SearchAthletes(context.Context, uuid.UUID, uuid.UUID, string, int32) ([]TrainingGroupAthlete, error)
+	PlacementSeasons(context.Context, uuid.UUID, uuid.UUID) ([]dbgen.ListReuseTargetSeasonsRow, error)
+	SearchAthletesForDate(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, time.Time, string, int32) ([]TrainingGroupAthlete, error)
+	ReviewAthleteSelection(context.Context, TrainingGroupRosterInput, []TrainingGroupAthlete) (string, error)
 	CreateGroup(context.Context, TrainingGroupCreateInput) (TrainingGroupRecord, error)
 	RenameGroup(context.Context, TrainingGroupRenameInput) (TrainingGroupRecord, error)
 	AddAthletes(context.Context, TrainingGroupRosterInput) (TrainingGroupRosterResult, error)
@@ -122,7 +132,32 @@ func (s PostgresTrainingGroupStore) athletes(ctx context.Context, actor, id uuid
 	return out, nil
 }
 func (s PostgresTrainingGroupStore) ListRoster(ctx context.Context, actor, id uuid.UUID, offset int32) ([]TrainingGroupAthlete, error) {
-	return s.athletes(ctx, actor, id, "", offset, true)
+	if offset < 0 || offset > 1980 {
+		return nil, ErrTrainingGroupEligibility
+	}
+	if _, err := s.GetGroup(ctx, actor, id); err != nil {
+		return nil, err
+	}
+	rows, err := dbgen.New(s.Pool).TrainingGroupPlacementRosterForReview(ctx, dbgen.TrainingGroupPlacementRosterForReviewParams{ActorID: actor, GroupID: id, RowOffset: offset})
+	if err != nil {
+		return nil, err
+	}
+	out := []TrainingGroupAthlete{}
+	for _, row := range rows {
+		if row.UserID == uuid.Nil || row.PlacementID == uuid.Nil || row.GroupID != id {
+			return nil, ErrTrainingGroupEligibility
+		}
+		member := optionalPlacementUUID(row.MembershipID)
+		status := "Agendada para " + placementDateString(row.DisplayOn)
+		if row.IsCurrent {
+			status = "Em vigor"
+			if row.HasScheduled {
+				status += "; tem colocações agendadas"
+			}
+		}
+		out = append(out, TrainingGroupAthlete{MembershipID: member, UserID: row.UserID, GroupID: id, PlacementID: row.PlacementID, Name: row.Name, AlreadyMember: true, Unavailable: row.Availability != "AVAILABLE", PlacementStatus: status})
+	}
+	return out, nil
 }
 func (s PostgresTrainingGroupStore) SearchAthletes(ctx context.Context, actor, id uuid.UUID, q string, offset int32) ([]TrainingGroupAthlete, error) {
 	return s.athletes(ctx, actor, id, strings.TrimSpace(q), offset, false)
@@ -169,7 +204,7 @@ func (s PostgresTrainingGroupStore) createGroupWithMembers(ctx context.Context, 
 	fail := func(err error) (TrainingGroupRecord, dbgen.TrainingGroup, error) {
 		return TrainingGroupRecord{}, dbgen.TrainingGroup{}, err
 	}
-	if in.Name != strings.TrimSpace(in.Name) || utf8.RuneCountInString(in.Name) < 2 || utf8.RuneCountInString(in.Name) > 120 || (in.ProgrammeID == nil) == (in.TeamID == nil) {
+	if len(members) > 0 || in.Name != strings.TrimSpace(in.Name) || utf8.RuneCountInString(in.Name) < 2 || utf8.RuneCountInString(in.Name) > 120 || (in.ProgrammeID == nil) == (in.TeamID == nil) {
 		return fail(ErrTrainingGroupEligibility)
 	}
 	tx, q, err := s.transaction(ctx, in.ActorID)
@@ -195,11 +230,7 @@ func (s PostgresTrainingGroupStore) createGroupWithMembers(ctx context.Context, 
 	if err != nil {
 		return fail(err)
 	}
-	if len(members) > 0 {
-		if _, err = addTaskGroupMembers(ctx, tx, q, TrainingGroupRosterInput{ActorID: in.ActorID, GroupID: row.ID, MembershipIDs: members}); err != nil {
-			return fail(err)
-		}
-	}
+
 	out, err := getTaskGroup(ctx, q, in.ActorID, row.ID)
 	if err != nil {
 		return fail(err)
@@ -252,27 +283,27 @@ func (s PostgresTrainingGroupStore) RenameGroup(ctx context.Context, in Training
 	return out, tx.Commit(ctx)
 }
 func (s PostgresTrainingGroupStore) AddAthletes(ctx context.Context, in TrainingGroupRosterInput) (TrainingGroupRosterResult, error) {
-	if len(in.MembershipIDs) == 0 || len(in.MembershipIDs) > 20 {
-		return TrainingGroupRosterResult{}, ErrTrainingGroupEligibility
+	var out TrainingGroupRosterResult
+	if in.ActorID == uuid.Nil || in.GroupID == uuid.Nil || in.SeasonID == uuid.Nil || in.CommandID == uuid.Nil || in.EffectiveOn.IsZero() {
+		return out, ErrTrainingGroupEligibility
 	}
-	tx, q, err := s.transaction(ctx, in.ActorID)
-	if err != nil {
-		return TrainingGroupRosterResult{}, err
+	reviews, e := focusedWorkoutReviews.verifyPlacementSelection(in.SelectionProof, in, time.Now())
+	if e != nil {
+		return out, ErrTrainingGroupEligibility
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = lockTaskGroup(ctx, tx, q, in.ActorID, in.GroupID, in.ExpectedUpdatedAt); err != nil {
-		return TrainingGroupRosterResult{}, err
+	pool, ok := s.Pool.(*pgxpool.Pool)
+	if !ok {
+		return out, errTrainingPlacementUnavailable
 	}
-	added, err := addTaskGroupMembers(ctx, tx, q, in)
-	if err != nil {
-		return TrainingGroupRosterResult{}, err
+	outcome, e := db.WithRecipientPublicationTx(ctx, pool, focusedEditTxOptions(), func(ctx context.Context, commands dbgen.DBTX) error {
+		var e error
+		out, e = saveTrainingPlacementBatch(ctx, trainingPlacementPostgresQueries{dbgen.New(commands), commands}, in, reviews)
+		return e
+	})
+	if e = placementBatchError(outcome, e); e != nil {
+		return TrainingGroupRosterResult{}, e
 	}
-	group, err := getTaskGroup(ctx, q, in.ActorID, in.GroupID)
-	if err != nil {
-		return TrainingGroupRosterResult{}, err
-	}
-	out := TrainingGroupRosterResult{Group: group, Added: added}
-	return out, tx.Commit(ctx)
+	return out, nil
 }
 
 func taskGroupWeekID(value string) *uuid.UUID {
@@ -283,55 +314,44 @@ func taskGroupWeekID(value string) *uuid.UUID {
 	return &id
 }
 
-func addTaskGroupMembers(ctx context.Context, tx pgx.Tx, q *dbgen.Queries, in TrainingGroupRosterInput) (int, error) {
-	ids := append([]uuid.UUID{}, in.MembershipIDs...)
-	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
-	for i, id := range ids {
-		if id == uuid.Nil || i > 0 && id == ids[i-1] {
-			return 0, ErrTrainingGroupEligibility
-		}
-	}
-	// Every placement writer locks people in deterministic order. This serializes
-	// same-person additions across different groups without ending old placements.
-	rows, err := tx.Query(ctx, `SELECT u.id FROM users u WHERE u.id IN (SELECT user_id FROM user_memberships WHERE id=ANY($1::uuid[])) ORDER BY u.id FOR UPDATE`, ids)
-	if err != nil {
-		return 0, err
-	}
-	for rows.Next() {
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return 0, err
-	}
-	for _, id := range ids {
-		if _, err = q.ValidateTaskTrainingGroupAthlete(ctx, dbgen.ValidateTaskTrainingGroupAthleteParams{ActorID: in.ActorID, GroupID: in.GroupID, MembershipID: id}); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				err = ErrTrainingGroupEligibility
-			}
-			return 0, err
-		}
-	}
-	added := 0
-	for _, id := range ids {
-		n, e := q.AddTaskTrainingGroupAthlete(ctx, dbgen.AddTaskTrainingGroupAthleteParams{ActorID: in.ActorID, GroupID: in.GroupID, MembershipID: id})
-		if e != nil {
-			return 0, e
-		}
-		added += int(n)
-	}
-	if added > 0 {
-		if err = q.TouchTaskTrainingGroup(ctx, in.GroupID); err != nil {
-			return 0, err
-		}
-	}
-	return added, nil
-}
-
 // AllowsWeek validates an older planner return context without loading any unrelated planner data.
 func (s PostgresTrainingGroupStore) AllowsWeek(ctx context.Context, actor, group, week uuid.UUID) (bool, error) {
 	if _, err := s.GetGroup(ctx, actor, group); err != nil {
 		return false, err
 	}
 	return dbgen.New(s.Pool).TrainingGroupAllowsWeek(ctx, dbgen.TrainingGroupAllowsWeekParams{ActorID: actor, GroupID: group, WeekID: week})
+}
+
+func (s PostgresTrainingGroupStore) PlacementSeasons(ctx context.Context, actor, group uuid.UUID) ([]dbgen.ListReuseTargetSeasonsRow, error) {
+	if _, e := s.GetGroup(ctx, actor, group); e != nil {
+		return nil, e
+	}
+	rows, e := dbgen.New(s.Pool).ListReuseTargetSeasons(ctx, dbgen.ListReuseTargetSeasonsParams{ActorID: actor, GroupID: group})
+	if e != nil {
+		return nil, e
+	}
+	if len(rows) > 100 {
+		return nil, ErrTrainingGroupEligibility
+	}
+	return rows, nil
+}
+func (s PostgresTrainingGroupStore) SearchAthletesForDate(ctx context.Context, actor, group, season uuid.UUID, on time.Time, name string, offset int32) ([]TrainingGroupAthlete, error) {
+	if offset < 0 || offset > 1980 || season == uuid.Nil || on.IsZero() || utf8.RuneCountInString(name) > 100 || strings.TrimSpace(name) == "" {
+		return nil, ErrTrainingGroupEligibility
+	}
+	if _, e := s.GetGroup(ctx, actor, group); e != nil {
+		return nil, e
+	}
+	rows, e := dbgen.New(s.Pool).TrainingGroupAthleteChoicesForDate(ctx, dbgen.TrainingGroupAthleteChoicesForDateParams{ActorID: actor, GroupID: group, SeasonID: season, EffectiveOn: placementDate(on.Format("2006-01-02")), NameQuery: name, RowOffset: offset})
+	if e != nil {
+		return nil, e
+	}
+	out := []TrainingGroupAthlete{}
+	for _, row := range rows {
+		if row.UserID == uuid.Nil || row.MembershipID == uuid.Nil {
+			return nil, ErrTrainingGroupEligibility
+		}
+		out = append(out, TrainingGroupAthlete{MembershipID: row.MembershipID, UserID: row.UserID, GroupID: group, SeasonID: season, DisplayOn: on.Format("2006-01-02"), Name: row.Name, AlreadyMember: row.AlreadyMember, Unavailable: row.Unavailable})
+	}
+	return out, nil
 }

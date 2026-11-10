@@ -29,6 +29,7 @@ import (
 )
 
 type StructuredTraining struct {
+	Placements       *TrainingPlacements
 	Workouts         *StructuredWorkout
 	Reuse            *StructuredReuse
 	HTTPWriteTimeout time.Duration
@@ -519,54 +520,12 @@ func (h StructuredTraining) PrescriptionForSession(w http.ResponseWriter, r *htt
 	_ = pages.TrainingPrescriptionChoices(page).Render(r.Context(), w)
 }
 
+// The native group task creates an empty group; additions require the explicit
+// configured date/season and signed selection proof on the group's roster task.
 func (h StructuredTraining) CreateGroup(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		h.renderIndex(w, r, http.StatusBadRequest, pages.StructuredTrainingPage{Error: "Não foi possível ler o formulário.", OpenForm: "group"})
-		return
-	}
-	user, _ := CurrentUserFromContext(r.Context())
-	form := pages.StructuredTrainingGroupForm{Name: strings.TrimSpace(r.PostForm.Get("name")), ProgrammeID: r.PostForm.Get("programme_id"), TeamID: r.PostForm.Get("team_id"), MembershipIDs: map[string]bool{}, Errors: validation.FieldErrors{}}
-	programmeID, programmeErr := optionalUUID(form.ProgrammeID)
-	teamID, teamErr := optionalUUID(form.TeamID)
-	if !validTrainingText(form.Name, 2, 120) {
-		form.Errors.Add("name", "O nome deve ter entre 2 e 120 caracteres.")
-	}
-	if programmeErr != nil || teamErr != nil || (programmeID == nil) == (teamID == nil) || !structuredScopeAllowed(user, programmeID, teamID) {
-		form.Errors.Add("scope", "Selecione exatamente um âmbito que possa gerir.")
-	}
-	membershipIDs := make([]uuid.UUID, 0, len(r.PostForm["membership_id"]))
-	for _, rawID := range r.PostForm["membership_id"] {
-		form.MembershipIDs[rawID] = true
-		id, err := uuid.Parse(rawID)
-		if err != nil {
-			form.Errors.Add("members", "Selecione apenas atletas válidos.")
-			continue
-		}
-		membershipIDs = append(membershipIDs, id)
-	}
-	if len(membershipIDs) == 0 {
-		form.Errors.Add("members", "Selecione pelo menos um atleta.")
-	}
-	if !form.Errors.Empty() {
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "group", GroupForm: form})
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
-	defer cancel()
-	_, err := h.Store.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{Name: form.Name, ProgrammeID: programmeID, TeamID: teamID, CreatedByID: user.ID}, MembershipIDs: membershipIDs})
-	if errors.Is(err, errStructuredTrainingMembershipScope) {
-		form.Errors.Add("members", "Um ou mais atletas já não pertencem ao âmbito selecionado.")
-		h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "group", GroupForm: form})
-		return
-	}
-	if err != nil {
-		if !h.writeTrainingScheduleError(w, r, err) {
-			h.System.InternalError(w, r)
-		}
-		return
-	}
-	h.flash(r, "Grupo de treino criado.")
-	h.redirectPlanner(w, r, "/admin/treinos/estruturados")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	httpx.Redirect(w, r, trainingGroupsPath+"/criar", http.StatusSeeOther)
 }
 
 func (h StructuredTraining) CreateWeek(w http.ResponseWriter, r *http.Request) {
@@ -3067,15 +3026,15 @@ func (h StructuredTraining) structuredPublicationStates(ctx context.Context, aud
 			candidates, candidateErr := buildStructuredPrescriptionInputs(row.ID, audience, week, recipients, matches)
 			previous, previousErr := h.Store.ListLatestTrainingPrescriptionHashesForPlan(ctx, row.ID)
 			if candidateErr == nil && previousErr == nil {
-				previousHashes := map[string]string{}
+				previousHashes := map[string]dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{}
 				for _, prescription := range previous {
-					previousHashes[prescription.MembershipID.String()+":"+prescription.SessionID.String()] = prescription.SnapshotSha256
+					previousHashes[prescription.MembershipID.String()+":"+prescription.SessionID.String()] = prescription
 				}
 				for _, prescription := range candidates {
 					key := prescription.MembershipID.String() + ":" + prescription.SessionID.String()
 					if previousHash, exists := previousHashes[key]; !exists {
 						added++
-					} else if previousHash == prescription.SnapshotSHA256 {
+					} else if previousHash.PlacementID != nil && *previousHash.PlacementID == prescription.PlacementID && previousHash.SnapshotSha256 == prescription.SnapshotSHA256 {
 						unchanged++
 						delete(previousHashes, key)
 					} else {
@@ -3174,7 +3133,7 @@ func buildStructuredPrescriptionInputsWithSchedules(planID uuid.UUID, audience p
 	result := make([]StructuredPrescriptionInput, 0, len(recipients))
 	for _, recipient := range recipients {
 		key := [2]uuid.UUID{recipient.SessionID, recipient.MembershipID}
-		if recipient.AthleteUserID == nil || *recipient.AthleteUserID == uuid.Nil || recipient.MembershipID == uuid.Nil || seenRecipients[key] {
+		if recipient.AthleteUserID == nil || *recipient.AthleteUserID == uuid.Nil || recipient.MembershipID == uuid.Nil || recipient.PlacementID == uuid.Nil || seenRecipients[key] {
 			return nil, errPublicationSourceUnavailable
 		}
 		seenRecipients[key] = true
@@ -3206,7 +3165,7 @@ func buildStructuredPrescriptionInputsWithSchedules(planID uuid.UUID, audience p
 		}
 		totalSnapshotBytes += len(encoded)
 		digest := sha256.Sum256(encoded)
-		result = append(result, StructuredPrescriptionInput{SessionID: recipient.SessionID, MembershipID: recipient.MembershipID, AthleteUserID: *recipient.AthleteUserID, Snapshot: encoded, SnapshotSHA256: fmt.Sprintf("%x", digest)})
+		result = append(result, StructuredPrescriptionInput{PlacementID: recipient.PlacementID, SessionID: recipient.SessionID, MembershipID: recipient.MembershipID, AthleteUserID: *recipient.AthleteUserID, Snapshot: encoded, SnapshotSHA256: fmt.Sprintf("%x", digest)})
 	}
 	return result, nil
 }

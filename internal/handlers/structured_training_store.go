@@ -103,6 +103,7 @@ type StructuredDayCopyInput struct {
 }
 
 type StructuredPrescriptionInput struct {
+	PlacementID    uuid.UUID
 	SessionID      uuid.UUID
 	MembershipID   uuid.UUID
 	AthleteUserID  uuid.UUID
@@ -244,7 +245,10 @@ func (s PostgresStructuredTrainingStore) ListStructuredTrainingPublicationMember
 	}
 	result := make([]dbgen.ListStructuredTrainingPublicationMembersRow, len(rows))
 	for i, row := range rows {
-		result[i] = dbgen.ListStructuredTrainingPublicationMembersRow(row)
+		if row.MembershipID == nil || *row.MembershipID == uuid.Nil || row.PlacementID == uuid.Nil {
+			return nil, errPublicationSourceUnavailable
+		}
+		result[i] = dbgen.ListStructuredTrainingPublicationMembersRow{PlacementID: row.PlacementID, MembershipID: *row.MembershipID, AthleteUserID: &row.AthleteUserID, AthleteName: row.AthleteName, StartsOn: row.StartsOn, EndsOn: row.EndsOn, SessionID: row.SessionID}
 	}
 	return result, nil
 }
@@ -272,7 +276,7 @@ func (s PostgresStructuredTrainingStore) ListLatestTrainingPrescriptionHashesFor
 	}
 	result := make([]dbgen.ListLatestTrainingPrescriptionHashesForPlanRow, len(rows))
 	for i, row := range rows {
-		result[i] = dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{MembershipID: row.MembershipID, SessionID: row.SessionID, SnapshotSha256: row.SnapshotSha256}
+		result[i] = dbgen.ListLatestTrainingPrescriptionHashesForPlanRow{PlacementID: row.PlacementID, MembershipID: row.MembershipID, SessionID: row.SessionID, SnapshotSha256: row.SnapshotSha256}
 	}
 	return result, nil
 }
