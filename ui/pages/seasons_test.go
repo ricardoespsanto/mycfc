@@ -64,9 +64,28 @@ func TestSeasonSelectionRequiresPreviewBeforeConfirmation(t *testing.T) {
 	p.Mode = "preview"
 	p.Token = "original-token"
 	body = renderSeasons(t, p)
-	for _, want := range []string{`name="confirm" value="yes"`, `name="preview_token" value="original-token"`, "Não existe uma época atual.", "não transfere planos nem publicações", "2027-03-01"} {
+	for _, want := range []string{`type="hidden" name="confirm" value="yes"`, `name="preview_token" value="original-token"`, "Não existe uma época atual.", "não transfere planos nem publicações", "2027-03-01"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("preview missing %q", want)
+		}
+	}
+	button := regexp.MustCompile(`<button[^>]*>Confirmar época atual</button>`).FindString(body)
+	if button == "" || strings.Contains(button, `name=`) || strings.Contains(button, `value=`) {
+		t.Fatal("native confirmation must survive pending submitter disabling: hidden confirm field and unnamed button required")
+	}
+}
+func TestSeasonInvalidPreviewCannotSubmitConfirmation(t *testing.T) {
+	for _, p := range []SeasonsPage{
+		{Mode: "preview", Token: "token", Conflict: "Seleção alterada"},
+		{Mode: "preview", Token: "token", Form: SeasonForm{Errors: validation.FieldErrors{"form": "Pré-visualização expirada"}}},
+		{Mode: "preview"},
+	} {
+		body := renderSeasons(t, p)
+		if strings.Contains(body, `name="confirm"`) || strings.Contains(body, `>Confirmar época atual</button>`) {
+			t.Fatal("invalid or tokenless preview offers confirmation")
+		}
+		if !strings.Contains(body, "Recarregar e rever a seleção") {
+			t.Fatal("invalid preview lost recovery path")
 		}
 	}
 }

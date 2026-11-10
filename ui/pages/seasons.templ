@@ -182,13 +182,14 @@ templ seasonSelectionForm(page SeasonsPage) {
 			<input type="hidden" name="preview_token" value={ page.Token }/>
 		}
 		@components.TaskActions(page.ReturnURL) {
-			if page.Conflict != "" || page.Form.Errors.Has("form") {
+			if page.Conflict != "" || page.Form.Errors.Has("form") || (page.Mode == "preview" && page.Token == "") {
 				<a
 					class="action action--primary"
 					href={ templ.SafeURL(page.ReviewURL) }
 				>Recarregar e rever a seleção</a>
 			} else if page.Mode == "preview" {
-				<button class="action action--primary" type="submit" name="confirm" value="yes">Confirmar época atual</button>
+				<input type="hidden" name="confirm" value="yes"/>
+				<button class="action action--primary" type="submit">Confirmar época atual</button>
 			} else {
 				<button class="action action--primary" type="submit">Pré-visualizar alteração</button>
 			}

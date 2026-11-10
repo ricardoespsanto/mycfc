@@ -715,7 +715,7 @@ func seasonSelectionForm(page SeasonsPage) templ.Component {
 				}()
 			}
 			ctx = templ.InitializeContext(ctx)
-			if page.Conflict != "" || page.Form.Errors.Has("form") {
+			if page.Conflict != "" || page.Form.Errors.Has("form") || (page.Mode == "preview" && page.Token == "") {
 				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 52, "<a class=\"action action--primary\" href=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
@@ -734,7 +734,7 @@ func seasonSelectionForm(page SeasonsPage) templ.Component {
 					return templ_7745c5c3_Err
 				}
 			} else if page.Mode == "preview" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 54, "<button class=\"action action--primary\" type=\"submit\" name=\"confirm\" value=\"yes\">Confirmar época atual</button>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 54, "<input type=\"hidden\" name=\"confirm\" value=\"yes\"> <button class=\"action action--primary\" type=\"submit\">Confirmar época atual</button>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -786,7 +786,7 @@ func seasonSummary(season SeasonRow) templ.Component {
 		var templ_7745c5c3_Var28 string
 		templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(season.Name)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 200, Col: 35}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 201, Col: 35}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 		if templ_7745c5c3_Err != nil {
@@ -799,7 +799,7 @@ func seasonSummary(season SeasonRow) templ.Component {
 		var templ_7745c5c3_Var29 string
 		templ_7745c5c3_Var29, templ_7745c5c3_Err = templ.JoinStringErrs(season.Code)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 200, Col: 75}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 201, Col: 75}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var29))
 		if templ_7745c5c3_Err != nil {
@@ -812,7 +812,7 @@ func seasonSummary(season SeasonRow) templ.Component {
 		var templ_7745c5c3_Var30 string
 		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(season.StartsOn)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 200, Col: 127}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 201, Col: 127}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 		if templ_7745c5c3_Err != nil {
@@ -825,7 +825,7 @@ func seasonSummary(season SeasonRow) templ.Component {
 		var templ_7745c5c3_Var31 string
 		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(season.EndsOn)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 200, Col: 173}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 201, Col: 173}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 		if templ_7745c5c3_Err != nil {
@@ -867,7 +867,7 @@ func seasonContext(page SeasonsPage) templ.Component {
 		var templ_7745c5c3_Var33 string
 		templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.ContextKind)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 204, Col: 65}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 205, Col: 65}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var33)
 		if templ_7745c5c3_Err != nil {
@@ -885,7 +885,7 @@ func seasonContext(page SeasonsPage) templ.Component {
 			var templ_7745c5c3_Var34 string
 			templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.ContextID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 206, Col: 62}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 207, Col: 62}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var34)
 			if templ_7745c5c3_Err != nil {
@@ -904,7 +904,7 @@ func seasonContext(page SeasonsPage) templ.Component {
 			var templ_7745c5c3_Var35 string
 			templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.ContextWeekID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 209, Col: 64}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 210, Col: 64}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var35)
 			if templ_7745c5c3_Err != nil {
@@ -923,7 +923,7 @@ func seasonContext(page SeasonsPage) templ.Component {
 			var templ_7745c5c3_Var36 string
 			templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.ContextPage)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 212, Col: 66}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 213, Col: 66}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var36)
 			if templ_7745c5c3_Err != nil {
@@ -942,7 +942,7 @@ func seasonContext(page SeasonsPage) templ.Component {
 			var templ_7745c5c3_Var37 string
 			templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.ContextQuery)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 215, Col: 64}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 216, Col: 64}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var37)
 			if templ_7745c5c3_Err != nil {
@@ -1027,7 +1027,7 @@ func seasonPagination(page SeasonsPage) templ.Component {
 				var templ_7745c5c3_Var40 templ.SafeURL
 				templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.PreviousURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 233, Col: 43}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 234, Col: 43}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 				if templ_7745c5c3_Err != nil {
@@ -1046,7 +1046,7 @@ func seasonPagination(page SeasonsPage) templ.Component {
 				var templ_7745c5c3_Var41 templ.SafeURL
 				templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.NextURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 239, Col: 39}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/seasons.templ`, Line: 240, Col: 39}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 				if templ_7745c5c3_Err != nil {
