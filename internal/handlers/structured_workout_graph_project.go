@@ -89,6 +89,14 @@ func projectFocusedGraph(p focusedWorkoutGraph) (pages.StructuredTrainingSession
 		base.endsAt = *p.Schedule.EndsAt
 		base.endsKnown = true
 	}
+	rows := focusedGraphRows(p, base)
+	audiences := assembleStructuredTraining(rows, lisbonLocation())
+	if len(audiences) != 1 || len(audiences[0].Weeks) != 1 || len(audiences[0].Weeks[0].Sessions) != 1 {
+		return pages.StructuredTrainingSession{}, errFocusedWorkoutInvalid
+	}
+	return audiences[0].Weeks[0].Sessions[0], nil
+}
+func focusedGraphRows(p focusedWorkoutGraph, base structuredTrainingRow) []structuredTrainingRow {
 	profiles := map[uuid.UUID]dbgen.WaterIntensityProfile{}
 	zones := map[uuid.UUID]map[string]dbgen.WaterIntensityZone{}
 	for _, r := range p.References.Profiles {
@@ -169,6 +177,9 @@ func projectFocusedGraph(p focusedWorkoutGraph) (pages.StructuredTrainingSession
 				continue
 			}
 			if g := b.Gym; g != nil {
+				if len(g.Exercises) == 0 {
+					rows = append(rows, structuredRowFromValues(br, &g.Structure, &g.Objective, &g.Rounds, g.RoundRecovery, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+				}
 				for xi := range g.Exercises {
 					x := &g.Exercises[xi]
 					position := int32(xi + 1)
@@ -182,12 +193,25 @@ func projectFocusedGraph(p focusedWorkoutGraph) (pages.StructuredTrainingSession
 	if len(rows) == 0 {
 		rows = append(rows, base)
 	}
-	audiences := assembleStructuredTraining(rows, lisbonLocation())
-	if len(audiences) != 1 || len(audiences[0].Weeks) != 1 || len(audiences[0].Weeks[0].Sessions) != 1 {
-		return pages.StructuredTrainingSession{}, errFocusedWorkoutInvalid
-	}
-	return audiences[0].Weeks[0].Sessions[0], nil
+	return rows
 }
+func projectFocusedFragment(p focusedWorkoutGraph) ([]pages.StructuredTrainingSegment, error) {
+	if _, err := focusedGraphCheckedTotals(p); err != nil {
+		return nil, err
+	}
+	session := pages.StructuredTrainingSession{}
+	for _, row := range focusedGraphRows(p, structuredTrainingRow{}) {
+		appendStructuredTrainingContent(&session, row, lisbonLocation())
+	}
+	for ai := range session.Segments {
+		for bi := range session.Segments[ai].Blocks {
+			block := &session.Segments[ai].Blocks[bi]
+			block.WaterTotals = calculateWaterTotals(block.WaterSteps)
+		}
+	}
+	return session.Segments, nil
+}
+
 func focusedGraphArtifact(p focusedWorkoutGraph) ([]byte, error) {
 	session, err := projectFocusedGraph(p)
 	if err != nil {

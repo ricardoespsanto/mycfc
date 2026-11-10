@@ -221,6 +221,17 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 		mux.Handle("GET "+cancellation, protect(task.CancelEdit))
 		mux.Handle("POST "+cancellation, protect(task.CancelEdit))
 	}
+	if structuredTraining.Reuse != nil {
+		task := *structuredTraining.Reuse
+		protect := func(handler http.HandlerFunc) http.Handler {
+			return auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(handler))
+		}
+		base := "/admin/treinos/estruturados/reutilizar"
+		mux.Handle("GET "+base, protect(task.Task))
+		mux.Handle("POST "+base+"/rascunho", protect(task.Draft))
+		mux.Handle("POST "+base+"/prever", protect(task.Preview))
+		mux.Handle("POST "+base+"/confirmar", protect(task.Confirm))
+	}
 	mux.Handle("POST /admin/treinos/estruturados/sessoes", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateSession))))
 	mux.Handle("POST /admin/treinos/estruturados/sessoes/{id}/segmentos", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.CreateSegment))))
 	mux.Handle("GET /admin/treinos/estruturados/sessoes/{session_id}/segmentos/{segment_id}/agua", auth.RequireFeature(featureflags.StructuredTrainingPlanning, auth.RequireEventStaff(http.HandlerFunc(structuredTraining.WaterBlockTask))))

@@ -564,6 +564,102 @@ func TestFreshWaterCreateActualApplicationSessionCSRF(t *testing.T) {
 			t.Fatal("cancel stale own reason/version", status)
 		}
 	})
+
+	t.Run("native guarded independent reuse preview and confirm", func(t *testing.T) {
+		sourceURL := "/admin/treinos/estruturados/reutilizar?source_kind=SESSION&source_plan_id=" + plan.String() + "&source_session_id=" + proposal.Proposal.SessionID.String()
+		status, body, headers = request("GET", sourceURL, nil)
+		if status != 200 || headers.Get("Referrer-Policy") != "no-referrer" || !strings.Contains(body, "Copiar sessão") {
+			t.Fatal("actual private reuse task", status)
+		}
+		editor := nativeTaskEditor(t, body, `name="target_group_id"`)
+		var targetWeek string
+		if err = root.QueryRow(t.Context(), `SELECT (date_trunc('week',CURRENT_DATE)::date+14)::text`).Scan(&targetWeek); err != nil {
+			t.Fatal(err)
+		}
+		editor.Set("week_start", targetWeek)
+		editor.Set("week_title", "Semana sintética copiada")
+		editor.Set("command", "refresh")
+		reuseBase := "/admin/treinos/estruturados/reutilizar"
+		status, body, _ = request("POST", reuseBase+"/rascunho", editor)
+		if status != 200 {
+			t.Fatal("native target refresh", status)
+		}
+		editor = nativeTaskEditor(t, body, `name="target_group_id"`)
+		if editor.Get("mappings[m_1].date") != targetWeek || editor.Get("mappings[m_1].start_time") == "" || editor.Get("mappings[m_1].end_time") != "" {
+			t.Fatal("mapping invented/dropped source timing", editor.Get("mappings[m_1].date"))
+		}
+		editor.Set("command", "preview")
+		requestOrigin = "https://foreign.example.test"
+		status, _, _ = request("POST", reuseBase+"/prever", editor)
+		requestOrigin = server.URL
+		if status != 403 {
+			t.Fatal("reuse CSRF accepted foreign origin", status)
+		}
+		status, body, _ = request("POST", reuseBase+"/prever", editor)
+		if status != 200 || !strings.Contains(body, "Confirmar cópia em rascunho") || !strings.Contains(body, "Remar com atenção à técnica.") {
+			t.Fatal("native canonical reuse preview", status)
+		}
+		approval := url.Values{"intent": {"confirm"}, "proposal": {field(body, "proposal")}, "review_token": {field(body, "review_token")}, "gorilla.csrf.Token": {field(body, "gorilla.csrf.Token")}}
+		var copied struct {
+			Proposal struct {
+				TargetPlanID uuid.UUID `json:"target_plan_id"`
+				NewWeek      bool      `json:"new_week"`
+				Destinations []struct {
+					Graph struct {
+						SessionID uuid.UUID `json:"session_id"`
+					} `json:"graph"`
+				} `json:"destinations"`
+			} `json:"proposal"`
+		}
+		if err = json.Unmarshal([]byte(approval.Get("proposal")), &copied); err != nil || !copied.Proposal.NewWeek || len(copied.Proposal.Destinations) != 1 {
+			t.Fatal("signed copy identities", err)
+		}
+		var exists bool
+		if err = root.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM training_plans WHERE id=$1)`, copied.Proposal.TargetPlanID).Scan(&exists); err != nil || exists {
+			t.Fatal("preview wrote target", err)
+		}
+		status, _, headers = request("POST", reuseBase+"/confirmar", approval)
+		if status != 303 || !strings.Contains(headers.Get("Location"), "week_id="+copied.Proposal.TargetPlanID.String()) || !strings.Contains(headers.Get("Location"), "day="+targetWeek) {
+			t.Fatal("actual reused destination", status, headers.Get("Location"))
+		}
+		status, _, headers = request("POST", reuseBase+"/confirmar", approval)
+		if status != 303 || !strings.Contains(headers.Get("Location"), copied.Proposal.Destinations[0].Graph.SessionID.String()) {
+			t.Fatal("native duplicate copy", status)
+		}
+		var sessions, events int
+		if err = root.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM training_sessions WHERE plan_id=$1),(SELECT count(*) FROM training_copy_events WHERE destination_id IN ($1,$2))`, copied.Proposal.TargetPlanID, copied.Proposal.Destinations[0].Graph.SessionID).Scan(&sessions, &events); err != nil || sessions != 1 || events != 2 {
+			t.Fatal("native duplicate created extra data", sessions, events, err)
+		}
+		// Editing this independent destination cannot turn an old copy confirmation
+		// into a repair, replacement or another draft identity.
+		editURL := "/admin/treinos/estruturados/semanas/" + copied.Proposal.TargetPlanID.String() + "/treinos/" + copied.Proposal.Destinations[0].Graph.SessionID.String() + "/editar"
+		status, body, _ = request("GET", editURL, nil)
+		if status != 200 {
+			t.Fatal("copy editable destination", status)
+		}
+		edit := focusedNativeEditor(t, body)
+		edit.Set("title", "Cópia alterada independentemente")
+		edit.Set("command", "preview")
+		status, body, _ = request("POST", editURL+"/prever", edit)
+		if status != 200 {
+			t.Fatal("copied draft edit preview", status)
+		}
+		editApproval := url.Values{"intent": {"confirm"}, "proposal": {field(body, "proposal")}, "review_token": {field(body, "review_token")}, "gorilla.csrf.Token": {field(body, "gorilla.csrf.Token")}}
+		status, _, _ = request("POST", editURL+"/confirmar", editApproval)
+		if status != 303 {
+			t.Fatal("copied draft edit", status)
+		}
+		status, body, _ = request("POST", reuseBase+"/confirmar", approval)
+		if status != 409 || regexp.MustCompile(`<button\b[^>]*value="preview"`).MatchString(body) {
+			t.Fatal("changed destination offered stale repair", status)
+		}
+		// Configured library filters have real empty results; no seeded routine name
+		// or source/calendar value is invented by the UI.
+		status, body, _ = request("GET", reuseBase+"?source_kind=ROUTINE&routine_query=absent-synthetic-filter", nil)
+		if status != 200 || !strings.Contains(body, "rotinas") {
+			t.Fatal("empty configured library", status)
+		}
+	})
 	execute(`UPDATE staff_grants SET revoked_at=now(),revoked_by_id=$1 WHERE user_id=$1 AND programme_id=$2`, actor, programme)
 	status, body, _ = request("POST", base+"/confirmar", refreshed)
 	if status != 404 || strings.Contains(body, "Treino histórico de água") || strings.Contains(body, "Remar com atenção") {
@@ -575,10 +671,14 @@ func TestFreshWaterCreateActualApplicationSessionCSRF(t *testing.T) {
 // The real SCS/CSRF middleware and actual generated HTML remain in the path.
 func focusedNativeEditor(t *testing.T, body string) url.Values {
 	t.Helper()
+	return nativeTaskEditor(t, body, `name="activity_order"`)
+}
+func nativeTaskEditor(t *testing.T, body, marker string) url.Values {
+	t.Helper()
 	forms := regexp.MustCompile(`(?s)<form\b[^>]*>(.*?)</form>`).FindAllStringSubmatch(body, -1)
 	var form string
 	for _, f := range forms {
-		if strings.Contains(f[1], `name="activity_order"`) {
+		if strings.Contains(f[1], marker) {
 			form = f[1]
 			break
 		}

@@ -73,6 +73,11 @@ func focusedWorkoutPostPath(r *http.Request) bool {
 	if r.Method != http.MethodPost {
 		return false
 	}
+	const reuse = "/admin/treinos/estruturados/reutilizar/"
+	if strings.HasPrefix(r.URL.Path, reuse) {
+		task := strings.TrimPrefix(r.URL.Path, reuse)
+		return task == "rascunho" || task == "prever" || task == "confirmar"
+	}
 	const prefix = "/admin/treinos/estruturados/semanas/"
 	if !strings.HasPrefix(r.URL.Path, prefix) {
 		return false

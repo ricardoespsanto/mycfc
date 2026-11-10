@@ -8,6 +8,9 @@ import (
 )
 
 func writeFocusedEditGraph(ctx context.Context, q *dbgen.Queries, p focusedWorkoutGraph, raw focusedEditRaw) error {
+	return writeFocusedEditGraphUsing(ctx, q, p, raw, nil)
+}
+func writeFocusedEditGraphUsing(ctx context.Context, q *dbgen.Queries, p focusedWorkoutGraph, raw focusedEditRaw, waterInsert focusedGraphWaterInsert) error {
 	c := p.Context
 	date, _ := focusedDay(p.Schedule.Date)
 	starts, ends := pgtype.Timestamptz{}, pgtype.Timestamptz{}
@@ -78,7 +81,12 @@ func writeFocusedEditGraph(ctx context.Context, q *dbgen.Queries, p focusedWorko
 				if old, retained := water[b.ID]; retained {
 					_, err = q.UpdateFocusedWorkoutWaterPrescription(ctx, dbgen.UpdateFocusedWorkoutWaterPrescriptionParams{Method: w.Method, IntensityProfileID: w.ProfileID, TargetDistanceMetres: w.TargetDistance, TargetDistanceCertainty: w.TargetCertainty, BlockID: b.ID, SegmentID: a.ID, ExpectedUpdatedAt: old.UpdatedAt, ActorID: c.ActorID, PlanID: c.PlanID, SessionID: p.SessionID})
 				} else {
-					_, err = q.InsertFocusedWorkoutWaterPrescription(ctx, dbgen.InsertFocusedWorkoutWaterPrescriptionParams{ActorID: c.ActorID, PlanID: c.PlanID, SessionID: p.SessionID, SegmentID: a.ID, BlockID: b.ID, Method: w.Method, IntensityProfileID: w.ProfileID, TargetDistanceMetres: w.TargetDistance, TargetDistanceCertainty: w.TargetCertainty})
+					if waterInsert != nil {
+						err = waterInsert(ctx, q, p, a, b)
+					} else {
+						_, err = q.InsertFocusedWorkoutWaterPrescription(ctx, dbgen.InsertFocusedWorkoutWaterPrescriptionParams{ActorID: c.ActorID, PlanID: c.PlanID, SessionID: p.SessionID, SegmentID: a.ID, BlockID: b.ID, Method: w.Method, IntensityProfileID: w.ProfileID, TargetDistanceMetres: w.TargetDistance, TargetDistanceCertainty: w.TargetCertainty})
+					}
+
 				}
 				if err != nil {
 					return err

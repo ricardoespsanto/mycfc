@@ -125,3 +125,26 @@ func TestFocusedEditIngressBoundsNewRoutesBeforeParsing(t *testing.T) {
 		})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path, strings.NewReader(strings.Repeat("a", (1<<20)+1))))
 	}
 }
+
+func TestReuseIngressNativeBodyBoundaryAndPathIsolation(t *testing.T) {
+	for _, task := range []string{"rascunho", "prever", "confirmar"} {
+		for _, size := range []int{1 << 20, 1<<20 + 1} {
+			PublicationIngressMiddleware(30*time.Second)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if _, ok := PublicationDeadline(r.Context(), 30*time.Second); !ok {
+					t.Fatal("reuse prework has no ingress budget", task)
+				}
+				_, err := io.ReadAll(r.Body)
+				if (err != nil) != (size > 1<<20) {
+					t.Fatalf("%s size %d: %v", task, size, err)
+				}
+			})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/admin/treinos/estruturados/reutilizar/"+task, strings.NewReader(strings.Repeat("a", size))))
+		}
+	}
+	for _, path := range []string{"/admin/treinos/estruturados/reutilizar", "/admin/treinos/estruturados/reutilizar/confirmar/extra"} {
+		PublicationIngressMiddleware(30*time.Second)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := PublicationDeadline(r.Context(), 30*time.Second); ok {
+				t.Fatal("unrelated route received reuse budget", path)
+			}
+		})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path, nil))
+	}
+}

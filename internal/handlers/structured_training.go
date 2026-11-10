@@ -30,6 +30,7 @@ import (
 
 type StructuredTraining struct {
 	Workouts         *StructuredWorkout
+	Reuse            *StructuredReuse
 	HTTPWriteTimeout time.Duration
 	Publications     recipientPublicationStore
 	Setup            TrainingSetupStore
@@ -258,6 +259,9 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 		}
 		page.Workspace = buildStructuredWeekWorkspace(page.Audiences, page.Publications, page.PublicationUnavailable, currentGroup, user, page.SelectedGroupID, page.SelectedWeekID, page.SelectedSessionID, day, time.Now().In(h.location()))
 		applyFocusedWorkoutEditLinks(&page.Workspace, focusedEligible)
+		if h.Reuse != nil {
+			h.Reuse.workspaceLinks(ctx, user, &page.Workspace)
+		}
 		page.SelectedDay = page.Workspace.SelectedDay
 		page.PlannerReturnURL = structuredPlannerURL(page.SelectedGroupID, page.SelectedWeekID, page.SelectedSessionID, page.SelectedDay)
 		if page.OpenForm == "" {
@@ -266,6 +270,10 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 				if page.SelectedWeekID != "" {
 					page.OpenForm = "session"
 					page.SessionForm.PlanID = page.SelectedWeekID
+				}
+			case "variation":
+				if page.SelectedWeekID != "" {
+					page.OpenForm = "variation"
 				}
 			case "week":
 				page.OpenForm = "week"
@@ -3455,40 +3463,7 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 			week.Sessions = append(week.Sessions, pages.StructuredTrainingSession{ID: row.sessionID.String(), Title: row.sessionTitle, Description: row.sessionDescription, When: when, EntryKind: row.entryKind, StartsOn: schedule.Date, EndsOn: view.EndsOn, StartsAt: view.StartsAt, EndsAt: view.EndsAt, Status: row.sessionStatus, Schedule: view, WriteUnsupported: scheduleErr != nil || schedule.Precision != TrainingScheduleInterval, UnsupportedMessage: trainingScheduleUnsupportedMessage})
 		}
 		session := &week.Sessions[len(week.Sessions)-1]
-		if row.segmentID == nil {
-			continue
-		}
-		if len(session.Segments) == 0 || session.Segments[len(session.Segments)-1].ID != row.segmentID.String() {
-			duration := ""
-			if row.duration > 0 {
-				duration = fmt.Sprintf("%d min", row.duration)
-			}
-			plannedStart := ""
-			if (row.startsKnown || (row.schedulePrecision == "" && !row.startsAt.IsZero())) && row.startOffset > 0 {
-				plannedStart = row.startsAt.Add(time.Duration(row.startOffset) * time.Minute).In(location).Format("15:04")
-			} else if (row.startsKnown || (row.schedulePrecision == "" && !row.startsAt.IsZero())) && row.plannedStartSet {
-				plannedStart = row.startsAt.In(location).Format("15:04")
-			}
-			session.Segments = append(session.Segments, pages.StructuredTrainingSegment{ID: row.segmentID.String(), Modality: row.modality, Title: row.segmentTitle, Location: row.segmentLocation, Duration: duration, PlannedStart: plannedStart, Transition: row.transition, EquipmentNotes: row.equipmentNotes, Position: row.segmentPosition})
-			session.Modalities = appendStructuredModality(session.Modalities, row.modality)
-		}
-		segment := &session.Segments[len(session.Segments)-1]
-		if row.blockID != nil {
-			if len(segment.Blocks) == 0 || segment.Blocks[len(segment.Blocks)-1].ID != row.blockID.String() {
-				segment.Blocks = append(segment.Blocks, pages.StructuredTrainingBlock{ID: row.blockID.String(), Purpose: row.blockPurpose, Title: row.blockTitle, Instructions: row.instructions, Position: row.blockPosition, GymStructure: row.gymStructure, GymObjective: row.gymObjective, GymRounds: row.gymRounds, GymRoundRecovery: row.gymRoundRecovery, WaterMethod: row.waterMethod, WaterTarget: row.waterTarget, WaterTargetDistanceMetres: row.waterTargetDistance, WaterTargetCertainty: row.waterTargetCertainty, WaterProfile: row.waterProfile})
-			}
-			block := &segment.Blocks[len(segment.Blocks)-1]
-			if row.exerciseID != nil {
-				block.Exercises = append(block.Exercises, pages.StructuredGymExercise{ID: row.exerciseID.String(), Name: row.exerciseName, Prescription: row.exercisePrescription, Resistance: row.exerciseResistance, Intent: row.exerciseIntent, Tempo: row.exerciseTempo, Notes: row.exerciseNotes, Position: row.exercisePosition, Sets: row.exerciseSets, Repetitions: row.exerciseRepetitions, DurationSeconds: row.exerciseDuration, DistanceMetres: row.exerciseDistance, RecoverySeconds: row.exerciseRecovery})
-			}
-			if row.waterStepID != nil {
-				parentID := ""
-				if row.waterParentStepID != nil {
-					parentID = row.waterParentStepID.String()
-				}
-				block.WaterSteps = append(block.WaterSteps, pages.StructuredWaterStep{ID: row.waterStepID.String(), ParentID: parentID, Kind: row.waterStepKind, Name: row.waterStepName, Prescription: row.waterStepPrescription, Intensity: row.waterStepIntensity, Drill: row.waterStepDrill, Instructions: row.waterStepNotes, Position: row.waterStepPosition, Repeats: row.waterStepRepeats, Recovery: row.waterStepRecovery, DurationSeconds: row.waterStepDuration, DistanceMetres: row.waterStepDistance, DurationCertainty: row.waterStepDurationCertainty, DistanceCertainty: row.waterStepDistanceCertainty})
-			}
-		}
+		appendStructuredTrainingContent(session, row, location)
 	}
 	for audienceIndex := range audiences {
 		for weekIndex := range audiences[audienceIndex].Weeks {
@@ -3504,6 +3479,47 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 		}
 	}
 	return audiences
+}
+
+// One canonical content assembler, also used by routine fragments without a
+// fabricated appointment or calendar context.
+func appendStructuredTrainingContent(session *pages.StructuredTrainingSession, row structuredTrainingRow, location *time.Location) {
+	if row.segmentID == nil {
+		return
+	}
+	if len(session.Segments) == 0 || session.Segments[len(session.Segments)-1].ID != row.segmentID.String() {
+		duration := ""
+		if row.duration > 0 {
+			duration = fmt.Sprintf("%d min", row.duration)
+		}
+		plannedStart := ""
+		if (row.startsKnown || (row.schedulePrecision == "" && !row.startsAt.IsZero())) && row.startOffset > 0 {
+			plannedStart = row.startsAt.Add(time.Duration(row.startOffset) * time.Minute).In(location).Format("15:04")
+		} else if (row.startsKnown || (row.schedulePrecision == "" && !row.startsAt.IsZero())) && row.plannedStartSet {
+			plannedStart = row.startsAt.In(location).Format("15:04")
+		} else if row.plannedStartSet {
+			plannedStart = fmt.Sprintf("%d min após o início", row.startOffset)
+		}
+		session.Segments = append(session.Segments, pages.StructuredTrainingSegment{ID: row.segmentID.String(), Modality: row.modality, Title: row.segmentTitle, Location: row.segmentLocation, Duration: duration, PlannedStart: plannedStart, Transition: row.transition, EquipmentNotes: row.equipmentNotes, Position: row.segmentPosition})
+		session.Modalities = appendStructuredModality(session.Modalities, row.modality)
+	}
+	segment := &session.Segments[len(session.Segments)-1]
+	if row.blockID != nil {
+		if len(segment.Blocks) == 0 || segment.Blocks[len(segment.Blocks)-1].ID != row.blockID.String() {
+			segment.Blocks = append(segment.Blocks, pages.StructuredTrainingBlock{ID: row.blockID.String(), Purpose: row.blockPurpose, Title: row.blockTitle, Instructions: row.instructions, Position: row.blockPosition, GymStructure: row.gymStructure, GymObjective: row.gymObjective, GymRounds: row.gymRounds, GymRoundRecovery: row.gymRoundRecovery, WaterMethod: row.waterMethod, WaterTarget: row.waterTarget, WaterTargetDistanceMetres: row.waterTargetDistance, WaterTargetCertainty: row.waterTargetCertainty, WaterProfile: row.waterProfile})
+		}
+		block := &segment.Blocks[len(segment.Blocks)-1]
+		if row.exerciseID != nil {
+			block.Exercises = append(block.Exercises, pages.StructuredGymExercise{ID: row.exerciseID.String(), Name: row.exerciseName, Prescription: row.exercisePrescription, Resistance: row.exerciseResistance, Intent: row.exerciseIntent, Tempo: row.exerciseTempo, Notes: row.exerciseNotes, Position: row.exercisePosition, Sets: row.exerciseSets, Repetitions: row.exerciseRepetitions, DurationSeconds: row.exerciseDuration, DistanceMetres: row.exerciseDistance, RecoverySeconds: row.exerciseRecovery})
+		}
+		if row.waterStepID != nil {
+			parentID := ""
+			if row.waterParentStepID != nil {
+				parentID = row.waterParentStepID.String()
+			}
+			block.WaterSteps = append(block.WaterSteps, pages.StructuredWaterStep{ID: row.waterStepID.String(), ParentID: parentID, Kind: row.waterStepKind, Name: row.waterStepName, Prescription: row.waterStepPrescription, Intensity: row.waterStepIntensity, Drill: row.waterStepDrill, Instructions: row.waterStepNotes, Position: row.waterStepPosition, Repeats: row.waterStepRepeats, Recovery: row.waterStepRecovery, DurationSeconds: row.waterStepDuration, DistanceMetres: row.waterStepDistance, DurationCertainty: row.waterStepDurationCertainty, DistanceCertainty: row.waterStepDistanceCertainty})
+		}
+	}
 }
 
 func appendStructuredModality(modalities []string, modality string) []string {

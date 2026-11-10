@@ -271,6 +271,16 @@ func insertFocusedGraph(ctx context.Context, q *dbgen.Queries, p focusedWorkoutG
 	if err != nil {
 		return err
 	}
+	return insertFocusedGraphContents(ctx, q, p, nil)
+}
+
+// The same explicit-ID content writer is reused for source-bound copy inserts.
+// A supplied water adapter derives the pin from an authorized source path.
+type focusedGraphWaterInsert func(context.Context, *dbgen.Queries, focusedWorkoutGraph, focusedGraphActivityInput, focusedGraphPhaseInput) error
+
+func insertFocusedGraphContents(ctx context.Context, q *dbgen.Queries, p focusedWorkoutGraph, waterInsert focusedGraphWaterInsert) error {
+	c := p.Context
+	var err error
 	for ai, a := range p.Activities {
 		_, err = q.InsertFocusedWorkoutSegment(ctx, dbgen.InsertFocusedWorkoutSegmentParams{ActorID: c.ActorID, PlanID: c.PlanID, SessionID: p.SessionID, SegmentID: a.ID, Position: int32(ai + 1), Modality: a.Modality, Title: a.Title, Location: a.Location, PlannedDurationMinutes: a.DurationMinutes, PlannedStartOffsetMinutes: a.StartOffsetMinutes, TransitionDurationMinutes: a.TransitionMinutes, EquipmentNotes: a.Equipment})
 		if err != nil {
@@ -282,7 +292,12 @@ func insertFocusedGraph(ctx context.Context, q *dbgen.Queries, p focusedWorkoutG
 				return err
 			}
 			if w := b.Water; w != nil {
-				_, err = q.InsertFocusedWorkoutWaterPrescription(ctx, dbgen.InsertFocusedWorkoutWaterPrescriptionParams{ActorID: c.ActorID, PlanID: c.PlanID, SessionID: p.SessionID, SegmentID: a.ID, BlockID: b.ID, Method: w.Method, IntensityProfileID: w.ProfileID, TargetDistanceMetres: w.TargetDistance, TargetDistanceCertainty: w.TargetCertainty})
+				if waterInsert != nil {
+					err = waterInsert(ctx, q, p, a, b)
+				} else {
+					_, err = q.InsertFocusedWorkoutWaterPrescription(ctx, dbgen.InsertFocusedWorkoutWaterPrescriptionParams{ActorID: c.ActorID, PlanID: c.PlanID, SessionID: p.SessionID, SegmentID: a.ID, BlockID: b.ID, Method: w.Method, IntensityProfileID: w.ProfileID, TargetDistanceMetres: w.TargetDistance, TargetDistanceCertainty: w.TargetCertainty})
+				}
+
 				if err != nil {
 					return err
 				}
