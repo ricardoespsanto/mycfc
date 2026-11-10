@@ -3,6 +3,31 @@
 These decisions guide #391 and its dependent stories. They record product
 authority, not implementation, acceptance or release completion.
 
+## Delivery scope correction
+
+On 10 November 2026 the owner clarified that **migration of existing database
+records is not a required #391 product outcome**. Existing-data conversion,
+backfill and legacy-data upgrade compatibility are not delivery gates. Preserve
+the work already produced; save legacy upgrade/controller work as deferred work
+rather than deleting it or continuing to expand it for this increment.
+
+Keep the necessary fresh schema, generated queries and application integration
+for the new features. Use new disposable local fixtures and proportionate real
+tests. Authentication, authorization, privacy and enforced protections remain
+required.
+
+The next bounded increment is the coach's group/week publication review:
+preview current authorised recipients, explicitly confirm, reject stale reviews,
+and preserve prior publications and outcomes. Complete its fresh authenticated
+application/CSRF integration and focused denial checks before handoff. Existing
+legacy-upgrade, receipt-lineage and old-writer transition rehearsals do not gate
+that increment.
+
+This correction does **not** authorise deleting, resetting or wiping any existing
+or production database, discarding records, removing backups or performing live
+operations. Any necessary consequential destructive operation needs a separate
+decision identifying its exact target.
+
 ## Training groups and temporary moves
 
 - An athlete has one active training group within a participation programme.
