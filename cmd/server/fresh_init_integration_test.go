@@ -161,9 +161,22 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	if err := conn.QueryRow(ctx, `SELECT row_to_json(m)::text FROM user_memberships m WHERE id=$1`, membership).Scan(&originalInterval); err != nil {
 		t.Fatal(err)
 	}
+	migrationURL, err := urlpkg.Parse(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrationURL.User = urlpkg.UserPassword(migration, "test-migration-"+suffix)
+	inspector, err := pgx.Connect(ctx, migrationURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspector.Close(ctx)
+	match := func(database, version, candidate string) (bool, error) {
+		return db.FreshInitializationMatchesWithInspector(ctx, conn, inspector, migration, database, version, candidate)
+	}
 	// Only the new stamped binary may accept this protected historical receipt.
 	releasecontract.Version, releasecontract.Candidate = "v2.0.3", strings.Repeat("b", 40)
-	matched, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate)
+	matched, err := match(parsed.Database, releasecontract.Version, releasecontract.Candidate)
 	if err != nil || !matched {
 		t.Fatalf("original protected genesis rejected before migration: %t %v", matched, err)
 	}
@@ -174,23 +187,18 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	t.Setenv("GIT_SHA", releasecontract.Candidate)
 	checkUpgrade := func(want bool) {
 		t.Helper()
-		ok, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate)
+		ok, err := match(parsed.Database, releasecontract.Version, releasecontract.Candidate)
 		if want && (err != nil || !ok) || !want && err == nil && ok {
 			t.Fatalf("upgrade receipt outcome matched=%t err=%v want=%t", ok, err, want)
 		}
 	}
 	checkUpgrade(true)
-	if err := requireDisposableCompletion(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate); err != nil {
+	if err := requireDisposableCompletion(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate, databaseRoleCredentialsFromEnvironment()); err != nil {
 		t.Fatalf("stamped upgrade refused before migration: %v", err)
 	}
 	if err := runServerCommand(ctx, []string{"bootstrap-db"}); err != nil {
 		t.Fatalf("stamped upgrade bootstrap rejected: %v", err)
 	}
-	migrationURL, err := urlpkg.Parse(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	migrationURL.User = urlpkg.UserPassword(migration, "test-migration-"+suffix)
 	t.Setenv("DATABASE_URL", migrationURL.String())
 	if err := runServerCommand(ctx, []string{"migrate"}); err != nil {
 		t.Fatalf("stamped upgrade migration rejected: %v", err)
@@ -212,24 +220,18 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 		t.Fatalf("historical membership changed across forward migration: %v", err)
 	}
 	checkUpgrade(true)
-	if _, err := conn.Exec(ctx, "BEGIN"); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := conn.Exec(ctx, `INSERT INTO mycfc_meta.schema_migrations(version) VALUES('tampered-test-marker')`); err != nil {
 		t.Fatal(err)
 	}
 	checkUpgrade(false)
-	if _, err := conn.Exec(ctx, "ROLLBACK"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(ctx, "BEGIN"); err != nil {
+	if _, err := conn.Exec(ctx, `DELETE FROM mycfc_meta.schema_migrations WHERE version='tampered-test-marker'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec(ctx, `ALTER TABLE public.user_memberships DROP CONSTRAINT user_memberships_one_participation_per_day`); err != nil {
 		t.Fatal(err)
 	}
 	checkUpgrade(false)
-	if _, err := conn.Exec(ctx, "ROLLBACK"); err != nil {
+	if _, err := conn.Exec(ctx, `ALTER TABLE public.user_memberships ADD CONSTRAINT user_memberships_one_participation_per_day EXCLUDE USING gist (user_id WITH =, daterange(starts_on, coalesce(ends_on,'infinity'::date),'[]') WITH &&)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Exec(ctx, "BEGIN"); err != nil {
@@ -252,11 +254,11 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	if _, err := conn.Exec(ctx, "ROLLBACK"); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := db.FreshInitializationMatches(ctx, conn, "wrong_database", releasecontract.Version, releasecontract.Candidate); err == nil && ok {
+	if ok, err := match("wrong_database", releasecontract.Version, releasecontract.Candidate); err == nil && ok {
 		t.Fatal("wrong database accepted")
 	}
 	releasecontract.Version = "v2.0.1"
-	if ok, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate); err == nil && ok {
+	if ok, err := match(parsed.Database, releasecontract.Version, releasecontract.Candidate); err == nil && ok {
 		t.Fatal("older unsupported release accepted")
 	}
 	releasecontract.Version = "v2.0.3"
@@ -294,7 +296,7 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 	if _, err := conn.Exec(ctx, `RESET ROLE`); err != nil {
 		t.Fatal(err)
 	}
-	if matched, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate); err == nil || matched || !strings.Contains(err.Error(), "bootstrap-superuser-owned") {
+	if matched, err := match(parsed.Database, releasecontract.Version, releasecontract.Candidate); err == nil || matched || !strings.Contains(err.Error(), "bootstrap-superuser-owned") {
 		t.Fatalf("migration-role forged receipt accepted: matched=%t err=%v", matched, err)
 	}
 }
@@ -340,7 +342,17 @@ func TestFreshCurrentCandidateReceiptRealPostgres(t *testing.T) {
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM mycfc_meta.schema_migrations`).Scan(&ledgerCount); err != nil || ledgerCount != len(db.EmbeddedMigrationInventory()) {
 		t.Fatalf("current candidate ledger count=%d err=%v", ledgerCount, err)
 	}
-	matched, err := db.FreshInitializationMatches(ctx, conn, parsed.Database, releasecontract.Version, releasecontract.Candidate)
+	migrationURL, err := urlpkg.Parse(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrationURL.User = urlpkg.UserPassword(os.Getenv("MIGRATION_DB_USER"), os.Getenv("MIGRATION_DB_PASSWORD"))
+	inspector, err := pgx.Connect(ctx, migrationURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inspector.Close(ctx)
+	matched, err := db.FreshInitializationMatchesWithInspector(ctx, conn, inspector, os.Getenv("MIGRATION_DB_USER"), parsed.Database, releasecontract.Version, releasecontract.Candidate)
 	if err != nil || !matched {
 		t.Fatalf("current candidate receipt rejected: matched=%t err=%v", matched, err)
 	}

@@ -169,13 +169,16 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		case "bootstrap-db":
 			return bootstrapRelease(ctx, conn, databaseName, credentials, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"))
 		case "migrate":
-			if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA")); err != nil {
+			if err := requireMigrationExecutionIdentity(ctx, conn, credentials.MigrationUsername); err != nil {
+				return err
+			}
+			if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"), credentials); err != nil {
 				return err
 			}
 			credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
 			return db.ApplyBaselineAndHarden(ctx, conn, databaseName, credentials)
 		case "harden-db":
-			if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA")); err != nil {
+			if err := requireDisposableCompletion(ctx, conn, databaseName, os.Getenv("APP_VERSION"), os.Getenv("GIT_SHA"), credentials); err != nil {
 				return err
 			}
 			credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
@@ -219,7 +222,12 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 		return bootstrapRelease(ctx, conn, cfg.DBName, credentials, cfg.AppVersion, cfg.GITSHA)
 	}
 	credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)
-	if err := requireDisposableCompletion(ctx, conn, cfg.DBName, cfg.AppVersion, cfg.GITSHA); err != nil {
+	if command == "migrate" {
+		if err := requireMigrationExecutionIdentity(ctx, conn, credentials.MigrationUsername); err != nil {
+			return err
+		}
+	}
+	if err := requireDisposableCompletion(ctx, conn, cfg.DBName, cfg.AppVersion, cfg.GITSHA, credentials); err != nil {
 		return err
 	}
 	if command == "harden-db" {
@@ -228,14 +236,18 @@ func runDatabaseCommand(ctx context.Context, command string) error {
 	return db.ApplyBaselineAndHarden(ctx, conn, cfg.DBName, credentials)
 }
 
-func requireDisposableCompletion(ctx context.Context, conn databaseCommandConnection, database, version, candidate string) error {
+func requireDisposableCompletion(ctx context.Context, conn databaseCommandConnection, database, version, candidate string, roles ...db.RoleCredentials) error {
 	if releasecontract.Version == "" && releasecontract.Candidate == "" {
 		return nil
 	}
 	if !releasecontract.Matches(version, candidate, database) {
 		return errors.New("disposable release binary/runtime identity mismatch")
 	}
-	if fresh, err := db.FreshInitializationMatches(ctx, conn, database, version, candidate); err != nil {
+	var credentials db.RoleCredentials
+	if len(roles) == 1 {
+		credentials = roles[0]
+	}
+	if fresh, err := inspectFreshInitialization(ctx, conn, credentials, database, version, candidate); err != nil {
 		return errors.New("fresh initialization receipt inspection failed")
 	} else if fresh {
 		return nil
@@ -254,7 +266,7 @@ func bootstrapRelease(ctx context.Context, conn databaseCommandConnection, datab
 	if !releasecontract.Matches(version, candidate, database) {
 		return errors.New("disposable release binary/runtime identity mismatch")
 	}
-	if fresh, err := db.FreshInitializationMatches(ctx, conn, database, version, candidate); err != nil {
+	if fresh, err := inspectFreshInitialization(ctx, conn, credentials, database, version, candidate); err != nil {
 		return errors.New("fresh initialization receipt inspection failed")
 	} else if fresh {
 		credentials.AppUsername = releasecontract.AppRole(credentials.AppUsername)

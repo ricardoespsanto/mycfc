@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cfcoimbra/mycfc/internal/releasecontract"
 	"github.com/jackc/pgx/v5"
@@ -60,7 +61,10 @@ type freshTestConn struct {
 	execs     int
 }
 
-func (c *freshTestConn) QueryRow(context.Context, string, ...any) pgx.Row {
+func (c *freshTestConn) QueryRow(_ context.Context, statement string, _ ...any) pgx.Row {
+	if strings.Contains(statement, "a.backend_start") {
+		return freshTestRow{value: true}
+	}
 	if len(c.rows) == 0 {
 		return freshTestRow{err: errors.New("unexpected query")}
 	}
@@ -75,9 +79,61 @@ func (c *freshTestConn) Exec(context.Context, string, ...any) (pgconn.CommandTag
 	}
 	return pgconn.NewCommandTag("OK"), nil
 }
-func (*freshTestConn) Begin(context.Context) (pgx.Tx, error) {
-	return nil, errors.New("unexpected transaction")
+func (c *freshTestConn) Begin(context.Context) (pgx.Tx, error) {
+	return freshInspectionTestTx{conn: c}, nil
 }
+
+type freshInspectionTestTx struct {
+	pgx.Tx
+	conn *freshTestConn
+}
+
+func (tx freshInspectionTestTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+func (tx freshInspectionTestTx) Rollback(context.Context) error { return nil }
+func (tx freshInspectionTestTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "session_user::text") {
+		return freshIdentityTestRow{}
+	}
+	if strings.Contains(sql, "c.oid::pg_catalog.text") {
+		return freshTestRow{value: "42"}
+	}
+	return tx.conn.QueryRow(ctx, sql, args...)
+}
+func (tx freshInspectionTestTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	var ledger string
+	if err := tx.conn.QueryRow(ctx, sql, args...).Scan(&ledger); err != nil {
+		return nil, err
+	}
+	return &freshVersionsTestRows{versions: strings.Split(ledger, "\n")}, nil
+}
+
+type freshIdentityTestRow struct{}
+
+func (freshIdentityTestRow) Scan(dest ...any) error {
+	*dest[0].(*string) = "migration"
+	*dest[1].(*string) = "1"
+	*dest[2].(*int32) = 42
+	*dest[3].(*time.Time) = time.Unix(1, 0)
+	*dest[4].(*bool) = true
+	return nil
+}
+
+type freshVersionsTestRows struct {
+	pgx.Rows
+	versions []string
+	index    int
+}
+
+func (r *freshVersionsTestRows) Next() bool { return r.index < len(r.versions) }
+func (r *freshVersionsTestRows) Scan(dest ...any) error {
+	*dest[0].(*string) = r.versions[r.index]
+	r.index++
+	return nil
+}
+func (*freshVersionsTestRows) Close()     {}
+func (*freshVersionsTestRows) Err() error { return nil }
 
 func TestFreshReceiptRejectsUntrustedMetadata(t *testing.T) {
 	oldVersion, oldCandidate := releasecontract.Version, releasecontract.Candidate
@@ -96,7 +152,7 @@ func TestFreshReceiptRejectsUntrustedMetadata(t *testing.T) {
 		{"wrong identity", []freshTestRow{{value: true}, {value: true}, {value: false}}, "identity mismatch"},
 		{"receipt query error", []freshTestRow{{value: true}, {value: true}, {err: boom}}, "synthetic query failure"},
 		{"wrong ledger", []freshTestRow{{value: true}, {value: true}, {value: true}, {value: "wrong"}}, "ledger mismatch"},
-		{"ledger query error", []freshTestRow{{value: true}, {value: true}, {value: true}, {err: boom}}, "synthetic query failure"},
+		{"ledger query error", []freshTestRow{{value: true}, {value: true}, {value: true}, {err: boom}}, "fresh initialization ledger inspection rejected"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
