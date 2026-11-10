@@ -327,3 +327,102 @@ func TestSeasonManagementExplicitSelectionConcurrencyAndHistory(t *testing.T) {
 		})
 	}
 }
+
+func TestSeasonStoreScopedReturnAndCurrentReads(t *testing.T) {
+	f := newPublicationDomainFixture(t)
+	ctx := t.Context()
+	store := PostgresSeasonStore{Pool: f.web}
+	for _, offset := range []int32{-1, 1981} {
+		if _, err := store.ListSeasons(ctx, f.actor, offset); !errors.Is(err, ErrSeasonInvalid) {
+			t.Fatalf("offset %d: %v", offset, err)
+		}
+	}
+	rows, err := store.ListSeasons(ctx, f.actor, 0)
+	if err != nil || len(rows) != 1 || rows[0].ID != f.season || rows[0].IsCurrent {
+		t.Fatalf("initial season collection: %+v, %v", rows, err)
+	}
+	if has, err := store.HasCurrentSeason(ctx, f.actor); err != nil || has {
+		t.Fatalf("creating a season changed the current selection: %t, %v", has, err)
+	}
+	state, err := store.GetSelectionState(ctx, f.actor, f.season)
+	if err != nil || state.Current != nil {
+		t.Fatalf("initial selection state: %+v, %v", state, err)
+	}
+	if err := store.SelectCurrentSeason(ctx, f.actor, f.season, state.Version); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := store.HasCurrentSeason(ctx, f.actor); err != nil || !has {
+		t.Fatalf("selection missing from current status: %t, %v", has, err)
+	}
+	selected, err := store.GetSelectionState(ctx, f.actor, f.season)
+	if err != nil || selected.Current == nil || selected.Current.ID != f.season {
+		t.Fatalf("selected season: %+v, %v", selected, err)
+	}
+	if err := store.SelectCurrentSeason(ctx, f.actor, f.season, selected.Version); err != nil {
+		t.Fatalf("selecting the already-current season: %v", err)
+	}
+	if unchanged, err := store.GetSelectionState(ctx, f.actor, f.season); err != nil || unchanged.Version != selected.Version {
+		t.Fatalf("idempotent selection changed the version: %+v, %v", unchanged, err)
+	}
+	if err := store.SelectCurrentSeason(ctx, f.actor, uuid.New(), selected.Version); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("missing selection target: %v", err)
+	}
+
+	var day string
+	if err := f.web.QueryRow(ctx, `SELECT week_start::text FROM training_plans WHERE id=$1`, f.plan).Scan(&day); err != nil {
+		t.Fatal(err)
+	}
+	origin := SeasonReturnContext{OriginGroup: f.group.String(), OriginWeek: f.plan.String(), OriginDay: day}
+	definitions := origin
+	definitions.Kind = "definitions"
+	classification := origin
+	classification.Kind, classification.ID = "classification", f.subject.String()
+	member := SeasonReturnContext{Kind: "member", ID: f.subject.String(), Page: "02", Query: "Membro & família"}
+	originQuery := url.Values{"origin_group": {origin.OriginGroup}, "origin_week": {origin.OriginWeek}, "origin_day": {day}}.Encode()
+	collection := "/admin/membros?" + url.Values{"page": {"2"}, "q": {member.Query}}.Encode()
+	memberURL := "/admin/membros/" + member.ID
+	for _, tc := range []struct {
+		name string
+		in   SeasonReturnContext
+		want SeasonReturnContext
+		dest string
+	}{
+		{"definitions with verified origin", definitions, definitions, "/equipa/escaloes?" + originQuery},
+		{"classification with verified origin", classification, classification, "/equipa/classificacao/" + classification.ID + "?" + originQuery},
+		{"member preserves canonical collection", member, SeasonReturnContext{Kind: "member", ID: member.ID, Page: "2", Query: member.Query}, memberURL + "?return_to=" + url.QueryEscape(collection)},
+		{"member with no collection filters", SeasonReturnContext{Kind: "member", ID: member.ID}, SeasonReturnContext{Kind: "member", ID: member.ID}, memberURL},
+		{"malformed member", SeasonReturnContext{Kind: "member", ID: "bad-id"}, SeasonReturnContext{Kind: "list"}, seasonsPath},
+		{"unknown group", SeasonReturnContext{Kind: "group", ID: uuid.NewString()}, SeasonReturnContext{Kind: "list"}, seasonsPath},
+		{"empty group", SeasonReturnContext{Kind: "group"}, SeasonReturnContext{Kind: "list"}, seasonsPath},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, dest, err := store.ResolveReturn(t.Context(), f.actor, tc.in)
+			if err != nil || got != tc.want || dest != tc.dest {
+				t.Fatalf("return = %+v, %q, %v; want %+v, %q", got, dest, err, tc.want, tc.dest)
+			}
+		})
+	}
+	if _, dest, err := store.ResolveReturn(ctx, f.actor, SeasonReturnContext{Kind: "definitions", OriginGroup: uuid.NewString()}); !errors.Is(err, pgx.ErrNoRows) || dest != "" {
+		t.Fatalf("unknown origin returned a destination: %q, %v", dest, err)
+	}
+	if _, dest, err := store.ResolveReturn(ctx, f.subject, member); !errors.Is(err, pgx.ErrNoRows) || dest != "" {
+		t.Fatalf("non-administrator obtained a destination: %q, %v", dest, err)
+	}
+	if has, err := store.HasCurrentSeason(ctx, f.subject); !errors.Is(err, pgx.ErrNoRows) || has {
+		t.Fatalf("non-administrator observed a current season: %t, %v", has, err)
+	}
+	if _, err := store.CreateSeason(ctx, f.subject, SeasonInput{Code: "DENIED", Name: "Forbidden creation", StartsOn: selected.Target.StartsOn.Time, EndsOn: selected.Target.EndsOn.Time}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("non-administrator attempted creation: %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := store.GetSelectionState(canceled, f.actor, f.season); !errors.Is(err, context.Canceled) {
+		t.Fatalf("selection ignored canceled database read: %v", err)
+	}
+	if err := store.SelectCurrentSeason(canceled, f.actor, f.season, selected.Version); !errors.Is(err, context.Canceled) {
+		t.Fatalf("selection ignored canceled database write: %v", err)
+	}
+	if _, err := store.ListSeasons(canceled, f.actor, 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("collection ignored canceled authorization: %v", err)
+	}
+}
