@@ -3,6 +3,32 @@
 These decisions guide #391 and its dependent stories. They record product
 authority, not implementation, acceptance or release completion.
 
+## Rhythm guidance and replay authorisation
+
+Ricardo answered the remaining #391 questions on 10 November 2026:
+
+> 1. Yes overlap is expected. Rhythm is the difference between canoe and kayak.
+> 2. permission granted. It is all test data so do what is easiest.
+
+The owner explicitly instructed implementation to proceed: overlapping rhythm
+ranges are intentional, the prescribed workout content is shared, and each
+recipient uses the relevant kayak/canoe guidance from the supplied references.
+Keep the two supplied canoe tables distinct. These points are answered; do not
+add another values/units/common-content approval gate for this exercise.
+
+Both reference plans may be replayed in a future synthetic week, preserving
+every workout and its weekday and recording reference versus replay dates.
+The selected replay is **16–22 November 2026**, corresponding to the reference
+**9–15 November 2026**. Synthetic season configuration covers the exercise;
+actual club season boundaries remain unknown and are not a blocker. Newly
+owned disposable test fixtures may be created/recreated as needed. This does
+not authorise unrelated production operations or deletion of real records.
+
+Existing-data conversion/backfill remains outside scope. The confirmed return
+to the exact previous group after a temporary placement ends remains in force.
+Implementation and actual acceptance results must still be recorded honestly;
+the decision itself is not evidence that a replay or manual check occurred.
+
 ## Delivery scope correction
 
 On 10 November 2026 the owner clarified that **migration of existing database
