@@ -70,7 +70,7 @@ END {
 awk -F '\t' 'NR > 1 {
   uncovered = $3 - $2
   printf "%d\t%s\t%s\n", uncovered, $4, $1
-}' "$file_report" | sort -rn | head -20 >"$uncovered_report"
+}' "$file_report" | sort -rn | awk 'NR <= 20' >"$uncovered_report"
 
 # CI supplies the tested comparison SHA for pull requests and pushes. Locally,
 # callers can opt in with COVERAGE_CHANGED_BASE=<git-sha>. The report applies

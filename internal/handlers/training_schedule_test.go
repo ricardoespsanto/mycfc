@@ -188,3 +188,29 @@ func TestExactCopyChecksEndpointTransitionPatternWithoutChoosingNewMode(t *testi
 		t.Fatalf("matching known endpoint patterns refused: %v", e)
 	}
 }
+
+func TestPrescriptionDecodersRequireUnambiguousEntryKind(t *testing.T) {
+	base := `{"schema_version":2,"plan_id":"plan","session":{"ID":"session","Title":"Descanso",%s"schedule":{"precision":"DAY","date":"2026-11-15","starts_at":null,"ends_at":null,"band":null}}}`
+	raw := strings.Replace(base, "%s", `"entry_kind":"REST",`, 1)
+	decoded, err := decodeStructuredPrescription([]byte(raw), lisbonLocation())
+	if err != nil || decoded.Session.EntryKind != "REST" || !decoded.Session.Schedule.Known {
+		t.Fatalf("lowercase typed entry lost its schedule: %v", err)
+	}
+	for _, raw := range []string{
+		strings.Replace(base, "%s", "", 1),
+		strings.Replace(base, "%s", `"EntryKind":"TRAINING","entry_kind":"REST",`, 1),
+		`{"schema_version":1,"session":42}`,
+	} {
+		if _, err := decodeStructuredPrescription([]byte(raw), lisbonLocation()); !errors.Is(err, ErrTrainingSnapshotUnsupported) {
+			t.Fatalf("ambiguous or malformed entry accepted: %v", err)
+		}
+	}
+}
+
+func TestRoutineSchedulePreservesLegacyDurationWithoutInventingDates(t *testing.T) {
+	legacy := []byte(`{"schema_version":1,"title":"Rotina anterior","duration_seconds":3600,"segments":[]}`)
+	view, err := decodeRoutineSchedule(legacy, lisbonLocation())
+	if err != nil || view.Known || view.Date != "" || view.StartsAt != "" {
+		t.Fatalf("legacy duration fabricated an appointment: %+v, %v", view, err)
+	}
+}
