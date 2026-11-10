@@ -156,6 +156,7 @@ test-coverage: ## Run unit tests and write text/HTML reports with a regression f
 	./scripts/go-coverage.sh
 
 test-deployment: ## Run production release orchestration tests
+	python3 deployment/precision-admission_test.py
 	$(MAKE) test-release-tooling
 	sh deployment/mycfc-pull-release-timer_test.sh
 	sh deployment/pull-release_test.sh

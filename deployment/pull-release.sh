@@ -39,6 +39,65 @@ guardian_intake_active=false
 privacy_worker_active=false
 privacy_worker_activation_required=false
 current_phase=initialization
+normal_release=false
+precision_migration_completed=false
+precision_authority=${MYCFC_PRECISION_AUTHORITY:-/etc/mycfc/deployment/training-schedule-host.json}
+previous_publication_file="$state_dir/previous-release-publication.json"
+
+precision_evidence() {
+	precision_slot=$1
+	precision_image=$2
+	precision_caps=$3
+	precision_status=$4
+	precision_version=${5:-$release_version}
+	precision_candidate=${6:-$sha}
+	case "$precision_slot" in blue|green) ;; legacy) precision_slot=blue ;; *) return 1 ;; esac
+	docker run --rm "$precision_image" precision-capabilities >"$precision_caps" || return 1
+	MYCFC_IMAGE="$precision_image" APP_VERSION="$precision_version" GIT_SHA="$precision_candidate" \
+		docker compose --env-file "$env_file" -f "$compose_file" --profile "$precision_slot" \
+		run --rm --no-deps "app-$precision_slot" precision-status >"$precision_status"
+}
+
+precision_guard() {
+	precision_guard_slot=$1
+	precision_caps_file=$(mktemp "$state_dir/.precision-caps.XXXXXX")
+	precision_status_file=$(mktemp "$state_dir/.precision-status.XXXXXX")
+	precision_result=0
+	if precision_evidence "$precision_guard_slot" "$image" "$precision_caps_file" "$precision_status_file"; then
+		MYCFC_PRECISION_AUTHORITY="$precision_authority" MYCFC_PRECISION_LOCK_FD=9 \
+			MYCFC_PRECISION_LOCK_FILE="$lock_file" \
+			sh "$deployment_dir/precision-controller.sh" check "$precision_status_file" \
+			"$publication_manifest_file" "$precision_caps_file" "$deployment_dir/pull-release.sh" || precision_result=1
+	else precision_result=1; fi
+	rm -f "$precision_caps_file" "$precision_status_file"
+	return "$precision_result"
+}
+
+precision_fallback() {
+	case "$active_slot" in blue|green) ;; *) return 1 ;; esac
+	[ -f "$previous_publication_file" ] || return 1
+	precision_old_image=$(jq -er '.image.repository + "@" + .image.digest' "$previous_publication_file") || return 1
+	precision_binder_manifest=$previous_publication_file
+	if [ "$precision_migration_completed" = true ]; then precision_binder_manifest=$publication_manifest_file; fi
+	precision_binder_image=$(jq -er '.image.repository + "@" + .image.digest' "$precision_binder_manifest") || return 1
+	precision_binder_version=$(jq -er .version "$precision_binder_manifest") || return 1
+	precision_binder_candidate=$(jq -er .git_sha "$precision_binder_manifest") || return 1
+	precision_old_caps=$(mktemp "$state_dir/.precision-old-caps.XXXXXX")
+	precision_current_caps=$(mktemp "$state_dir/.precision-current-caps.XXXXXX")
+	precision_current_status=$(mktemp "$state_dir/.precision-current-status.XXXXXX")
+	precision_result=0
+	if docker run --rm "$precision_old_image" precision-capabilities >"$precision_old_caps" &&
+		precision_evidence "$candidate_slot" "$precision_binder_image" "$precision_current_caps" "$precision_current_status" \
+			"$precision_binder_version" "$precision_binder_candidate"; then
+		MYCFC_PRECISION_AUTHORITY="$precision_authority" MYCFC_PRECISION_LOCK_FD=9 \
+			MYCFC_PRECISION_LOCK_FILE="$lock_file" MYCFC_ENV_FILE="$env_file" MYCFC_COMPOSE_FILE="$compose_file" \
+			sh "$deployment_dir/precision-controller.sh" fallback "$precision_current_status" \
+			"$previous_publication_file" "$precision_old_caps" "$deployment_dir/pull-release.sh" \
+			"$active_slot" "$precision_binder_manifest" "$precision_current_caps" || precision_result=1
+	else precision_result=1; fi
+	rm -f "$precision_old_caps" "$precision_current_caps" "$precision_current_status"
+	return "$precision_result"
+}
 
 log() {
 	printf '%s\n' "$*"
@@ -202,19 +261,26 @@ observe_guardian_intake() {
 rollback() {
 	status=$?
 	trap - EXIT HUP INT TERM
+	precision_restore_allowed=true
+	if [ "$normal_release" = true ] && [ "$release_updated" = true ]; then
+		if ! precision_fallback; then
+			precision_restore_allowed=false
+			log 'event=rollback_refused_incompatible retaining_candidate=true runtime_only_fallback_required=true'
+		fi
+	fi
 	if [ "$status" -ne 0 ]; then
 		log "event=deployment_failed phase=$current_phase exit_status=$status sha=${sha:-unknown} digest=${release_digest:-unknown} slot=${candidate_slot:-unknown} candidate_started=$candidate_started route_switched=$route_switched"
 	fi
-	if [ "$route_switched" = true ] && [ -n "$route_backup" ] && [ -f "$route_backup" ]; then
+	if [ "$precision_restore_allowed" = true ] && [ "$route_switched" = true ] && [ -n "$route_backup" ] && [ -f "$route_backup" ]; then
 		log 'candidate failed after traffic switch; restoring the previous Caddy upstream'
 		temporary=$(mktemp "$state_dir/.upstream.XXXXXX")
 		cp "$route_backup" "$temporary"
 		chmod 0644 "$temporary"
 		mv "$temporary" "$upstream_file"
-		reload_caddy || log 'Caddy upstream rollback failed'
-		rollback_performed=true
+		if reload_caddy; then rollback_performed=true
+		else precision_restore_allowed=false; log 'Caddy upstream rollback failed; retaining candidate'; fi
 	fi
-	if [ "$candidate_started" = true ] && [ -n "$candidate_slot" ]; then
+	if [ "$precision_restore_allowed" = true ] && [ "$candidate_started" = true ] && [ -n "$candidate_slot" ]; then
 		docker compose --env-file "$env_file" -f "$compose_file" --profile "$candidate_slot" \
 			stop "app-$candidate_slot" >/dev/null 2>&1 || log 'candidate stop failed'
 	fi
@@ -223,7 +289,7 @@ rollback() {
 		if [ -n "$candidate_slot" ]; then
 			docker logs --tail 100 "mycfc-production-app-$candidate_slot-1" >&2 2>/dev/null || true
 		fi
-		cp "$backup_file" "$env_file"
+		if [ "$precision_restore_allowed" = true ]; then cp "$backup_file" "$env_file"; fi
 		if [ -n "$release_digest" ]; then
 			write_state_value "$failed_digest_file" "$release_digest"
 			log "quarantined failed release digest $release_digest"
@@ -421,6 +487,18 @@ image_schema=$(docker image inspect --format '{{index .Config.Labels "org.mycfc.
 	exit 1
 }
 chmod 0644 "$manifest_temporary"
+if [ -f "$publication_manifest_file" ]; then
+	stored_publication_image=$(jq -er '.image.repository + "@" + .image.digest' "$publication_manifest_file" 2>/dev/null || true)
+	case "$active_slot" in
+		blue|green) stored_active_container="mycfc-production-app-$active_slot-1" ;;
+		legacy) stored_active_container='mycfc-production-app-1' ;;
+	esac
+	stored_active_image=$(docker inspect --format '{{.Config.Image}}' "$stored_active_container" 2>/dev/null || true)
+	if [ "$stored_publication_image" = "$stored_active_image" ] && [ "$stored_publication_image" != "$image" ]; then
+		cp "$publication_manifest_file" "$previous_publication_file"
+		chmod 0600 "$previous_publication_file"
+	fi
+fi
 mv "$manifest_temporary" "$publication_manifest_file"
 
 begin_release_timeline "$released_at"
@@ -436,6 +514,25 @@ if [ -f "$failed_digest_file" ] && [ "$(cat "$failed_digest_file")" = "$release_
 fi
 record_timeline_milestone image-pulled
 
+# The normal forward lineage is separate from the permanently retired reset
+# contract. Its compiled metadata must match the authenticated existing manifest;
+# the low migration command independently verifies actual parent/final DB state.
+normal_contract_file=$(mktemp "$state_dir/.normal-release.XXXXXX")
+if docker run --rm "$image" normal-release-contract >"$normal_contract_file"; then
+	if python3 "$deployment_dir/precision-admission.py" normal-contract \
+		--normal-contract "$normal_contract_file" --manifest "$publication_manifest_file" \
+		--lock-file "$lock_file" --lock-fd 9; then normal_release=true
+	else rm -f "$normal_contract_file"; exit 1; fi
+fi
+rm -f "$normal_contract_file"
+if [ "$normal_release" != true ] && { [ -e "$precision_authority" ] || [ -L "$precision_authority" ]; }; then
+	log 'event=precision_candidate_rejected reason=missing_normal_forward_capability'
+	exit 1
+fi
+if [ "$normal_release" = true ]; then
+	run_phase precision_admission_preflight precision_guard "$active_slot"
+fi
+
 case "$active_slot" in
 	blue|green) active_container="mycfc-production-app-$active_slot-1" ;;
 	legacy) active_container='mycfc-production-app-1' ;;
@@ -449,7 +546,7 @@ if [ "$active_slot" != legacy ] && [ "${MYCFC_IMAGE:-}" = "$image" ] && [ "$runn
 	log "release $release_digest is already deployed in the $active_slot slot"
 	exit 0
 fi
-if jq -e --arg migration '202609290002_dated_participation_contract' \
+if [ "$normal_release" != true ] && jq -e --arg migration '202609290002_dated_participation_contract' \
 	'.schema.ordered_migrations | index($migration) != null' "$publication_manifest_file" >/dev/null; then
 	# Only the exact, attested candidate with the reviewed one-shot contract may
 	# cross this boundary. Its bootstrap fences old logins before replacement.
@@ -507,12 +604,16 @@ log "event=release_preparing sha=$sha digest=$release_digest candidate_slot=$can
 run_phase postgres_ready docker compose --env-file "$env_file" -f "$compose_file" up -d --wait postgres
 run_phase database_bootstrap docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap
 run_phase database_migrate docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm migrate
+precision_migration_completed=true
 # Idempotent defence in depth; migrate already applies this boundary atomically
 # before committing any newly created privacy execution tables.
 run_phase database_harden docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm db-bootstrap harden-db
 run_phase guardian_release_bind docker compose --env-file "$env_file" -f "$compose_file" --profile release run --rm guardian-release-bind
 run_phase guardian_release_status observe_guardian_intake
 record_timeline_milestone migration-completed
+if [ "$normal_release" = true ]; then
+	run_phase precision_admission_final precision_guard "$candidate_slot"
+fi
 run_phase candidate_start docker compose --env-file "$env_file" -f "$compose_file" --profile "$candidate_slot" \
 	up -d --no-deps --force-recreate "$candidate_service"
 candidate_started=true
