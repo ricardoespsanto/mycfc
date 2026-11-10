@@ -6,10 +6,11 @@ RETURNING id, title, description, programme_id, team_id, training_group_id, seas
 -- name: CreateTrainingSession :one
 INSERT INTO training_sessions (plan_id, title, description, starts_at, ends_at, modality_id, created_by_id)
 VALUES (sqlc.arg(plan_id), sqlc.arg(title), sqlc.arg(description), sqlc.arg(starts_at), sqlc.arg(ends_at), sqlc.narg(modality_id), sqlc.arg(created_by_id))
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at,schedule_precision,scheduled_on,day_band;
 
 -- name: GetTrainingSessionForEdit :one
-SELECT s.id, s.plan_id, s.title, s.description, s.starts_at, s.ends_at, s.modality_id,
+SELECT s.id, s.plan_id, s.title, s.description, s.starts_at, s.ends_at,s.schedule_precision,s.scheduled_on,s.day_band,
+       public.training_session_local_date(s.scheduled_on,s.starts_at) AS session_on, s.modality_id,
        s.entry_kind, s.status, s.cancelled_at, s.cancelled_by_id, s.cancellation_reason,
        canceller.name AS cancelled_by_name, s.created_by_id, s.created_at, s.updated_at,
        EXISTS (SELECT 1 FROM training_session_outcomes o WHERE o.session_id = s.id) AS has_outcomes
@@ -23,21 +24,21 @@ SET plan_id = sqlc.arg(plan_id), title = sqlc.arg(title), description = sqlc.arg
     starts_at = sqlc.arg(starts_at), ends_at = sqlc.arg(ends_at), modality_id = sqlc.narg(modality_id),
     updated_at = clock_timestamp()
 WHERE s.id = sqlc.arg(id)
-  AND s.status = 'ACTIVE'
+  AND s.status = 'ACTIVE' AND s.schedule_precision='INTERVAL'
   AND s.starts_at > sqlc.arg(as_of)
   AND s.updated_at = sqlc.arg(expected_updated_at)
   AND (s.plan_id = sqlc.arg(plan_id) OR NOT EXISTS (SELECT 1 FROM training_session_outcomes o WHERE o.session_id = s.id))
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at,schedule_precision,scheduled_on,day_band;
 
 -- name: CancelTrainingSession :one
 UPDATE training_sessions
 SET status = 'CANCELLED', cancelled_at = sqlc.arg(cancelled_at), cancelled_by_id = sqlc.arg(cancelled_by_id),
     cancellation_reason = sqlc.arg(cancellation_reason), updated_at = clock_timestamp()
 WHERE id = sqlc.arg(id)
-  AND status = 'ACTIVE'
+  AND status = 'ACTIVE' AND schedule_precision='INTERVAL'
   AND starts_at > sqlc.arg(cancelled_at)
   AND updated_at = sqlc.arg(expected_updated_at)
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at,schedule_precision,scheduled_on,day_band;
 
 -- name: SaveTrainingSessionOutcome :execrows
 INSERT INTO training_session_outcomes (
@@ -63,6 +64,7 @@ LEFT JOIN LATERAL (
 ) current_prescription ON true
 WHERE s.id = sqlc.arg(session_id)
   AND s.status = 'ACTIVE'
+  AND s.schedule_precision IN ('INTERVAL','START_ONLY') AND s.starts_at IS NOT NULL
   AND EXISTS (
       SELECT 1 FROM user_memberships m
       WHERE m.user_id = sqlc.arg(user_id) AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
@@ -78,6 +80,7 @@ WHERE s.id = sqlc.arg(session_id)
               AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           WHERE replacement_session.id = sqlc.narg(replacement_session_id)
             AND replacement_session.status = 'ACTIVE'
+            AND replacement_session.schedule_precision IN ('INTERVAL','START_ONLY') AND replacement_session.starts_at IS NOT NULL
             AND replacement_session.id <> s.id
             AND (replacement_plan.programme_id IS NULL OR replacement_plan.programme_id = m.programme_id)
             AND (replacement_plan.team_id IS NULL OR replacement_plan.team_id = m.team_id)
@@ -98,7 +101,8 @@ ON CONFLICT (session_id, user_id) DO UPDATE SET
 WHERE training_session_outcomes.version = sqlc.arg(expected_version);
 
 -- name: ListTrainingSessionsForAthlete :many
-SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name,
+SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at,s.schedule_precision,s.scheduled_on,s.day_band,
+       public.training_session_local_date(s.scheduled_on,s.starts_at) AS session_on, m.name_pt AS modality_name,
        s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status,
        o.distance_metres, o.actual_duration_minutes, o.perceived_exertion, o.recovery_feeling,
        o.perception_note, o.updated_at AS outcome_updated_at, COALESCE(o.version, 0)::integer AS outcome_version,
@@ -118,10 +122,11 @@ WHERE EXISTS (
       AND (p.programme_id IS NULL OR p.programme_id = membership.programme_id)
       AND (p.team_id IS NULL OR p.team_id = membership.team_id)
 )
-ORDER BY s.starts_at DESC, s.id DESC LIMIT sqlc.arg(row_limit);
+ORDER BY public.training_session_local_date(s.scheduled_on,s.starts_at) DESC,s.starts_at DESC NULLS LAST, s.id DESC LIMIT sqlc.arg(row_limit);
 
 -- name: ListUpcomingTrainingSessionsForDashboard :many
-SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt AS modality_name,
+SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at,s.schedule_precision,s.scheduled_on,s.day_band,
+       public.training_session_local_date(s.scheduled_on,s.starts_at) AS session_on, m.name_pt AS modality_name,
        s.status, s.cancellation_reason,
        EXISTS (
          SELECT 1 FROM training_prescriptions prescription
@@ -134,7 +139,7 @@ SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt A
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
-WHERE s.ends_at >= sqlc.arg(from_time)
+WHERE (s.ends_at >= sqlc.arg(from_time) OR (s.ends_at IS NULL AND public.training_session_local_date(s.scheduled_on,s.starts_at)>=(sqlc.arg(from_time)::timestamptz AT TIME ZONE 'Europe/Lisbon')::date))
   AND EXISTS (
       SELECT 1 FROM user_memberships membership
       JOIN users subject ON subject.id = membership.user_id
@@ -143,7 +148,7 @@ WHERE s.ends_at >= sqlc.arg(from_time)
         AND (p.programme_id IS NULL OR p.programme_id = membership.programme_id)
         AND (p.team_id IS NULL OR p.team_id = membership.team_id)
   )
-ORDER BY s.starts_at, s.id
+ORDER BY public.training_session_local_date(s.scheduled_on,s.starts_at),s.starts_at NULLS LAST, s.id
 LIMIT sqlc.arg(row_limit);
 
 -- name: UpdateOwnCompletedSessionFeedback :execrows
@@ -159,7 +164,8 @@ WHERE session_id = sqlc.arg(session_id)
   AND user_id = sqlc.arg(user_id)
   AND status = 'COMPLETED'
   AND version = sqlc.arg(expected_version)
-  AND EXISTS (SELECT 1 FROM training_sessions s WHERE s.id = session_id AND s.status = 'ACTIVE');
+  AND EXISTS (SELECT 1 FROM training_sessions s WHERE s.id = session_id AND s.status = 'ACTIVE'
+   AND s.schedule_precision IN ('INTERVAL','START_ONLY') AND s.starts_at IS NOT NULL);
 
 -- name: ListTrainingPlansForCoach :many
 SELECT p.id, p.title, p.description, p.programme_id, p.team_id, p.created_at
@@ -187,13 +193,14 @@ WITH scoped_plans AS (
 )
 SELECT p.id AS plan_id, p.title AS plan_title, p.description AS plan_description,
        s.id AS session_id, s.title AS session_title, s.description AS session_description,
-       s.starts_at, s.ends_at, m.name_pt AS modality_name, s.status, s.cancellation_reason,
+       s.starts_at, s.ends_at,s.schedule_precision,s.scheduled_on,s.day_band,
+       public.training_session_local_date(s.scheduled_on,s.starts_at) AS session_on, m.name_pt AS modality_name, s.status, s.cancellation_reason,
        s.cancelled_at, canceller.name AS cancelled_by_name, s.updated_at
 FROM scoped_plans p
 LEFT JOIN training_sessions s ON s.plan_id = p.id
 LEFT JOIN modalities m ON m.id = s.modality_id
 LEFT JOIN users canceller ON canceller.id = s.cancelled_by_id
-ORDER BY p.created_at DESC, p.id DESC, s.starts_at ASC, s.id ASC;
+ORDER BY p.created_at DESC, p.id DESC, public.training_session_local_date(s.scheduled_on,s.starts_at) ASC,s.starts_at ASC NULLS LAST, s.id ASC;
 
 -- name: CanCoachManageTrainingPlan :one
 SELECT EXISTS (SELECT 1 FROM training_plans p WHERE p.id = sqlc.arg(plan_id) AND EXISTS (SELECT 1 FROM staff_grants g WHERE g.user_id = sqlc.arg(user_id) AND g.capability = 'COACH' AND g.revoked_at IS NULL AND (g.programme_id = p.programme_id OR g.team_id = p.team_id)));

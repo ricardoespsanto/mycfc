@@ -33,10 +33,10 @@ UPDATE training_sessions
 SET status = 'CANCELLED', cancelled_at = $1, cancelled_by_id = $2,
     cancellation_reason = $3, updated_at = clock_timestamp()
 WHERE id = $4
-  AND status = 'ACTIVE'
+  AND status = 'ACTIVE' AND schedule_precision='INTERVAL'
   AND starts_at > $1
   AND updated_at = $5
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at,schedule_precision,scheduled_on,day_band
 `
 
 type CancelTrainingSessionParams struct {
@@ -72,6 +72,9 @@ func (q *Queries) CancelTrainingSession(ctx context.Context, arg CancelTrainingS
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SchedulePrecision,
+		&i.ScheduledOn,
+		&i.DayBand,
 	)
 	return i, err
 }
@@ -168,7 +171,7 @@ func (q *Queries) CreateTrainingPlan(ctx context.Context, arg CreateTrainingPlan
 const createTrainingSession = `-- name: CreateTrainingSession :one
 INSERT INTO training_sessions (plan_id, title, description, starts_at, ends_at, modality_id, created_by_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at,schedule_precision,scheduled_on,day_band
 `
 
 type CreateTrainingSessionParams struct {
@@ -208,12 +211,16 @@ func (q *Queries) CreateTrainingSession(ctx context.Context, arg CreateTrainingS
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SchedulePrecision,
+		&i.ScheduledOn,
+		&i.DayBand,
 	)
 	return i, err
 }
 
 const getTrainingSessionForEdit = `-- name: GetTrainingSessionForEdit :one
-SELECT s.id, s.plan_id, s.title, s.description, s.starts_at, s.ends_at, s.modality_id,
+SELECT s.id, s.plan_id, s.title, s.description, s.starts_at, s.ends_at,s.schedule_precision,s.scheduled_on,s.day_band,
+       public.training_session_local_date(s.scheduled_on,s.starts_at) AS session_on, s.modality_id,
        s.entry_kind, s.status, s.cancelled_at, s.cancelled_by_id, s.cancellation_reason,
        canceller.name AS cancelled_by_name, s.created_by_id, s.created_at, s.updated_at,
        EXISTS (SELECT 1 FROM training_session_outcomes o WHERE o.session_id = s.id) AS has_outcomes
@@ -229,6 +236,10 @@ type GetTrainingSessionForEditRow struct {
 	Description        string             `json:"description"`
 	StartsAt           pgtype.Timestamptz `json:"starts_at"`
 	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	SchedulePrecision  string             `json:"schedule_precision"`
+	ScheduledOn        pgtype.Date        `json:"scheduled_on"`
+	DayBand            *string            `json:"day_band"`
+	SessionOn          pgtype.Date        `json:"session_on"`
 	ModalityID         *uuid.UUID         `json:"modality_id"`
 	EntryKind          TrainingEntryKind  `json:"entry_kind"`
 	Status             string             `json:"status"`
@@ -252,6 +263,10 @@ func (q *Queries) GetTrainingSessionForEdit(ctx context.Context, id uuid.UUID) (
 		&i.Description,
 		&i.StartsAt,
 		&i.EndsAt,
+		&i.SchedulePrecision,
+		&i.ScheduledOn,
+		&i.DayBand,
+		&i.SessionOn,
 		&i.ModalityID,
 		&i.EntryKind,
 		&i.Status,
@@ -436,13 +451,14 @@ WITH scoped_plans AS (
 )
 SELECT p.id AS plan_id, p.title AS plan_title, p.description AS plan_description,
        s.id AS session_id, s.title AS session_title, s.description AS session_description,
-       s.starts_at, s.ends_at, m.name_pt AS modality_name, s.status, s.cancellation_reason,
+       s.starts_at, s.ends_at,s.schedule_precision,s.scheduled_on,s.day_band,
+       public.training_session_local_date(s.scheduled_on,s.starts_at) AS session_on, m.name_pt AS modality_name, s.status, s.cancellation_reason,
        s.cancelled_at, canceller.name AS cancelled_by_name, s.updated_at
 FROM scoped_plans p
 LEFT JOIN training_sessions s ON s.plan_id = p.id
 LEFT JOIN modalities m ON m.id = s.modality_id
 LEFT JOIN users canceller ON canceller.id = s.cancelled_by_id
-ORDER BY p.created_at DESC, p.id DESC, s.starts_at ASC, s.id ASC
+ORDER BY p.created_at DESC, p.id DESC, public.training_session_local_date(s.scheduled_on,s.starts_at) ASC,s.starts_at ASC NULLS LAST, s.id ASC
 `
 
 type ListTrainingPlansForAuthoringParams struct {
@@ -461,6 +477,10 @@ type ListTrainingPlansForAuthoringRow struct {
 	SessionDescription *string            `json:"session_description"`
 	StartsAt           pgtype.Timestamptz `json:"starts_at"`
 	EndsAt             pgtype.Timestamptz `json:"ends_at"`
+	SchedulePrecision  *string            `json:"schedule_precision"`
+	ScheduledOn        pgtype.Date        `json:"scheduled_on"`
+	DayBand            *string            `json:"day_band"`
+	SessionOn          pgtype.Date        `json:"session_on"`
 	ModalityName       *string            `json:"modality_name"`
 	Status             *string            `json:"status"`
 	CancellationReason *string            `json:"cancellation_reason"`
@@ -492,6 +512,10 @@ func (q *Queries) ListTrainingPlansForAuthoring(ctx context.Context, arg ListTra
 			&i.SessionDescription,
 			&i.StartsAt,
 			&i.EndsAt,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
 			&i.ModalityName,
 			&i.Status,
 			&i.CancellationReason,
@@ -558,7 +582,8 @@ func (q *Queries) ListTrainingPlansForCoach(ctx context.Context, arg ListTrainin
 }
 
 const listTrainingSessionsForAthlete = `-- name: ListTrainingSessionsForAthlete :many
-SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at, m.name_pt AS modality_name,
+SELECT s.id, p.title AS plan_title, s.title, s.description, s.starts_at, s.ends_at,s.schedule_precision,s.scheduled_on,s.day_band,
+       public.training_session_local_date(s.scheduled_on,s.starts_at) AS session_on, m.name_pt AS modality_name,
        s.status, s.cancellation_reason, COALESCE(o.status::text, ''::text) AS outcome_status,
        o.distance_metres, o.actual_duration_minutes, o.perceived_exertion, o.recovery_feeling,
        o.perception_note, o.updated_at AS outcome_updated_at, COALESCE(o.version, 0)::integer AS outcome_version,
@@ -578,7 +603,7 @@ WHERE EXISTS (
       AND (p.programme_id IS NULL OR p.programme_id = membership.programme_id)
       AND (p.team_id IS NULL OR p.team_id = membership.team_id)
 )
-ORDER BY s.starts_at DESC, s.id DESC LIMIT $2
+ORDER BY public.training_session_local_date(s.scheduled_on,s.starts_at) DESC,s.starts_at DESC NULLS LAST, s.id DESC LIMIT $2
 `
 
 type ListTrainingSessionsForAthleteParams struct {
@@ -593,6 +618,10 @@ type ListTrainingSessionsForAthleteRow struct {
 	Description           string             `json:"description"`
 	StartsAt              pgtype.Timestamptz `json:"starts_at"`
 	EndsAt                pgtype.Timestamptz `json:"ends_at"`
+	SchedulePrecision     string             `json:"schedule_precision"`
+	ScheduledOn           pgtype.Date        `json:"scheduled_on"`
+	DayBand               *string            `json:"day_band"`
+	SessionOn             pgtype.Date        `json:"session_on"`
 	ModalityName          *string            `json:"modality_name"`
 	Status                string             `json:"status"`
 	CancellationReason    *string            `json:"cancellation_reason"`
@@ -623,6 +652,10 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 			&i.Description,
 			&i.StartsAt,
 			&i.EndsAt,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
 			&i.ModalityName,
 			&i.Status,
 			&i.CancellationReason,
@@ -647,7 +680,8 @@ func (q *Queries) ListTrainingSessionsForAthlete(ctx context.Context, arg ListTr
 }
 
 const listUpcomingTrainingSessionsForDashboard = `-- name: ListUpcomingTrainingSessionsForDashboard :many
-SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt AS modality_name,
+SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at,s.schedule_precision,s.scheduled_on,s.day_band,
+       public.training_session_local_date(s.scheduled_on,s.starts_at) AS session_on, m.name_pt AS modality_name,
        s.status, s.cancellation_reason,
        EXISTS (
          SELECT 1 FROM training_prescriptions prescription
@@ -660,7 +694,7 @@ SELECT s.id, p.title AS plan_title, s.title, s.starts_at, s.ends_at, m.name_pt A
 FROM training_sessions s
 JOIN training_plans p ON p.id = s.plan_id
 LEFT JOIN modalities m ON m.id = s.modality_id
-WHERE s.ends_at >= $2
+WHERE (s.ends_at >= $2 OR (s.ends_at IS NULL AND public.training_session_local_date(s.scheduled_on,s.starts_at)>=($2::timestamptz AT TIME ZONE 'Europe/Lisbon')::date))
   AND EXISTS (
       SELECT 1 FROM user_memberships membership
       JOIN users subject ON subject.id = membership.user_id
@@ -669,7 +703,7 @@ WHERE s.ends_at >= $2
         AND (p.programme_id IS NULL OR p.programme_id = membership.programme_id)
         AND (p.team_id IS NULL OR p.team_id = membership.team_id)
   )
-ORDER BY s.starts_at, s.id
+ORDER BY public.training_session_local_date(s.scheduled_on,s.starts_at),s.starts_at NULLS LAST, s.id
 LIMIT $3
 `
 
@@ -685,6 +719,10 @@ type ListUpcomingTrainingSessionsForDashboardRow struct {
 	Title                 string             `json:"title"`
 	StartsAt              pgtype.Timestamptz `json:"starts_at"`
 	EndsAt                pgtype.Timestamptz `json:"ends_at"`
+	SchedulePrecision     string             `json:"schedule_precision"`
+	ScheduledOn           pgtype.Date        `json:"scheduled_on"`
+	DayBand               *string            `json:"day_band"`
+	SessionOn             pgtype.Date        `json:"session_on"`
 	ModalityName          *string            `json:"modality_name"`
 	Status                string             `json:"status"`
 	CancellationReason    *string            `json:"cancellation_reason"`
@@ -706,6 +744,10 @@ func (q *Queries) ListUpcomingTrainingSessionsForDashboard(ctx context.Context, 
 			&i.Title,
 			&i.StartsAt,
 			&i.EndsAt,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
 			&i.ModalityName,
 			&i.Status,
 			&i.CancellationReason,
@@ -745,6 +787,7 @@ LEFT JOIN LATERAL (
 ) current_prescription ON true
 WHERE s.id = $1
   AND s.status = 'ACTIVE'
+  AND s.schedule_precision IN ('INTERVAL','START_ONLY') AND s.starts_at IS NOT NULL
   AND EXISTS (
       SELECT 1 FROM user_memberships m
       WHERE m.user_id = $2 AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
@@ -760,6 +803,7 @@ WHERE s.id = $1
               AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
           WHERE replacement_session.id = $4
             AND replacement_session.status = 'ACTIVE'
+            AND replacement_session.schedule_precision IN ('INTERVAL','START_ONLY') AND replacement_session.starts_at IS NOT NULL
             AND replacement_session.id <> s.id
             AND (replacement_plan.programme_id IS NULL OR replacement_plan.programme_id = m.programme_id)
             AND (replacement_plan.team_id IS NULL OR replacement_plan.team_id = m.team_id)
@@ -838,7 +882,8 @@ WHERE session_id = $6
   AND user_id = $7
   AND status = 'COMPLETED'
   AND version = $8
-  AND EXISTS (SELECT 1 FROM training_sessions s WHERE s.id = session_id AND s.status = 'ACTIVE')
+  AND EXISTS (SELECT 1 FROM training_sessions s WHERE s.id = session_id AND s.status = 'ACTIVE'
+   AND s.schedule_precision IN ('INTERVAL','START_ONLY') AND s.starts_at IS NOT NULL)
 `
 
 type UpdateOwnCompletedSessionFeedbackParams struct {
@@ -875,11 +920,11 @@ SET plan_id = $1, title = $2, description = $3,
     starts_at = $4, ends_at = $5, modality_id = $6,
     updated_at = clock_timestamp()
 WHERE s.id = $7
-  AND s.status = 'ACTIVE'
+  AND s.status = 'ACTIVE' AND s.schedule_precision='INTERVAL'
   AND s.starts_at > $8
   AND s.updated_at = $9
   AND (s.plan_id = $1 OR NOT EXISTS (SELECT 1 FROM training_session_outcomes o WHERE o.session_id = s.id))
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at,schedule_precision,scheduled_on,day_band
 `
 
 type UpdateTrainingSessionParams struct {
@@ -923,6 +968,9 @@ func (q *Queries) UpdateTrainingSession(ctx context.Context, arg UpdateTrainingS
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SchedulePrecision,
+		&i.ScheduledOn,
+		&i.DayBand,
 	)
 	return i, err
 }

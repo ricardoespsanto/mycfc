@@ -369,7 +369,7 @@ WHERE plan.id = sqlc.arg(plan_id)
   AND plan.training_group_id IS NOT NULL
   AND sqlc.arg(starts_at) >= (plan.week_start::timestamp AT TIME ZONE 'Europe/Lisbon')
   AND sqlc.arg(ends_at) <= ((plan.week_start + 7)::timestamp AT TIME ZONE 'Europe/Lisbon')
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at;
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at,schedule_precision,scheduled_on,day_band;
 
 -- name: CreateTrainingSessionSegment :one
 INSERT INTO training_session_segments (session_id, position, modality, title, location, planned_duration_minutes,
@@ -505,7 +505,9 @@ SELECT group_row.id AS group_id, group_row.name AS group_name,
        (SELECT count(*)::integer FROM training_group_members member WHERE member.group_id = group_row.id) AS member_count,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
-       session.starts_at, session.ends_at, session.entry_kind, session.status AS session_status,
+       session.starts_at, session.ends_at, session.entry_kind,
+       session.schedule_precision,session.scheduled_on,session.day_band,
+       public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on, session.status AS session_status,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
        segment.title AS segment_title, segment.location AS segment_location,
        segment.planned_duration_minutes, segment.planned_start_offset_minutes,
@@ -562,7 +564,7 @@ WHERE sqlc.arg(is_admin)::boolean
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
    )
 ORDER BY group_row.name, group_row.id, plan.week_start DESC NULLS LAST, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position,
+         public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST, session.id, segment.position, block.position,
          water_step.created_at NULLS FIRST, exercise.position;
 
 -- name: ListStructuredTrainingOverviewForSubject :many
@@ -571,6 +573,8 @@ SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
        session.starts_at, session.ends_at, session.entry_kind,
+       session.schedule_precision,session.scheduled_on,session.day_band,
+       public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
        segment.title AS segment_title, segment.location AS segment_location,
        segment.planned_duration_minutes, segment.planned_start_offset_minutes,
@@ -625,7 +629,7 @@ WHERE (subject.id = sqlc.arg(user_id)
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
 ORDER BY subject.name, subject.id, group_row.name, group_row.id, plan.week_start DESC, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position,
+         public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST, session.id, segment.position, block.position,
          water_step.created_at NULLS FIRST, exercise.position;
 
 -- name: GetStructuredSessionPlanID :one
@@ -678,8 +682,11 @@ WHERE segment.id = sqlc.arg(source_id) AND session.status = 'ACTIVE';
 
 -- name: GetSessionRoutineSource :one
 SELECT session.plan_id, session.updated_at AS source_updated_at, plan.programme_id, plan.team_id,
+ session.schedule_precision,session.scheduled_on,session.day_band,session.starts_at,session.ends_at,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on,
        NULL::training_segment_modality AS modality, NULL::training_objective AS objective,
-       training_session_snapshot(session.id) AS snapshot
+       training_session_snapshot_v2(session.id) AS schedule_snapshot,
+       CASE WHEN session.schedule_precision='INTERVAL' THEN training_session_snapshot(session.id) ELSE NULL::jsonb END AS snapshot
 FROM training_sessions session
 JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
 WHERE session.id = sqlc.arg(source_id) AND session.status = 'ACTIVE';
@@ -751,17 +758,21 @@ FROM training_plans plan
 WHERE plan.id = sqlc.arg(plan_id) AND plan.training_group_id IS NOT NULL;
 
 -- name: ListStructuredSessionSnapshotsForPlan :many
-SELECT session.id, session.starts_at, session.updated_at, training_session_snapshot(session.id) AS snapshot
+SELECT session.id, session.starts_at,session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on, session.updated_at, training_session_snapshot_v2(session.id) AS schedule_snapshot,
+       CASE WHEN session.schedule_precision='INTERVAL' THEN training_session_snapshot(session.id) ELSE NULL::jsonb END AS snapshot
 FROM training_sessions session
 WHERE session.plan_id = sqlc.arg(plan_id) AND session.status = 'ACTIVE'
-ORDER BY session.starts_at, session.id;
+ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at),session.starts_at NULLS LAST, session.id;
 
 -- name: ListStructuredSessionSnapshotsForDay :many
-SELECT session.id, session.starts_at, session.updated_at, training_session_snapshot(session.id) AS snapshot
+SELECT session.id, session.starts_at,session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on, session.updated_at, training_session_snapshot_v2(session.id) AS schedule_snapshot,
+       CASE WHEN session.schedule_precision='INTERVAL' THEN training_session_snapshot(session.id) ELSE NULL::jsonb END AS snapshot
 FROM training_sessions session
 WHERE session.plan_id = sqlc.arg(plan_id) AND session.status = 'ACTIVE'
-  AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date = sqlc.arg(source_date)::date
-ORDER BY session.starts_at, session.id;
+  AND public.training_session_local_date(session.scheduled_on,session.starts_at) = sqlc.arg(source_date)::date
+ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at),session.starts_at NULLS LAST, session.id;
 
 -- name: ListManagedTrainingGroupMembers :many
 SELECT group_row.id AS training_group_id, group_row.name AS training_group_name,
@@ -870,25 +881,25 @@ ORDER BY group_row.name, variation_group.name, subject.name, membership.id;
 -- name: CreateTrainingVariation :one
 WITH subject_plan AS (
     SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date AS session_date
+           public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_date
     FROM training_session_segments segment
     JOIN training_sessions session ON session.id = segment.session_id
     UNION ALL
     SELECT block.id, 'BLOCK'::training_variation_subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+           public.training_session_local_date(session.scheduled_on,session.starts_at)
     FROM training_segment_blocks block
     JOIN training_session_segments segment ON segment.id = block.segment_id
     JOIN training_sessions session ON session.id = segment.session_id
     UNION ALL
     SELECT step.id, 'WATER_STEP'::training_variation_subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+           public.training_session_local_date(session.scheduled_on,session.starts_at)
     FROM water_work_steps step
     JOIN training_segment_blocks block ON block.id = step.block_id
     JOIN training_session_segments segment ON segment.id = block.segment_id
     JOIN training_sessions session ON session.id = segment.session_id
     UNION ALL
     SELECT exercise.id, 'GYM_EXERCISE'::training_variation_subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+           public.training_session_local_date(session.scheduled_on,session.starts_at)
     FROM gym_exercises exercise
     JOIN training_segment_blocks block ON block.id = exercise.block_id
     JOIN training_session_segments segment ON segment.id = block.segment_id
@@ -937,6 +948,8 @@ WHERE id = sqlc.arg(id) AND version = sqlc.arg(version) AND is_active;
 WITH subject_details AS (
     SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind,
            session.plan_id, session.id AS session_id, session.title AS session_title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on,
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Segmento · ', segment.position, ' · ', segment.modality::text,
                   CASE WHEN segment.title = '' THEN '' ELSE ' · ' || segment.title END)::text AS subject_label
     FROM training_session_segments segment
@@ -944,6 +957,8 @@ WITH subject_details AS (
     UNION ALL
     SELECT block.id, 'BLOCK'::training_variation_subject_kind, session.plan_id, session.id,
            session.title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at),
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Bloco · ', block.position, ' · ', block.purpose::text,
                   CASE WHEN block.title = '' THEN '' ELSE ' · ' || block.title END)::text
     FROM training_segment_blocks block
@@ -952,6 +967,8 @@ WITH subject_details AS (
     UNION ALL
     SELECT step.id, 'WATER_STEP'::training_variation_subject_kind, session.plan_id, session.id,
            session.title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at),
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Passo de água · ', step.position, ' · ', step.name)::text
     FROM water_work_steps step
     JOIN training_segment_blocks block ON block.id = step.block_id
@@ -960,6 +977,8 @@ WITH subject_details AS (
     UNION ALL
     SELECT exercise.id, 'GYM_EXERCISE'::training_variation_subject_kind, session.plan_id, session.id,
            session.title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at),
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Exercício · ', exercise.position, ' · ', exercise.name)::text
     FROM gym_exercises exercise
     JOIN training_segment_blocks block ON block.id = exercise.block_id
@@ -985,7 +1004,8 @@ WITH subject_details AS (
     WHERE variation.target_group_id IS NOT NULL
 )
 SELECT variation.id AS variation_id, variation.plan_id, plan.title AS plan_title,
-       details.session_id, details.session_title, details.starts_at,
+       details.session_id, details.session_title, details.starts_at, details.session_on,
+       details.ends_at,details.schedule_precision,details.scheduled_on,details.day_band,
        variation.subject_kind, variation.subject_id, details.subject_label,
        variation.operation, variation.change_summary, variation.patch, variation.version,
        targets.membership_id, athlete.name AS athlete_name, targets.priority,
@@ -1004,10 +1024,10 @@ JOIN training_group_members current_group_member
 JOIN users athlete ON athlete.id = membership.user_id
 WHERE variation.is_active
   AND athlete.is_active
-  AND membership.starts_on <= (details.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date
-  AND (membership.ends_on IS NULL OR membership.ends_on >= (details.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date)
-  AND (targets.effective_from IS NULL OR (details.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date >= targets.effective_from)
-  AND (targets.effective_until IS NULL OR (details.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date <= targets.effective_until)
+  AND membership.starts_on <= details.session_on
+  AND (membership.ends_on IS NULL OR membership.ends_on >= details.session_on)
+  AND (targets.effective_from IS NULL OR details.session_on >= targets.effective_from)
+  AND (targets.effective_until IS NULL OR details.session_on <= targets.effective_until)
   AND (
       sqlc.arg(is_admin)::boolean
       OR EXISTS (
@@ -1018,7 +1038,7 @@ WHERE variation.is_active
             AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
       )
   )
-ORDER BY plan.week_start DESC, details.starts_at, athlete.name, details.subject_label,
+ORDER BY plan.week_start DESC,details.session_on, details.starts_at NULLS LAST, athlete.name, details.subject_label,
          targets.priority DESC, variation.created_at, variation.id;
 
 -- name: ListManagedTrainingPublicationStates :many
@@ -1059,7 +1079,7 @@ WHERE plan.id = sqlc.arg(plan_id)
   AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
   AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
   AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
-  AND (session.starts_at AT TIME ZONE sqlc.arg(time_zone)::text)::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
+  AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 ORDER BY subject.name, membership.id, session.id;
 
 -- name: LockStructuredTrainingPlanForPublication :one
@@ -1113,7 +1133,7 @@ WHERE publication.id = sqlc.arg(publication_id)
   AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
   AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
   AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
-  AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
+  AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 RETURNING id, publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256, created_at;
 
 -- name: ListTrainingPrescriptionsForViewer :many

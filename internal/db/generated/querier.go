@@ -261,7 +261,7 @@ type Querier interface {
 	ListStructuredSessionSnapshotsForPlan(ctx context.Context, planID uuid.UUID) ([]ListStructuredSessionSnapshotsForPlanRow, error)
 	ListStructuredTrainingOverviewForManager(ctx context.Context, arg ListStructuredTrainingOverviewForManagerParams) ([]ListStructuredTrainingOverviewForManagerRow, error)
 	ListStructuredTrainingOverviewForSubject(ctx context.Context, userID uuid.UUID) ([]ListStructuredTrainingOverviewForSubjectRow, error)
-	ListStructuredTrainingPublicationMembers(ctx context.Context, arg ListStructuredTrainingPublicationMembersParams) ([]ListStructuredTrainingPublicationMembersRow, error)
+	ListStructuredTrainingPublicationMembers(ctx context.Context, planID uuid.UUID) ([]ListStructuredTrainingPublicationMembersRow, error)
 	ListSuggestedActivityMatchesForUser(ctx context.Context, arg ListSuggestedActivityMatchesForUserParams) ([]TrainingSessionActivityMatch, error)
 	ListSuggestionsForRequester(ctx context.Context, arg ListSuggestionsForRequesterParams) ([]ListSuggestionsForRequesterRow, error)
 	ListSuggestionsForTriage(ctx context.Context, arg ListSuggestionsForTriageParams) ([]ListSuggestionsForTriageRow, error)
@@ -340,6 +340,13 @@ type Querier interface {
 	TrainingGroupSetupStatus(ctx context.Context, arg TrainingGroupSetupStatusParams) (TrainingGroupSetupStatusRow, error)
 	TrainingGroupSetupWeek(ctx context.Context, arg TrainingGroupSetupWeekParams) (pgtype.Date, error)
 	TrainingPlanExists(ctx context.Context, id uuid.UUID) (bool, error)
+	TrainingScheduleGuardPlanV1(ctx context.Context, arg TrainingScheduleGuardPlanV1Params) (bool, error)
+	TrainingScheduleGuardRoutineV1(ctx context.Context, arg TrainingScheduleGuardRoutineV1Params) (bool, error)
+	TrainingScheduleGuardSessionV1(ctx context.Context, arg TrainingScheduleGuardSessionV1Params) (bool, error)
+	TrainingScheduleLockTargetV1(ctx context.Context, arg TrainingScheduleLockTargetV1Params) (uuid.UUID, error)
+	// C preflight must inspect the complete authorized plan, never filter out
+	// partial sessions or downgrade a latest v2 publication to a v1 subset.
+	TrainingSchedulePlanWriteStatus(ctx context.Context, arg TrainingSchedulePlanWriteStatusParams) (TrainingSchedulePlanWriteStatusRow, error)
 	TransitionGuardianAuthority(ctx context.Context, arg TransitionGuardianAuthorityParams) (GuardianAuthorityRelationship, error)
 	UpdateActivityConnectionCredentials(ctx context.Context, arg UpdateActivityConnectionCredentialsParams) (ActivityConnection, error)
 	UpdateDependentLeaderboardVisibility(ctx context.Context, arg UpdateDependentLeaderboardVisibilityParams) (int64, error)

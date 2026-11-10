@@ -99,6 +99,12 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 		}
 		calendarEntries := make([]calendarEntry, 0, len(sessions))
 		for _, session := range sessions {
+			schedule, scheduleErr := trainingScheduleFromRecord(session.SchedulePrecision, session.ScheduledOn, session.StartsAt, session.EndsAt, session.DayBand)
+			view := trainingScheduleView(schedule, h.location())
+			if scheduleErr != nil {
+				view.Unavailable = true
+				page.Error = trainingScheduleDisplayError(scheduleErr)
+			}
 			modality := ""
 			if session.ModalityName != nil {
 				modality = *session.ModalityName
@@ -121,7 +127,7 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 			}
 			page.Sessions = append(page.Sessions, pages.TrainingSession{
 				ID: session.ID.String(), Plan: session.PlanTitle, Title: session.Title, Detail: session.Description,
-				When:     session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"),
+				When: view.Label, Schedule: view, OutcomeWriteUnsupported: scheduleErr != nil || (schedule.Precision != TrainingScheduleInterval && schedule.Precision != TrainingScheduleStartOnly), OutcomeUnsupportedMessage: "Esta versão não pode registar resultados sem uma hora de início conhecida. Peça à equipa que reveja o horário; os dados existentes continuam disponíveis.", WriteUnsupported: scheduleErr != nil || schedule.Precision != TrainingScheduleInterval, UnsupportedMessage: trainingScheduleUnsupportedMessage,
 				Modality: modality, Outcome: outcome, Distance: distance, DistanceKM: distanceInput,
 				ActualDuration: actualDuration, DurationMinutes: durationInput,
 				PerceivedEffort: optionalInt16Input(session.PerceivedExertion), RecoveryFeeling: optionalInt16Input(session.RecoveryFeeling),
@@ -136,7 +142,7 @@ func (h Training) renderIndex(w http.ResponseWriter, r *http.Request, status int
 			if session.PrescriptionAvailable {
 				calendarURL = "/treinos/prescricoes/sessoes/" + session.ID.String()
 			}
-			calendarEntries = append(calendarEntries, calendarEntry{Title: calendarTitle, URL: calendarURL, Kind: calendarKind, StartsAt: session.StartsAt.Time})
+			calendarEntries = append(calendarEntries, calendarEntry{Title: calendarTitle, URL: calendarURL, Kind: calendarKind, StartsAt: session.StartsAt.Time, Date: schedule.Date})
 		}
 		page.Calendar = basicCalendarMonth(calendarEntries, h.now(), h.location())
 	}
@@ -192,9 +198,12 @@ func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	user, _ := CurrentUserFromContext(r.Context())
 	form := pages.TrainingSessionForm{PlanID: r.PostForm.Get("plan_id"), Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), StartsAt: r.PostForm.Get("starts_at"), EndsAt: r.PostForm.Get("ends_at"), ModalityID: r.PostForm.Get("modality_id"), Errors: validation.FieldErrors{}}
+	if trainingScheduleFormUnsupported(r.PostForm) {
+		form.Errors.Add("starts_at", trainingScheduleUnsupportedMessage)
+	}
 	planID, planErr := uuid.Parse(form.PlanID)
-	starts, startErr := time.ParseInLocation("2006-01-02T15:04", r.PostForm.Get("starts_at"), h.location())
-	ends, endErr := time.ParseInLocation("2006-01-02T15:04", r.PostForm.Get("ends_at"), h.location())
+	starts, startErr := parseTrainingLocalDateTime(r.PostForm.Get("starts_at"), h.location())
+	ends, endErr := parseTrainingLocalDateTime(r.PostForm.Get("ends_at"), h.location())
 	title, description := form.Title, form.Description
 	modalityID, err := optionalUUID(r.PostForm.Get("modality_id"))
 	if planErr != nil {
@@ -235,6 +244,10 @@ func (h Training) CreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if _, err := h.Store.CreateTrainingSession(ctx, dbgen.CreateTrainingSessionParams{PlanID: planID, Title: title, Description: description, StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: ends, Valid: true}, ModalityID: modalityID, CreatedByID: user.ID}); err != nil {
+		if errors.Is(err, errTrainingScheduleUnavailable) {
+			h.System.NotFound(w, r)
+			return
+		}
 		h.System.InternalError(w, r)
 		return
 	}
@@ -263,6 +276,10 @@ func (h Training) EditSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := h.trainingSessionFormFromRecord(session)
+	if !trainingEditableSchedule(session) {
+		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, form, trainingScheduleUnsupportedMessage, "", validation.FieldErrors{})
+		return
+	}
 	if session.Status != "ACTIVE" || !session.StartsAt.Time.After(h.now()) {
 		form.Errors.Add("state", "Apenas sessões ativas que ainda não começaram podem ser alteradas.")
 		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, form, "A sessão já não pode ser alterada.", "", validation.FieldErrors{})
@@ -293,6 +310,12 @@ func (h Training) UpdateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.canManageTrainingPlan(ctx, user, current.PlanID, w, r) {
+		return
+	}
+	if !trainingEditableSchedule(current) {
+		submitted, _, _, _, _ := h.validateTrainingSessionEdit(r)
+		submitted.ID = sessionID.String()
+		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, submitted, trainingScheduleUnsupportedMessage, "", validation.FieldErrors{})
 		return
 	}
 	form, starts, ends, modalityID, expected := h.validateTrainingSessionEdit(r)
@@ -327,13 +350,32 @@ func (h Training) UpdateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err = h.Store.UpdateTrainingSession(ctx, dbgen.UpdateTrainingSessionParams{PlanID: planID, Title: form.Title, Description: form.Description, StartsAt: pgtype.Timestamptz{Time: starts, Valid: true}, EndsAt: pgtype.Timestamptz{Time: ends, Valid: true}, ModalityID: modalityID, ID: sessionID, AsOf: pgtype.Timestamptz{Time: h.now(), Valid: true}, ExpectedUpdatedAt: pgtype.Timestamptz{Time: expected, Valid: true}})
+	err = trainingScheduleWriteError(err)
+	if errors.Is(err, errTrainingScheduleUnavailable) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if errors.Is(err, ErrTrainingScheduleWriteUnsupported) || errors.Is(err, errStructuredTrainingPublicationConflict) {
+		message := "O plano mudou durante a operação. Nada foi guardado. Reveja a semana."
+		if errors.Is(err, ErrTrainingScheduleWriteUnsupported) {
+			message = trainingScheduleUnsupportedMessage
+		}
+		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, form, message, "", validation.FieldErrors{})
+		return
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		latest, getErr := h.Store.GetTrainingSessionForEdit(ctx, sessionID)
 		if getErr != nil {
 			h.System.InternalError(w, r)
 			return
 		}
-		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, h.trainingSessionFormFromRecord(latest), "A sessão foi alterada entretanto, já começou ou já foi cancelada.", "", validation.FieldErrors{})
+		message := "A sessão foi alterada entretanto, já começou ou já foi cancelada."
+		recoveryForm := h.trainingSessionFormFromRecord(latest)
+		if !trainingEditableSchedule(latest) {
+			recoveryForm = form
+			message = trainingScheduleUnsupportedMessage
+		}
+		h.renderSessionEdit(w, r, http.StatusConflict, sessionID, recoveryForm, message, "", validation.FieldErrors{})
 		return
 	}
 	if err != nil {
@@ -368,6 +410,10 @@ func (h Training) CancelSession(w http.ResponseWriter, r *http.Request) {
 	if !h.canManageTrainingPlan(ctx, user, current.PlanID, w, r) {
 		return
 	}
+	if !trainingEditableSchedule(current) {
+		h.renderSessionCancel(w, r, http.StatusConflict, sessionID, current, trainingScheduleUnsupportedMessage, strings.TrimSpace(r.PostForm.Get("cancellation_reason")), validation.FieldErrors{})
+		return
+	}
 	reason := strings.TrimSpace(r.PostForm.Get("cancellation_reason"))
 	errs := validation.FieldErrors{}
 	if !validTrainingText(reason, 2, 500) {
@@ -386,6 +432,15 @@ func (h Training) CancelSession(w http.ResponseWriter, r *http.Request) {
 	}
 	now := h.now()
 	_, err = h.Store.CancelTrainingSession(ctx, dbgen.CancelTrainingSessionParams{CancelledAt: pgtype.Timestamptz{Time: now, Valid: true}, CancelledByID: &user.ID, CancellationReason: &reason, ID: sessionID, ExpectedUpdatedAt: pgtype.Timestamptz{Time: expected, Valid: true}})
+	err = trainingScheduleWriteError(err)
+	if errors.Is(err, errTrainingScheduleUnavailable) {
+		h.System.NotFound(w, r)
+		return
+	}
+	if errors.Is(err, ErrTrainingScheduleWriteUnsupported) || errors.Is(err, errStructuredTrainingPublicationConflict) {
+		h.renderSessionCancel(w, r, http.StatusConflict, sessionID, current, trainingScheduleDisplayError(err), reason, validation.FieldErrors{})
+		return
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		latest, getErr := h.Store.GetTrainingSessionForEdit(ctx, sessionID)
 		if getErr != nil {
@@ -425,6 +480,10 @@ func (h Training) CancelSessionPage(w http.ResponseWriter, r *http.Request) {
 	}
 	conflict := ""
 	status := http.StatusOK
+	if !trainingEditableSchedule(session) {
+		h.renderSessionCancel(w, r, http.StatusConflict, sessionID, session, trainingScheduleUnsupportedMessage, "", validation.FieldErrors{})
+		return
+	}
 	if session.Status != "ACTIVE" || !session.StartsAt.Time.After(h.now()) {
 		status = http.StatusConflict
 		conflict = "A sessão já não pode ser cancelada. As sessões canceladas ou já iniciadas continuam disponíveis para consulta."
@@ -542,9 +601,12 @@ func (h Training) canManageTrainingPlan(ctx context.Context, user CurrentUser, p
 
 func (h Training) validateTrainingSessionEdit(r *http.Request) (pages.TrainingSessionForm, time.Time, time.Time, *uuid.UUID, time.Time) {
 	form := pages.TrainingSessionForm{PlanID: r.PostForm.Get("plan_id"), Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), StartsAt: r.PostForm.Get("starts_at"), EndsAt: r.PostForm.Get("ends_at"), ModalityID: r.PostForm.Get("modality_id"), ExpectedUpdatedAt: strings.TrimSpace(r.PostForm.Get("expected_updated_at")), Editing: true, Errors: validation.FieldErrors{}}
+	if trainingScheduleFormUnsupported(r.PostForm) {
+		form.Errors.Add("starts_at", trainingScheduleUnsupportedMessage)
+	}
 	_, planErr := uuid.Parse(form.PlanID)
-	starts, startErr := time.ParseInLocation("2006-01-02T15:04", form.StartsAt, h.location())
-	ends, endErr := time.ParseInLocation("2006-01-02T15:04", form.EndsAt, h.location())
+	starts, startErr := parseTrainingLocalDateTime(form.StartsAt, h.location())
+	ends, endErr := parseTrainingLocalDateTime(form.EndsAt, h.location())
 	modalityID, modalityErr := optionalUUID(form.ModalityID)
 	expected, expectedErr := time.Parse(time.RFC3339Nano, form.ExpectedUpdatedAt)
 	if planErr != nil {
@@ -578,7 +640,14 @@ func (h Training) trainingSessionFormFromRecord(session dbgen.GetTrainingSession
 	if session.ModalityID != nil {
 		modalityID = session.ModalityID.String()
 	}
-	return pages.TrainingSessionForm{ID: session.ID.String(), PlanID: session.PlanID.String(), Title: session.Title, Description: session.Description, StartsAt: session.StartsAt.Time.In(h.location()).Format("2006-01-02T15:04"), EndsAt: session.EndsAt.Time.In(h.location()).Format("2006-01-02T15:04"), ModalityID: modalityID, ExpectedUpdatedAt: session.UpdatedAt.Time.Format(time.RFC3339Nano), Editing: true, PlanLocked: session.HasOutcomes, Errors: validation.FieldErrors{}}
+	starts, ends := "", ""
+	if session.StartsAt.Valid {
+		starts = session.StartsAt.Time.In(h.location()).Format("2006-01-02T15:04")
+	}
+	if session.EndsAt.Valid {
+		ends = session.EndsAt.Time.In(h.location()).Format("2006-01-02T15:04")
+	}
+	return pages.TrainingSessionForm{ID: session.ID.String(), PlanID: session.PlanID.String(), Title: session.Title, Description: session.Description, StartsAt: starts, EndsAt: ends, ModalityID: modalityID, ExpectedUpdatedAt: session.UpdatedAt.Time.Format(time.RFC3339Nano), Editing: true, PlanLocked: session.HasOutcomes, Errors: validation.FieldErrors{}}
 }
 
 func (h Training) renderSessionEdit(w http.ResponseWriter, r *http.Request, status int, sessionID uuid.UUID, form pages.TrainingSessionForm, conflict, cancellationReason string, cancellationErrors validation.FieldErrors) {
@@ -606,7 +675,7 @@ func (h Training) renderSessionEdit(w http.ResponseWriter, r *http.Request, stat
 		h.System.InternalError(w, r)
 		return
 	}
-	page := pages.TrainingSessionEditPage{SessionID: sessionID.String(), Form: form, Conflict: conflict, CancellationReason: cancellationReason, CancellationErrors: cancellationErrors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}
+	page := pages.TrainingSessionEditPage{WriteUnsupported: conflict == trainingScheduleUnsupportedMessage, UnsupportedMessage: trainingScheduleUnsupportedMessage, SessionID: sessionID.String(), Form: form, Conflict: conflict, CancellationReason: cancellationReason, CancellationErrors: cancellationErrors, CSRFField: templ.Raw(string(csrf.TemplateField(r)))}
 	for _, plan := range plans {
 		page.Plans = append(page.Plans, pages.TrainingChoice{ID: plan.ID.String(), Name: plan.Title})
 	}
@@ -625,9 +694,12 @@ func (h Training) renderSessionEdit(w http.ResponseWriter, r *http.Request, stat
 
 func (h Training) renderSessionCancel(w http.ResponseWriter, r *http.Request, status int, sessionID uuid.UUID, session dbgen.GetTrainingSessionForEditRow, conflict, cancellationReason string, cancellationErrors validation.FieldErrors) {
 	user, _ := CurrentUserFromContext(r.Context())
+	schedule, _ := trainingScheduleFromRecord(session.SchedulePrecision, session.ScheduledOn, session.StartsAt, session.EndsAt, session.DayBand)
+	view := trainingScheduleView(schedule, h.location())
 	page := pages.TrainingSessionCancelPage{
+		WriteUnsupported: !trainingEditableSchedule(session) || conflict == trainingScheduleUnsupportedMessage, UnsupportedMessage: trainingScheduleUnsupportedMessage,
 		Meta: h.meta(r, user, true), SessionID: sessionID.String(), Title: session.Title,
-		When: session.StartsAt.Time.In(h.location()).Format("02/01/2006 15:04") + " - " + session.EndsAt.Time.In(h.location()).Format("15:04"), ExpectedUpdatedAt: session.UpdatedAt.Time.Format(time.RFC3339Nano),
+		When: view.Label, ExpectedUpdatedAt: session.UpdatedAt.Time.Format(time.RFC3339Nano),
 		Conflict: conflict, CancellationReason: cancellationReason, CancellationErrors: cancellationErrors,
 		CSRFField: templ.Raw(string(csrf.TemplateField(r))),
 	}
@@ -715,15 +787,22 @@ func managedTrainingPlansAt(rows []dbgen.ListTrainingPlansForAuthoringRow, locat
 		if row.ModalityName != nil {
 			modality = *row.ModalityName
 		}
+		schedule, scheduleErr := trainingScheduleFromRecord(stringValue(row.SchedulePrecision), row.ScheduledOn, row.StartsAt, row.EndsAt, row.DayBand)
+		view := trainingScheduleView(schedule, location)
+		when := view.Label
+		if scheduleErr == nil && schedule.Precision == TrainingScheduleInterval {
+			when = row.StartsAt.Time.In(location).Format("02/01/2006 15:04") + " - " + row.EndsAt.Time.In(location).Format("15:04")
+		}
 		plans[len(plans)-1].Sessions = append(plans[len(plans)-1].Sessions, pages.ManagedTrainingSession{
+			Schedule: view, WriteUnsupported: scheduleErr != nil || schedule.Precision != TrainingScheduleInterval, UnsupportedMessage: trainingScheduleUnsupportedMessage,
 			ID:                 row.SessionID.String(),
 			Title:              *row.SessionTitle,
 			Description:        *row.SessionDescription,
-			When:               row.StartsAt.Time.In(location).Format("02/01/2006 15:04") + " - " + row.EndsAt.Time.In(location).Format("15:04"),
+			When:               when,
 			Modality:           modality,
 			Cancelled:          row.Status != nil && *row.Status == "CANCELLED",
 			CancellationReason: stringValue(row.CancellationReason),
-			Editable:           row.Status != nil && *row.Status == "ACTIVE" && row.StartsAt.Time.After(now),
+			Editable:           scheduleErr == nil && schedule.Precision == TrainingScheduleInterval && row.Status != nil && *row.Status == "ACTIVE" && row.StartsAt.Time.After(now),
 		})
 		if row.CancelledAt.Valid {
 			plans[len(plans)-1].Sessions[len(plans[len(plans)-1].Sessions)-1].CancelledAt = row.CancelledAt.Time.In(location).Format("02/01/2006 15:04")
@@ -918,4 +997,9 @@ func (h Training) meta(r *http.Request, user CurrentUser, management bool) compo
 	meta.Navigation = dashboardNavigation(user)
 	meta.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
 	return meta
+}
+
+func trainingEditableSchedule(row dbgen.GetTrainingSessionForEditRow) bool {
+	schedule, e := trainingScheduleFromRecord(row.SchedulePrecision, row.ScheduledOn, row.StartsAt, row.EndsAt, row.DayBand)
+	return e == nil && schedule.Precision == TrainingScheduleInterval
 }

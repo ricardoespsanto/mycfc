@@ -18,8 +18,15 @@ const Database = "mycfc"
 const OldWebRole = "mycfc_app"
 const WebRole = "mycfc_disposable_web_20261001"
 const PredecessorDigest = "8ad238f2a1e36976bebd8f6950c935c9fa5b72862fe7cb14d2ad1149d37d1a4e"
-const FinalDigest = "98de2a416ee0006262398c32d012d81c2b5fcb599c2e607bbb006692919fac84"
+const FinalDigest = "88bdc8ccf003c6a4994310c11e2d1c18ce5d4b212ccb6eff8113f8499b9152ec"
+
+// BaselineDigest remains the retired disposable-reset schema pin.
 const BaselineDigest = "fc8f9dbb96dcfd7f49aa81e562bf53684416a32282a26d4d9a9d329f20c14a1f"
+
+// NormalBaselineDigest is for normal C fresh/forward verification, not reset.
+const NormalBaselineDigest = "bf22784f1d8cef7a4bf9fe9fe59e41fcb9b0425f7fc0237b5f06b9556f01626c"
+
+const NormalParentDigest = "98de2a416ee0006262398c32d012d81c2b5fcb599c2e607bbb006692919fac84"
 
 // FreshGenesisDigest is the recorded inventory of the original v2.0.2 receipt.
 // The receipt remains immutable when a compatible forward migration advances

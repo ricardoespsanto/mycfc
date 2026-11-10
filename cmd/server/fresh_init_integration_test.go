@@ -138,14 +138,14 @@ func TestExplicitFreshInitRealPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err := conn.QueryRow(ctx, `SELECT count(*) FROM mycfc_meta.schema_migrations`).Scan(&count); err != nil || count != len(db.EmbeddedMigrationInventory())-1 {
-		t.Fatalf("original genesis ledger count=%d expected previous inventory err=%v", count, err)
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM mycfc_meta.schema_migrations`).Scan(&count); err != nil || count != 77 {
+		t.Fatalf("original genesis ledger count=%d expected pinned original77 err=%v", count, err)
 	}
 	var receiptVersion, receiptCandidate, receiptDigest string
 	if err := conn.QueryRow(ctx, `SELECT version,candidate,schema_digest FROM mycfc_fresh_init.receipt WHERE database_name=$1`, parsed.Database).Scan(&receiptVersion, &receiptCandidate, &receiptDigest); err != nil || receiptVersion != releasecontract.FreshGenesisVersion || receiptCandidate != genesisCandidate || receiptDigest != releasecontract.FreshGenesisDigest {
 		t.Fatalf("original protected genesis identity invalid: %v", err)
 	}
-	// Preserve a real recorded interval across the 77 -> 78 forward upgrade.
+	// Preserve a real recorded interval across the explicitly reviewed 77 -> 79 forward upgrade.
 	member, season := uuid.New(), uuid.New()
 	if _, err := conn.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Synthetic historic adult',$2,'hash','1980-01-01')`, member, uuid.NewString()+"@example.test"); err != nil {
 		t.Fatal(err)

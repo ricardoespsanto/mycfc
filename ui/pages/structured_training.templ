@@ -10,7 +10,7 @@ import (
 
 type StructuredTrainingMembershipChoice struct{ ID, Athlete, Scope string }
 type StructuredTrainingChoice struct{ ID, Name, GroupID string }
-type StructuredTrainingRoutine struct{ ID, Name, Description, Kind, Visibility, Owner, Scope, Modality, Objective, Method, Tags, Preview, Provenance string }
+type StructuredTrainingRoutine struct{ WriteUnsupported bool; ID, Name, Description, Kind, Visibility, Owner, Scope, Modality, Objective, Method, Tags, Preview, Provenance string }
 type StructuredVariationMemberChoice struct{ ID, Athlete, GroupID, GroupName string }
 type StructuredVariationTargetChoice struct{ Value, Name, GroupID string }
 type StructuredVariationSubjectChoice struct{ Value, Name, PlanID string }
@@ -69,6 +69,9 @@ type StructuredTrainingSegment struct {
 	Blocks                                                                []StructuredTrainingBlock
 }
 type StructuredTrainingSession struct {
+	Schedule TrainingScheduleView `json:"-"`
+	WriteUnsupported bool `json:"-"`
+	UnsupportedMessage string `json:"-"`
 	StartsOn, EndsOn, StartsAt, EndsAt, Status string `json:"-"`
 	ID, PrescriptionID, Title, Description, When, EntryKind string
 	Outcome, ActualDuration, ActualDistance, PerceivedEffort, RecoveryFeeling, PerceptionNote, FeedbackUpdatedAt string `json:"-"`
@@ -233,8 +236,8 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 			if page.Management && !page.Workspace.Enabled {
 				@structuredPlannerContext(page)
 			}
-			@components.SectionHeading("", "Semanas de treino", "Os horários são exatos; manhã e tarde são apenas agrupamentos visuais.")
-			if len(page.Audiences) == 0 {
+			@components.SectionHeading("", "Semanas de treino", "Cada sessão mostra apenas o horário conhecido. A hora ou o fim podem estar por definir; manhã e tarde podem indicar a faixa registada.")
+			if len(page.Audiences) == 0 && page.Error == "" {
 				@components.EmptyState("Ainda sem planeamento estruturado", "Quando existir uma semana no seu âmbito, ela aparece aqui.")
 			}
 			for _, audience := range page.Audiences {
@@ -250,7 +253,7 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 								<span>· { fmt.Sprintf("%d atletas", audience.MemberCount) }</span>
 							}
 						</p>
-						if len(audience.Weeks) == 0 {
+						if len(audience.Weeks) == 0 && page.Error == "" {
 							<p>Ainda sem semanas.</p>
 						}
 						for weekIndex, week := range audience.Weeks {
@@ -299,7 +302,7 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 										<div class="training-actions">@structuredWeekLoadForm(page, week) @structuredCopyWeekForm(page, week)
 </div>
 									}
-									if len(week.Sessions) == 0 {
+									if len(week.Sessions) == 0 && page.Error == "" {
 										<p class="record-meta">Ainda sem sessões.</p>
 									}
 									for sessionIndex, session := range week.Sessions {
@@ -308,7 +311,7 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 												<div>
 													<h5 id={ "structured-session-" + session.ID }>{ session.Title }</h5>
 													<p class="record-meta">
-														{ session.When } · { structuredEntryKindLabel(session.EntryKind) }
+														{ trainingScheduleLabel(session.Schedule, session.When) } · { structuredEntryKindLabel(session.EntryKind) }
 														if len(session.Modalities) > 0 {
 															<span>· { structuredModalitiesLabel(session.Modalities) }</span>
 														}
@@ -320,7 +323,11 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 												if session.Description != "" {
 													<p>{ session.Description }</p>
 												}
-												if len(session.Changes) > 0 {
+												if session.WriteUnsupported {
+@components.Callout("Sessão disponível para consulta", trainingUnsupportedMessage(session.UnsupportedMessage), "info")
+<p><a href={ templ.SafeURL(structuredPlannerReturnURL(page)) }>Voltar à semana</a></p>
+}
+if len(session.Changes) > 0 {
 													<div class="notice notice--info" role="note">
 														<p><strong>Alterações aplicadas a esta prescrição</strong></p>
 														<ul>
@@ -360,13 +367,13 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 														}
 													</div>
 												}
-												if page.Management {
+												if page.Management && !session.WriteUnsupported {
 													<details class="training-action-menu"><summary class="action action--quiet">Ações da sessão</summary><div class="training-actions">@structuredSaveRoutineForm(page, "SESSION", session.ID)
 @structuredCopySessionForm(page, session.ID)
 </div></details>
 													<p><a class="action action--quiet" href={ templ.SafeURL("/treinos/prescricoes/sessoes/" + session.ID) }>Ver prescrições e respostas dos atletas</a></p>
 												}
-												if len(session.Segments) == 0 && (session.EntryKind == "TRAINING" || session.EntryKind == "COMPETITION") {
+												if !session.Schedule.Unavailable && len(session.Segments) == 0 && (session.EntryKind == "TRAINING" || session.EntryKind == "COMPETITION") {
 													<p class="record-meta">Sessão ainda sem segmentos.</p>
 												}
 												for _, segment := range session.Segments {
@@ -435,13 +442,13 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 																						<p>{ exercise.Notes }</p>
 																					}
 																				</div>
-																				if page.Management {
+																				if page.Management && !session.WriteUnsupported {
 																					@structuredMoveExercise(page, exercise)
 																				}
 																			</li>
 																		}
 																	</ol>
-																	if page.Management {
+																	if page.Management && !session.WriteUnsupported {
 																		@structuredGymExerciseForm(page, block.ID)
 																	}
 																}
@@ -494,11 +501,11 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 																			</div></li>
 																		}
 																	</ol>
-																	if page.Management {
+																	if page.Management && !session.WriteUnsupported {
 																		@structuredWaterStepForm(page, block)
 																	}
 																}
-																if page.Management {
+																if page.Management && !session.WriteUnsupported {
 																	<details class="training-action-menu"><summary class="action action--quiet">Ações do bloco</summary><div class="training-actions">@structuredMoveBlock(page, block)
 @structuredSaveRoutineForm(page, "BLOCK", block.ID)
 @structuredCopyBlockForm(page, block.ID)
@@ -506,7 +513,7 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 																}
 															</div>
 														}
-														if page.Management {
+														if page.Management && !session.WriteUnsupported {
 															<details class="training-action-menu">
 																<summary class="action action--quiet">Ações do segmento</summary>
 																<div class="training-actions">
@@ -524,7 +531,7 @@ templ structuredTrainingPlan(page StructuredTrainingPage) {
 														}
 													</section>
 												}
-												if page.Management && (session.EntryKind == "TRAINING" || session.EntryKind == "COMPETITION") {
+												if page.Management && !session.WriteUnsupported && (session.EntryKind == "TRAINING" || session.EntryKind == "COMPETITION") {
 													<div class="training-actions">@structuredSegmentForm(page, session.ID)
 </div>
 												}
@@ -591,7 +598,7 @@ templ structuredPlannerContext(page StructuredTrainingPage) {
 							for _, week := range audience.Weeks {
 								if week.ID == page.SelectedWeekID {
 									for _, session := range week.Sessions {
-										<option value={ session.ID } selected?={ session.ID == page.SelectedSessionID }>{ session.When } · { session.Title }</option>
+										<option value={ session.ID } selected?={ session.ID == page.SelectedSessionID }>{ trainingScheduleLabel(session.Schedule, session.When) } · { session.Title }</option>
 									}
 								}
 							}
@@ -610,11 +617,11 @@ templ structuredPlannerContext(page StructuredTrainingPage) {
 								for _, session := range week.Sessions {
 									if session.ID == page.SelectedSessionID {
 										<a class="structured-planner__session" href={ templ.SafeURL("/admin/treinos/estruturados?group_id=" + audience.GroupID + "&week_id=" + week.ID + "&session_id=" + session.ID + "#training-plan") } aria-current="page">
-											<span>{ session.When }</span><strong>{ session.Title }</strong><small>{ structuredEntryKindLabel(session.EntryKind) }</small>
+											<span>{ trainingScheduleLabel(session.Schedule, session.When) }</span><strong>{ session.Title }</strong><small>{ structuredEntryKindLabel(session.EntryKind) }</small>
 										</a>
 									} else {
 										<a class="structured-planner__session" href={ templ.SafeURL("/admin/treinos/estruturados?group_id=" + audience.GroupID + "&week_id=" + week.ID + "&session_id=" + session.ID + "#training-plan") }>
-											<span>{ session.When }</span><strong>{ session.Title }</strong><small>{ structuredEntryKindLabel(session.EntryKind) }</small>
+											<span>{ trainingScheduleLabel(session.Schedule, session.When) }</span><strong>{ session.Title }</strong><small>{ structuredEntryKindLabel(session.EntryKind) }</small>
 										</a>
 									}
 								}
@@ -1095,6 +1102,11 @@ templ structuredSaveRoutineForm(page StructuredTrainingPage, kind, sourceID stri
 }
 
 templ structuredInsertRoutineForm(page StructuredTrainingPage, routine StructuredTrainingRoutine) {
+ if routine.WriteUnsupported {
+@components.Callout("Rotina disponível para consulta", "Esta rotina pode ser consultada, mas ainda não pode ser usada para criar ou alterar sessões com este horário.", "info")
+<p><a href={ templ.SafeURL(structuredPlannerReturnURL(page)) }>Voltar à semana</a></p>
+} else {
+
 	<button class="action action--quiet" type="button" data-dialog-open={ "insert-routine-" + routine.ID }>Usar rotina</button>
 	<dialog id={ "insert-routine-" + routine.ID } class="task-dialog" data-task-dialog aria-labelledby={ "insert-routine-title-" + routine.ID }>
 		<div class="task-dialog__header"><div><p class="eyebrow">{ trainingRoutineKindLabel(routine.Kind) }</p><h3 id={ "insert-routine-title-" + routine.ID }>Usar { routine.Name }</h3></div><button class="action action--quiet" type="button" data-dialog-close>Fechar</button></div>
@@ -1127,6 +1139,7 @@ templ structuredInsertRoutineForm(page StructuredTrainingPage, routine Structure
 			<button type="submit">Inserir cópia independente</button>
 		</form>
 	</dialog>
+}
 }
 
 templ structuredCopyBlockForm(page StructuredTrainingPage, blockID string) {

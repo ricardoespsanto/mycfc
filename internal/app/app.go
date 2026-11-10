@@ -33,6 +33,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/release"
 	"github.com/cfcoimbra/mycfc/internal/sessionstore"
 	"github.com/cfcoimbra/mycfc/internal/storage"
+	"github.com/cfcoimbra/mycfc/internal/trainingcompat"
 	"github.com/cfcoimbra/mycfc/ui/components"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -57,7 +58,11 @@ var (
 		if err := pool.Ping(ctx); err != nil {
 			return err
 		}
-		return db.VerifyDatedParticipationRuntime(ctx, pool)
+		if err := db.VerifyDatedParticipationRuntime(ctx, pool); err != nil {
+			return err
+		}
+		_, err := db.VerifyTrainingScheduleRuntime(ctx, pool, db.TrainingScheduleCapabilities{ReaderVersion: trainingcompat.ReaderGeneration, WriterVersion: trainingcompat.WriterGeneration})
+		return err
 	}
 	loadApplicationAWS = awsconfig.LoadDefaultConfig
 )
@@ -99,6 +104,14 @@ func New(ctx context.Context) (*Application, error) {
 	if err := pingApplicationPool(pingContext, pool); err != nil {
 		pool.Close()
 		return nil, errors.New("database readiness or dated participation contract failed")
+	}
+
+	runtimeReadiness := newTrainingReadiness(pool, cfg)
+	if runtimeReadiness.requireAdmission {
+		if err = runtimeReadiness.Ping(pingContext); err != nil {
+			pool.Close()
+			return nil, errors.New("training schedule external admission failed")
+		}
 	}
 
 	sessions := scs.New()
@@ -259,7 +272,7 @@ func New(ctx context.Context) (*Application, error) {
 	repair := handlers.Repair{Store: dbgen.New(pool), Objects: objectStore, Uploads: uploadCoordinator, Sessions: sessions, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, Location: location, PageMeta: pageMeta, System: system}
 	events := handlers.Events{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	announcements := handlers.Announcements{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
-	training := handlers.Training{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
+	training := handlers.Training{Store: handlers.PostgresTrainingScheduleStore{Querier: dbgen.New(pool), Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	structuredTraining := handlers.StructuredTraining{Setup: handlers.PostgresTrainingSetupStore{Pool: pool}, Groups: handlers.PostgresTrainingGroupStore{Pool: pool}, Store: handlers.PostgresStructuredTrainingStore{Pool: pool}, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	members := handlers.Members{Seasons: handlers.Seasons{Store: handlers.PostgresSeasonStore{Pool: pool}, System: system, PageMeta: pageMeta, Sessions: sessions}, Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, Classification: handlers.Classification{Setup: handlers.PostgresTrainingSetupStore{Pool: pool}, Store: handlers.PostgresClassificationStore{Pool: pool}, Definitions: handlers.PostgresDefinitionStore{Pool: pool}}, Definitions: handlers.Definitions{Setup: handlers.PostgresTrainingSetupStore{Pool: pool}, Store: handlers.PostgresDefinitionStore{Pool: pool}}}
 	profile := handlers.Profile{Store: handlers.PostgresProfileStore{Pool: pool}, Objects: objectStore, Uploads: uploadCoordinator, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system, MaxRequestBytes: cfg.MaxRequestBytes, MaxPhotoBytes: cfg.MaxPhotoBytes, ImageVersion: imageDocument.Version, ImageSHA256: imageDocument.SHA256, ImageURL: versionedLegalURL(imageDocument), HealthVersion: privacyDocument.Version, HealthSHA256: privacyDocument.SHA256, HealthURL: versionedLegalURL(privacyDocument), HealthConsentStatement: legalcontent.HealthConsentStatement}
@@ -281,7 +294,7 @@ func New(ctx context.Context) (*Application, error) {
 	suggestions := handlers.Suggestions{Store: dbgen.New(pool), PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	photoAlbums := handlers.PhotoAlbums{Store: dbgen.New(pool), DB: pool, PageMeta: pageMeta, Location: location, Sessions: sessions, System: system}
 	foundation := handlers.Foundation{PageMeta: pageMeta}
-	router := auth.Load(newRouter(pool, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, polarIntegration))
+	router := auth.Load(newRouter(runtimeReadiness, sessions, landing, login, registration, emailVerification, passwordRecovery, auth, dashboard, repair, events, announcements, training, structuredTraining, members, profile, news, suggestions, photoAlbums, foundation, polarIntegration))
 	csrfMiddleware := csrfProtection(csrfKey, system)
 
 	trusted, err := cfg.TrustedProxyCIDRs()
@@ -291,7 +304,7 @@ func New(ctx context.Context) (*Application, error) {
 		return nil, err
 	}
 
-	server := newHTTPServer(cfg, logger, sessions, system, csrfMiddleware, trusted, router)
+	server := newHTTPServer(cfg, logger, sessions, system, csrfMiddleware, trusted, router, runtimeReadiness)
 
 	return &Application{
 		Config:                  cfg,
@@ -307,8 +320,12 @@ func New(ctx context.Context) (*Application, error) {
 	}, nil
 }
 
-func newHTTPServer(cfg config.Config, logger *slog.Logger, sessions *scs.SessionManager, system handlers.System, csrfMiddleware func(http.Handler) http.Handler, trusted []netip.Prefix, router http.Handler) *http.Server {
-	handler := httpx.Chain(router, httpx.RecoveryMiddleware(logger, http.HandlerFunc(system.InternalError)), httpx.RequestIDMiddleware(), httpx.TrustedProxyMiddleware(trusted), httpx.SecurityHeadersMiddleware(cfg.IsProduction(), cfg.ObjectStorageOrigin()), httpx.AccessLogMiddleware(logger), func(next http.Handler) http.Handler { return sessions.LoadAndSave(next) }, func(next http.Handler) http.Handler { return csrfMiddleware(next) })
+func newHTTPServer(cfg config.Config, logger *slog.Logger, sessions *scs.SessionManager, system handlers.System, csrfMiddleware func(http.Handler) http.Handler, trusted []netip.Prefix, router http.Handler, admission ...readinessProbe) *http.Server {
+	admissionMiddleware := func(next http.Handler) http.Handler { return next }
+	if len(admission) > 0 {
+		admissionMiddleware = func(next http.Handler) http.Handler { return trainingAdmissionGuard(admission[0], next) }
+	}
+	handler := httpx.Chain(router, httpx.RecoveryMiddleware(logger, http.HandlerFunc(system.InternalError)), httpx.RequestIDMiddleware(), httpx.TrustedProxyMiddleware(trusted), httpx.SecurityHeadersMiddleware(cfg.IsProduction(), cfg.ObjectStorageOrigin()), httpx.AccessLogMiddleware(logger), admissionMiddleware, func(next http.Handler) http.Handler { return sessions.LoadAndSave(next) }, func(next http.Handler) http.Handler { return csrfMiddleware(next) })
 	return &http.Server{Addr: cfg.HTTPAddress(), Handler: handler, ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout, ReadTimeout: cfg.HTTPReadTimeout, WriteTimeout: cfg.HTTPWriteTimeout, IdleTimeout: cfg.HTTPIdleTimeout}
 }
 

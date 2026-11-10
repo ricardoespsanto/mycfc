@@ -20,6 +20,8 @@ type StructuredWorkspaceWeekChoice struct {
 	Selected                         bool
 }
 type StructuredWorkspaceAppointment struct {
+	Precision, Band, Label                                                string
+	TimeUnknown, EndUnknown                                               bool
 	ID, Title, StartsOn, EndsOn, StartsAt, EndsAt, EntryKind, Status, URL string
 	Modalities                                                            []string
 	Selected                                                              bool
@@ -28,6 +30,7 @@ type StructuredWorkspaceDay struct {
 	Date, Label, ShortLabel, URL, AddSessionURL string
 	Selected                                    bool
 	Morning, Afternoon                          []StructuredWorkspaceAppointment
+	Unscheduled                                 []StructuredWorkspaceAppointment
 }
 type StructuredWorkspacePublication struct {
 	State, Label, PublishedAt, PublishedBy, SourceUpdatedAt  string
@@ -73,7 +76,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 		var templ_7745c5c3_Var2 templ.SafeURL
 		templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.Workspace.GroupsURL))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 44, Col: 50}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 47, Col: 50}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 		if templ_7745c5c3_Err != nil {
@@ -86,7 +89,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 		var templ_7745c5c3_Var3 templ.SafeURL
 		templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.Workspace.GroupURL))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 46, Col: 46}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 49, Col: 46}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 		if templ_7745c5c3_Err != nil {
@@ -118,7 +121,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 			var templ_7745c5c3_Var4 string
 			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(page.Workspace.DateRange)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 56, Col: 106}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 59, Col: 106}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 			if templ_7745c5c3_Err != nil {
@@ -131,7 +134,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 			var templ_7745c5c3_Var5 string
 			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(page.Workspace.WeekTitle)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 56, Col: 142}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 59, Col: 142}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 			if templ_7745c5c3_Err != nil {
@@ -149,7 +152,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var6 templ.SafeURL
 				templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.Workspace.PreviousURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 61, Col: 55}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 64, Col: 55}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 				if templ_7745c5c3_Err != nil {
@@ -168,7 +171,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var7 templ.SafeURL
 				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.Workspace.NextURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 67, Col: 51}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 70, Col: 51}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 				if templ_7745c5c3_Err != nil {
@@ -186,7 +189,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 			var templ_7745c5c3_Var8 string
 			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.Workspace.GroupID)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 72, Col: 72}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 75, Col: 72}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var8)
 			if templ_7745c5c3_Err != nil {
@@ -204,7 +207,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var9 string
 				templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.ResolveAttributeValue(page.SelectedDay)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 74, Col: 62}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 77, Col: 62}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var9)
 				if templ_7745c5c3_Err != nil {
@@ -235,7 +238,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var10 string
 				templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.ResolveAttributeValue(week.ID)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 80, Col: 31}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 83, Col: 31}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var10)
 				if templ_7745c5c3_Err != nil {
@@ -258,7 +261,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var11 string
 				templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(week.Title)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 80, Col: 74}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 83, Col: 74}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 				if templ_7745c5c3_Err != nil {
@@ -271,7 +274,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var12 string
 				templ_7745c5c3_Var12, templ_7745c5c3_Err = templ.JoinStringErrs(week.StartsOn)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 80, Col: 95}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 83, Col: 95}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var12))
 				if templ_7745c5c3_Err != nil {
@@ -284,7 +287,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var13 string
 				templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(week.EndsOn)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 80, Col: 113}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 83, Col: 113}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 				if templ_7745c5c3_Err != nil {
@@ -316,7 +319,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 					var templ_7745c5c3_Var14 templ.SafeURL
 					templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(day.URL))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 93, Col: 36}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 96, Col: 36}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 					if templ_7745c5c3_Err != nil {
@@ -329,7 +332,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 					var templ_7745c5c3_Var15 string
 					templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(day.ShortLabel)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 95, Col: 29}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 98, Col: 29}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 					if templ_7745c5c3_Err != nil {
@@ -342,7 +345,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 					var templ_7745c5c3_Var16 string
 					templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(day.Date)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 95, Col: 54}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 98, Col: 54}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 					if templ_7745c5c3_Err != nil {
@@ -360,7 +363,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 					var templ_7745c5c3_Var17 templ.SafeURL
 					templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(day.URL))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 99, Col: 36}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 102, Col: 36}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 					if templ_7745c5c3_Err != nil {
@@ -373,7 +376,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 					var templ_7745c5c3_Var18 string
 					templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(day.ShortLabel)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 100, Col: 29}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 103, Col: 29}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 					if templ_7745c5c3_Err != nil {
@@ -386,7 +389,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 					var templ_7745c5c3_Var19 string
 					templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinStringErrs(day.Date)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 100, Col: 54}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 103, Col: 54}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 					if templ_7745c5c3_Err != nil {
@@ -410,7 +413,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var20 string
 				templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.ResolveAttributeValue("week-day-" + day.Date)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 107, Col: 33}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 110, Col: 33}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var20)
 				if templ_7745c5c3_Err != nil {
@@ -423,7 +426,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var21 string
 				templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.ResolveAttributeValue(strconv.FormatBool(day.Selected))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 109, Col: 54}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 112, Col: 54}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var21)
 				if templ_7745c5c3_Err != nil {
@@ -436,7 +439,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var22 string
 				templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.ResolveAttributeValue("week-day-title-" + day.Date)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 110, Col: 52}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 113, Col: 52}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var22)
 				if templ_7745c5c3_Err != nil {
@@ -449,7 +452,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var23 string
 				templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.ResolveAttributeValue("week-day-title-" + day.Date)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 112, Col: 51}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 115, Col: 51}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var23)
 				if templ_7745c5c3_Err != nil {
@@ -462,7 +465,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var24 string
 				templ_7745c5c3_Var24, templ_7745c5c3_Err = templ.JoinStringErrs(day.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 112, Col: 65}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 115, Col: 65}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var24))
 				if templ_7745c5c3_Err != nil {
@@ -475,7 +478,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var25 string
 				templ_7745c5c3_Var25, templ_7745c5c3_Err = templ.JoinStringErrs(day.Date)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 112, Col: 85}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 115, Col: 85}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var25))
 				if templ_7745c5c3_Err != nil {
@@ -484,6 +487,12 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 42, "</p></header>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
+				}
+				if len(day.Unscheduled) > 0 {
+					templ_7745c5c3_Err = structuredWorkspaceBand("Hora por definir", day.Unscheduled).Render(ctx, templ_7745c5c3_Buffer)
+					if templ_7745c5c3_Err != nil {
+						return templ_7745c5c3_Err
+					}
 				}
 				templ_7745c5c3_Err = structuredWorkspaceBand("Manhã", day.Morning).Render(ctx, templ_7745c5c3_Buffer)
 				if templ_7745c5c3_Err != nil {
@@ -500,7 +509,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var26 templ.SafeURL
 				templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(day.AddSessionURL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 117, Col: 46}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 123, Col: 46}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 				if templ_7745c5c3_Err != nil {
@@ -513,7 +522,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 				var templ_7745c5c3_Var27 string
 				templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.ResolveAttributeValue("Adicionar sessão · " + day.Label + ", " + day.Date)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 118, Col: 73}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 124, Col: 73}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var27)
 				if templ_7745c5c3_Err != nil {
@@ -532,7 +541,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-		} else {
+		} else if page.Error == "" {
 			templ_7745c5c3_Err = components.EmptyState("Ainda sem semanas neste grupo", "Crie a primeira semana com uma data explícita. Os horários das sessões são introduzidos depois.").Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
@@ -545,7 +554,7 @@ func structuredWeekWorkspace(page StructuredTrainingPage) templ.Component {
 		var templ_7745c5c3_Var28 templ.SafeURL
 		templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(page.Workspace.AdvancedURL))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 130, Col: 52}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 136, Col: 52}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 		if templ_7745c5c3_Err != nil {
@@ -587,7 +596,7 @@ func structuredWorkspaceBand(label string, appointments []StructuredWorkspaceApp
 		var templ_7745c5c3_Var30 string
 		templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.ResolveAttributeValue(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 137, Col: 51}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 143, Col: 51}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var30)
 		if templ_7745c5c3_Err != nil {
@@ -600,7 +609,7 @@ func structuredWorkspaceBand(label string, appointments []StructuredWorkspaceApp
 		var templ_7745c5c3_Var31 string
 		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 138, Col: 13}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 144, Col: 13}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 		if templ_7745c5c3_Err != nil {
@@ -628,7 +637,7 @@ func structuredWorkspaceBand(label string, appointments []StructuredWorkspaceApp
 				var templ_7745c5c3_Var32 templ.SafeURL
 				templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(appointment.URL))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 147, Col: 44}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 153, Col: 44}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 				if templ_7745c5c3_Err != nil {
@@ -641,7 +650,7 @@ func structuredWorkspaceBand(label string, appointments []StructuredWorkspaceApp
 				var templ_7745c5c3_Var33 string
 				templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.ResolveAttributeValue(structuredWorkspaceCurrent(appointment.Selected))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 148, Col: 70}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 154, Col: 70}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var33)
 				if templ_7745c5c3_Err != nil {
@@ -654,7 +663,7 @@ func structuredWorkspaceBand(label string, appointments []StructuredWorkspaceApp
 				var templ_7745c5c3_Var34 string
 				templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(structuredWorkspaceTime(appointment))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 151, Col: 46}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 157, Col: 46}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 				if templ_7745c5c3_Err != nil {
@@ -667,7 +676,7 @@ func structuredWorkspaceBand(label string, appointments []StructuredWorkspaceApp
 				var templ_7745c5c3_Var35 string
 				templ_7745c5c3_Var35, templ_7745c5c3_Err = templ.JoinStringErrs(appointment.Title)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 152, Col: 41}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 158, Col: 41}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var35))
 				if templ_7745c5c3_Err != nil {
@@ -680,7 +689,7 @@ func structuredWorkspaceBand(label string, appointments []StructuredWorkspaceApp
 				var templ_7745c5c3_Var36 string
 				templ_7745c5c3_Var36, templ_7745c5c3_Err = templ.JoinStringErrs(structuredEntryKindLabel(appointment.EntryKind))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 154, Col: 57}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 160, Col: 57}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var36))
 				if templ_7745c5c3_Err != nil {
@@ -698,7 +707,7 @@ func structuredWorkspaceBand(label string, appointments []StructuredWorkspaceApp
 					var templ_7745c5c3_Var37 string
 					templ_7745c5c3_Var37, templ_7745c5c3_Err = templ.JoinStringErrs(structuredModalitiesLabel(appointment.Modalities))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 158, Col: 60}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 164, Col: 60}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var37))
 					if templ_7745c5c3_Err != nil {
@@ -761,7 +770,7 @@ func structuredWorkspacePublication(workspace StructuredWeekWorkspace) templ.Com
 		var templ_7745c5c3_Var39 string
 		templ_7745c5c3_Var39, templ_7745c5c3_Err = templ.JoinStringErrs(structuredWorkspacePublicationLabel(workspace.Publication))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 175, Col: 63}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 181, Col: 63}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var39))
 		if templ_7745c5c3_Err != nil {
@@ -779,7 +788,7 @@ func structuredWorkspacePublication(workspace StructuredWeekWorkspace) templ.Com
 			var templ_7745c5c3_Var40 templ.SafeURL
 			templ_7745c5c3_Var40, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(workspace.RefreshURL))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 180, Col: 43}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 186, Col: 43}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var40))
 			if templ_7745c5c3_Err != nil {
@@ -798,7 +807,7 @@ func structuredWorkspacePublication(workspace StructuredWeekWorkspace) templ.Com
 				var templ_7745c5c3_Var41 string
 				templ_7745c5c3_Var41, templ_7745c5c3_Err = templ.JoinStringErrs(workspace.Publication.PublishedAt)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 185, Col: 54}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 191, Col: 54}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var41))
 				if templ_7745c5c3_Err != nil {
@@ -816,7 +825,7 @@ func structuredWorkspacePublication(workspace StructuredWeekWorkspace) templ.Com
 					var templ_7745c5c3_Var42 string
 					templ_7745c5c3_Var42, templ_7745c5c3_Err = templ.JoinStringErrs(workspace.Publication.PublishedBy)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 187, Col: 50}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 193, Col: 50}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var42))
 					if templ_7745c5c3_Err != nil {
@@ -849,7 +858,7 @@ func structuredWorkspacePublication(workspace StructuredWeekWorkspace) templ.Com
 			var templ_7745c5c3_Var43 string
 			templ_7745c5c3_Var43, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d destinatários · %d prescrições previstas", workspace.Publication.AthleteCount, workspace.Publication.PrescriptionCount))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 195, Col: 145}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 201, Col: 145}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var43))
 			if templ_7745c5c3_Err != nil {
@@ -867,7 +876,7 @@ func structuredWorkspacePublication(workspace StructuredWeekWorkspace) templ.Com
 				var templ_7745c5c3_Var44 string
 				templ_7745c5c3_Var44, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d conflitos de variação impedem a publicação.", workspace.Publication.ConflictCount))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 199, Col: 109}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 205, Col: 109}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var44))
 				if templ_7745c5c3_Err != nil {
@@ -885,7 +894,7 @@ func structuredWorkspacePublication(workspace StructuredWeekWorkspace) templ.Com
 			var templ_7745c5c3_Var45 templ.SafeURL
 			templ_7745c5c3_Var45, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(workspace.PublicationURL))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 204, Col: 50}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 210, Col: 50}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var45))
 			if templ_7745c5c3_Err != nil {
@@ -984,7 +993,7 @@ func structuredWorkspaceTotals(label string, totals []StructuredTrainingSummaryI
 			var templ_7745c5c3_Var48 string
 			templ_7745c5c3_Var48, templ_7745c5c3_Err = templ.JoinStringErrs(label)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 225, Col: 14}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 231, Col: 14}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var48))
 			if templ_7745c5c3_Err != nil {
@@ -1002,7 +1011,7 @@ func structuredWorkspaceTotals(label string, totals []StructuredTrainingSummaryI
 				var templ_7745c5c3_Var49 string
 				templ_7745c5c3_Var49, templ_7745c5c3_Err = templ.JoinStringErrs(total.Label)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 228, Col: 27}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 234, Col: 27}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var49))
 				if templ_7745c5c3_Err != nil {
@@ -1015,7 +1024,7 @@ func structuredWorkspaceTotals(label string, totals []StructuredTrainingSummaryI
 				var templ_7745c5c3_Var50 string
 				templ_7745c5c3_Var50, templ_7745c5c3_Err = templ.JoinStringErrs(total.Value)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 228, Col: 51}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 234, Col: 51}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var50))
 				if templ_7745c5c3_Err != nil {
@@ -1028,7 +1037,7 @@ func structuredWorkspaceTotals(label string, totals []StructuredTrainingSummaryI
 				var templ_7745c5c3_Var51 string
 				templ_7745c5c3_Var51, templ_7745c5c3_Err = templ.JoinStringErrs(total.Certainty)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 228, Col: 97}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ui/pages/structured_week_workspace.templ`, Line: 234, Col: 97}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var51))
 				if templ_7745c5c3_Err != nil {
@@ -1055,11 +1064,22 @@ func structuredWorkspaceCurrent(selected bool) string {
 	return "false"
 }
 func structuredWorkspaceTime(appointment StructuredWorkspaceAppointment) string {
-	if appointment.StartsAt == "" {
+	if appointment.Label != "" {
+		return appointment.Label
+	}
+	if appointment.Precision != "" {
+		endDate := ""
+		if appointment.EndsOn != appointment.StartsOn {
+			endDate = appointment.EndsOn
+		}
+		return trainingScheduleLabel(TrainingScheduleView{Known: true, Precision: appointment.Precision, Band: appointment.Band, StartsAt: appointment.StartsAt, EndsAt: appointment.EndsAt, EndsOn: endDate}, "")
+	}
+
+	if appointment.TimeUnknown || appointment.StartsAt == "" {
 		return "Hora por definir"
 	}
 	start := appointment.StartsAt
-	if appointment.EndsAt == "" {
+	if appointment.EndUnknown || appointment.EndsAt == "" {
 		return start + " · Fim por definir"
 	}
 	end := appointment.EndsAt

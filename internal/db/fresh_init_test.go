@@ -93,6 +93,9 @@ func (tx freshInspectionTestTx) Exec(context.Context, string, ...any) (pgconn.Co
 }
 func (tx freshInspectionTestTx) Rollback(context.Context) error { return nil }
 func (tx freshInspectionTestTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "training schedule ") {
+		return freshTestRow{value: true}
+	}
 	if strings.Contains(sql, "session_user::text") {
 		return freshIdentityTestRow{}
 	}
@@ -171,7 +174,7 @@ func TestFreshReceiptAcceptsOnlyPinnedGenesisAcrossForwardMigration(t *testing.T
 	t.Cleanup(func() { releasecontract.Version, releasecontract.Candidate = oldVersion, oldCandidate })
 	var original []string
 	for _, version := range EmbeddedMigrationInventory() {
-		if version != "202610010003_privacy_attachment_trigger_runtime" {
+		if version != "202610010003_privacy_attachment_trigger_runtime" && version != TrainingScheduleCompatibilityMigration {
 			original = append(original, version)
 		}
 	}

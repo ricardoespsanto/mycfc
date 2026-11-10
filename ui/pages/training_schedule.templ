@@ -1,0 +1,69 @@
+package pages
+
+import "strings"
+
+type TrainingScheduleView struct {
+	Precision, Date, StartsOn, EndsOn, StartsAt, EndsAt, Band, Label string
+	Known, Unavailable                                               bool
+}
+
+templ trainingSchedule(schedule TrainingScheduleView, legacyWhen string) {
+	<span>{ trainingScheduleLabel(schedule, legacyWhen) }</span>
+}
+
+func trainingScheduleLabel(schedule TrainingScheduleView, legacyWhen string) string {
+	if schedule.Unavailable {
+		return "Não foi possível confirmar o horário desta sessão. Atualize a página para voltar a consultar."
+	}
+	if !schedule.Known {
+		return legacyWhen
+	}
+	if schedule.Label != "" {
+		return schedule.Label
+	}
+	date := schedule.Date
+	if date == "" {
+		date = schedule.StartsOn
+	}
+	timing := ""
+	switch schedule.Precision {
+	case "DAY":
+		timing = "Hora por definir"
+	case "BAND":
+		switch schedule.Band {
+		case "MORNING":
+			timing = "Manhã · hora por definir"
+		case "AFTERNOON":
+			timing = "Tarde · hora por definir"
+		default:
+			return "Não foi possível confirmar o horário desta sessão. Atualize a página para voltar a consultar."
+		}
+	case "START_ONLY":
+		if schedule.StartsAt == "" {
+			return "Não foi possível confirmar o horário desta sessão. Atualize a página para voltar a consultar."
+		}
+		timing = schedule.StartsAt + " · Fim por definir"
+	case "INTERVAL":
+		if schedule.StartsAt == "" || schedule.EndsAt == "" {
+			return "Não foi possível confirmar o horário desta sessão. Atualize a página para voltar a consultar."
+		}
+		end := schedule.EndsAt
+		if schedule.EndsOn != "" && schedule.EndsOn != date {
+			end = schedule.EndsOn + " " + end
+		}
+		timing = schedule.StartsAt + "–" + end
+	default:
+		return "Não foi possível confirmar o horário desta sessão. Atualize a página para voltar a consultar."
+	}
+	if date == "" {
+		return timing
+	}
+	return date + " · " + timing
+}
+
+func trainingUnsupportedMessage(message string) string {
+	if strings.TrimSpace(message) != "" {
+		return message
+	}
+	return "Esta sessão pode ser consultada, mas esta ação ainda não está disponível para o seu horário. Volte aos treinos para continuar."
+}

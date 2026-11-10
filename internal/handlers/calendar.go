@@ -11,6 +11,7 @@ type calendarEntry struct {
 	URL      string
 	Kind     string
 	StartsAt time.Time
+	Date     string
 }
 
 func basicCalendarMonth(entries []calendarEntry, now time.Time, location *time.Location) pages.BasicCalendarMonth {
@@ -20,8 +21,11 @@ func basicCalendarMonth(entries []calendarEntry, now time.Time, location *time.L
 	anchor := now.In(location)
 	var future *time.Time
 	for _, entry := range entries {
-		local := entry.StartsAt.In(location)
-		if !local.Before(anchor) && (future == nil || local.Before(*future)) {
+		local, valid := calendarEntryDate(entry, location)
+		if !valid {
+			continue
+		}
+		if (entry.Date != "" && local.Format("2006-01-02") == anchor.Format("2006-01-02") || !local.Before(anchor)) && (future == nil || local.Before(*future)) {
 			copy := local
 			future = &copy
 		}
@@ -34,7 +38,10 @@ func basicCalendarMonth(entries []calendarEntry, now time.Time, location *time.L
 	today := time.Date(now.In(location).Year(), now.In(location).Month(), now.In(location).Day(), 0, 0, 0, 0, location)
 	byDate := map[string][]pages.BasicCalendarEntry{}
 	for _, entry := range entries {
-		local := entry.StartsAt.In(location)
+		local, valid := calendarEntryDate(entry, location)
+		if !valid {
+			continue
+		}
 		key := local.Format("2006-01-02")
 		byDate[key] = append(byDate[key], pages.BasicCalendarEntry{Title: entry.Title, URL: entry.URL, Kind: entry.Kind})
 	}
@@ -55,4 +62,16 @@ func basicCalendarMonth(entries []calendarEntry, now time.Time, location *time.L
 func calendarMonthLabel(t time.Time) string {
 	months := [...]string{"janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"}
 	return months[int(t.Month())-1] + " " + t.Format("2006")
+}
+
+// Calendar cells use recorded civil dates; a day-only session has no instant.
+func calendarEntryDate(entry calendarEntry, location *time.Location) (time.Time, bool) {
+	if entry.Date != "" {
+		d, e := time.ParseInLocation("2006-01-02", entry.Date, location)
+		return d, e == nil && d.Format("2006-01-02") == entry.Date
+	}
+	if entry.StartsAt.IsZero() {
+		return time.Time{}, false
+	}
+	return entry.StartsAt.In(location), true
 }

@@ -148,6 +148,9 @@ func (t *bootstrapTransactionFake) QueryRow(_ context.Context, statement string,
 	if strings.Contains(statement, "dated participation postcondition") {
 		return bootstrapRow{exists: !t.missingDatedContract}
 	}
+	if strings.Contains(statement, "training schedule ") {
+		return bootstrapRow{exists: true}
+	}
 	if len(args) == 1 {
 		if table, ok := args[0].(string); ok && strings.HasPrefix(table, "public.") {
 			return bootstrapRow{exists: t.legacy[table]}
@@ -877,7 +880,7 @@ func TestGuardianInvitationFixedDurationMigrationMatchesBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := strings.LastIndex(baselineSchema, "-- Guardian invitations expire after exactly 720 elapsed hours, including DST.")
-	if index < 0 || strings.TrimSpace(baselineSchema[index:]) != strings.TrimSpace(string(migration)) {
+	if index < 0 || strings.TrimSpace(strings.Split(baselineSchema[index:], "-- Baseline through 202611100001_training_schedule_compatibility.")[0]) != strings.TrimSpace(string(migration)) {
 		t.Fatal("fixed duration migration is not an exact baseline segment")
 	}
 }

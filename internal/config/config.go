@@ -118,13 +118,14 @@ func (Secret) GoString() string { return "[REDACTED]" }
 func (s Secret) Value() string  { return string(s) }
 
 type Config struct {
-	AppEnv            string `env:"APP_ENV,required"`
-	AppVersion        string `env:"APP_VERSION,required"`
-	GITSHA            string `env:"GIT_SHA,required"`
-	AppReleasedAt     string `env:"APP_RELEASED_AT"`
-	ReleaseRepository string `env:"RELEASE_REPOSITORY" envDefault:"ricardoespsanto/mycfc"`
-	Port              int    `env:"PORT" envDefault:"8080"`
-	BaseURL           string `env:"BASE_URL"`
+	AppEnv                        string `env:"APP_ENV,required"`
+	TrainingScheduleAdmissionFile string `env:"TRAINING_SCHEDULE_ADMISSION_FILE"`
+	AppVersion                    string `env:"APP_VERSION,required"`
+	GITSHA                        string `env:"GIT_SHA,required"`
+	AppReleasedAt                 string `env:"APP_RELEASED_AT"`
+	ReleaseRepository             string `env:"RELEASE_REPOSITORY" envDefault:"ricardoespsanto/mycfc"`
+	Port                          int    `env:"PORT" envDefault:"8080"`
+	BaseURL                       string `env:"BASE_URL"`
 
 	DatabaseURL                 Secret `env:"DATABASE_URL"`
 	DBHost                      string `env:"DB_HOST"`

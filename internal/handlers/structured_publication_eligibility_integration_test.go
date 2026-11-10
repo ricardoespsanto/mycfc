@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -77,7 +76,7 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO training_sessions(id,plan_id,title,starts_at,ends_at,created_by_id) VALUES($1,$2,'Future training',$3,$4,$5)`, session, plan, sessionAt, sessionAt.Add(time.Hour), actor); err != nil {
 		t.Fatal(err)
 	}
-	recipients, err := store.ListStructuredTrainingPublicationMembers(ctx, dbgen.ListStructuredTrainingPublicationMembersParams{PlanID: plan, TimeZone: "Europe/Lisbon"})
+	recipients, err := store.ListStructuredTrainingPublicationMembers(ctx, plan)
 	if err != nil {
 		t.Fatal(err)
 	}

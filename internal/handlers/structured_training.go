@@ -45,6 +45,10 @@ type structuredTrainingRow struct {
 	plannedLoadPercentage                                                                                     *int16
 	weekStart                                                                                                 time.Time
 	startsAt, endsAt                                                                                          time.Time
+	startsKnown, endsKnown                                                                                    bool
+	schedulePrecision                                                                                         string
+	scheduledOn                                                                                               pgtype.Date
+	dayBand                                                                                                   *string
 	sessionStatus, entryKind, modality, segmentTitle, segmentLocation, blockPurpose, blockTitle, instructions string
 	duration, startOffset, transition                                                                         int
 	plannedStartSet                                                                                           bool
@@ -197,7 +201,11 @@ func (h StructuredTraining) renderIndex(w http.ResponseWriter, r *http.Request, 
 			h.System.NotFound(w, r)
 			return
 		}
-		page.Audiences = structuredPublishedTraining(rows, h.location())
+		page.Audiences, err = structuredPublishedTraining(rows, h.location())
+		if err != nil {
+			page.Error = trainingScheduleDisplayError(err)
+			status = http.StatusServiceUnavailable
+		}
 		page.AllSubjectsSelected = selectedSubject == nil
 		for _, subject := range subjects {
 			page.Subjects = append(page.Subjects, pages.StructuredTrainingSubjectChoice{ID: subject.ID.String(), Name: subject.Name, Selected: selectedSubject != nil && selectedSubject.ID == subject.ID, Self: subject.ID == user.ID})
@@ -444,7 +452,9 @@ func (h StructuredTraining) PublishPlan(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	publication, err := h.Store.PublishStructuredTrainingPlan(ctx, input)
@@ -453,7 +463,9 @@ func (h StructuredTraining) PublishPlan(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, fmt.Sprintf("Revisão %d publicada para %d prescrições privadas.", publication.Revision, len(input.Prescriptions)))
@@ -478,7 +490,7 @@ func (h StructuredTraining) PrescriptionDetail(w http.ResponseWriter, r *http.Re
 		h.System.InternalError(w, r)
 		return
 	}
-	page := pages.StructuredTrainingPage{Audiences: structuredPublishedTraining([]dbgen.ListTrainingPrescriptionsForViewerRow{{
+	audiences, readErr := structuredPublishedTraining([]dbgen.ListTrainingPrescriptionsForViewerRow{{
 		ID: row.ID, SessionID: row.SessionID, AthleteUserID: row.AthleteUserID, AthleteName: row.AthleteName,
 		PlanID: row.PlanID, PlanTitle: row.PlanTitle, WeekStart: row.WeekStart, SeasonName: row.SeasonName,
 		Revision: row.Revision, ChangeSummary: row.ChangeSummary, PublishedAt: row.PublishedAt,
@@ -486,11 +498,20 @@ func (h StructuredTraining) PrescriptionDetail(w http.ResponseWriter, r *http.Re
 		OutcomeStatus: row.OutcomeStatus, DistanceMetres: row.DistanceMetres, ActualDurationMinutes: row.ActualDurationMinutes,
 		PerceivedExertion: row.PerceivedExertion, RecoveryFeeling: row.RecoveryFeeling, PerceptionNote: row.PerceptionNote,
 		OutcomeUpdatedAt: row.OutcomeUpdatedAt, OutcomeVersion: row.OutcomeVersion,
-	}}, h.location())}
+	}}, h.location())
+	page := pages.StructuredTrainingPage{Audiences: audiences}
+	if readErr != nil {
+		page.Error = trainingScheduleDisplayError(readErr)
+	}
 	page.Meta = h.meta(r, user, false)
 	page.Meta.Title = "Prescrição de treino"
 	page.CSRFField = templ.Raw(string(csrf.TemplateField(r)))
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if readErr != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
 	_ = pages.StructuredTraining(page).Render(r.Context(), w)
 }
 
@@ -566,7 +587,9 @@ func (h StructuredTraining) CreateGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Grupo de treino criado.")
@@ -621,7 +644,9 @@ func (h StructuredTraining) CreateWeek(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Semana de treino criada.")
@@ -652,7 +677,9 @@ func (h StructuredTraining) UpdateWeekLoad(w http.ResponseWriter, r *http.Reques
 	}
 	updated, err := h.Store.UpdateStructuredTrainingWeekLoad(ctx, dbgen.UpdateStructuredTrainingWeekLoadParams{PlanID: weekID, PlannedLoadPercentage: load, IsAdmin: user.IsAdmin, UserID: user.ID})
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if updated == 0 {
@@ -696,7 +723,9 @@ func (h StructuredTraining) CreateCycle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Ciclo de treino criado sem alterar as semanas publicadas.")
@@ -733,7 +762,9 @@ func (h StructuredTraining) UpdateCycle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Ciclo atualizado. As semanas mantêm as suas revisões independentes.")
@@ -772,7 +803,9 @@ func (h StructuredTraining) CopyCycle(w http.ResponseWriter, r *http.Request) {
 			h.renderIndex(w, r, http.StatusUnprocessableEntity, pages.StructuredTrainingPage{OpenForm: "cycle-copy-" + cycleID.String(), CycleCopyForm: copyForm})
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Ciclo copiado como semanas e sessões independentes; publicações e respostas não foram copiadas.")
@@ -847,9 +880,12 @@ func (h StructuredTraining) CreateSession(w http.ResponseWriter, r *http.Request
 	user, _ := CurrentUserFromContext(r.Context())
 	returnTo := structuredPlannerReturn(r.PostForm.Get("return_to"))
 	form := pages.StructuredTrainingSessionForm{PlanID: r.PostForm.Get("plan_id"), Title: strings.TrimSpace(r.PostForm.Get("title")), Description: strings.TrimSpace(r.PostForm.Get("description")), StartsAt: r.PostForm.Get("starts_at"), EndsAt: r.PostForm.Get("ends_at"), EntryKind: r.PostForm.Get("entry_kind"), Errors: validation.FieldErrors{}}
+	if trainingScheduleFormUnsupported(r.PostForm) {
+		form.Errors.Add("starts_at", trainingScheduleUnsupportedMessage)
+	}
 	planID, planErr := uuid.Parse(form.PlanID)
-	startsAt, startErr := time.ParseInLocation("2006-01-02T15:04", form.StartsAt, h.location())
-	endsAt, endErr := time.ParseInLocation("2006-01-02T15:04", form.EndsAt, h.location())
+	startsAt, startErr := parseTrainingLocalDateTime(form.StartsAt, h.location())
+	endsAt, endErr := parseTrainingLocalDateTime(form.EndsAt, h.location())
 	entryKind := dbgen.TrainingEntryKind(form.EntryKind)
 	if planErr != nil {
 		form.Errors.Add("plan_id", "Selecione uma semana válida.")
@@ -892,7 +928,9 @@ func (h StructuredTraining) CreateSession(w http.ResponseWriter, r *http.Request
 			}
 			allowed, e := resolver.AllowsWeek(ctx, user.ID, returnGroupID, planID)
 			if e != nil && !errors.Is(e, pgx.ErrNoRows) {
-				h.System.InternalError(w, r)
+				if !h.writeTrainingScheduleError(w, r, e) {
+					h.System.InternalError(w, r)
+				}
 				return
 			}
 			resolveTarget = e != nil || !allowed
@@ -903,7 +941,9 @@ func (h StructuredTraining) CreateSession(w http.ResponseWriter, r *http.Request
 	if resolveTarget {
 		rows, e := h.Store.ListStructuredTrainingOverviewForManager(ctx, dbgen.ListStructuredTrainingOverviewForManagerParams{IsAdmin: user.IsAdmin, UserID: user.ID})
 		if e != nil {
-			h.System.InternalError(w, r)
+			if !h.writeTrainingScheduleError(w, r, e) {
+				h.System.InternalError(w, r)
+			}
 			return
 		}
 		for _, row := range rows {
@@ -926,7 +966,9 @@ func (h StructuredTraining) CreateSession(w http.ResponseWriter, r *http.Request
 				if errors.Is(e, pgx.ErrNoRows) {
 					h.System.NotFound(w, r)
 				} else {
-					h.System.InternalError(w, r)
+					if !h.writeTrainingScheduleError(w, r, e) {
+						h.System.InternalError(w, r)
+					}
 				}
 				return
 			}
@@ -941,7 +983,9 @@ func (h StructuredTraining) CreateSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Sessão estruturada criada.")
@@ -1018,7 +1062,9 @@ func (h StructuredTraining) CreateSegment(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, planID, w, r) {
@@ -1035,7 +1081,9 @@ func (h StructuredTraining) CreateSegment(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Segmento adicionado.")
@@ -1077,7 +1125,9 @@ func (h StructuredTraining) CreateBlock(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, planID, w, r) {
@@ -1094,7 +1144,9 @@ func (h StructuredTraining) CreateBlock(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Bloco adicionado.")
@@ -1125,7 +1177,9 @@ func (h StructuredTraining) CreateGymBlock(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, planID, w, r) {
@@ -1136,7 +1190,9 @@ func (h StructuredTraining) CreateGymBlock(w http.ResponseWriter, r *http.Reques
 			h.System.RequestRejected(w, r)
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Bloco de ginásio adicionado.")
@@ -1173,7 +1229,9 @@ func (h StructuredTraining) CreateGymBlockTask(w http.ResponseWriter, r *http.Re
 			h.renderGymBlockTask(w, r, http.StatusConflict, r.PostForm, "O segmento foi alterado. Reveja o plano antes de tentar novamente.")
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Bloco de ginásio adicionado.")
@@ -1232,7 +1290,9 @@ func (h StructuredTraining) CreateGymExercise(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, planID, w, r) {
@@ -1240,7 +1300,9 @@ func (h StructuredTraining) CreateGymExercise(w http.ResponseWriter, r *http.Req
 	}
 	exercise.BlockID = blockID
 	if _, err := h.Store.CreateGymExercise(ctx, exercise); err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Exercício adicionado.")
@@ -1271,7 +1333,9 @@ func (h StructuredTraining) CreateWaterBlock(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, planID, w, r) {
@@ -1282,7 +1346,9 @@ func (h StructuredTraining) CreateWaterBlock(w http.ResponseWriter, r *http.Requ
 			h.System.RequestRejected(w, r)
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Bloco de água adicionado.")
@@ -1335,7 +1401,9 @@ func (h StructuredTraining) CreateWaterBlockTask(w http.ResponseWriter, r *http.
 			h.renderWaterBlockTask(w, r, http.StatusConflict, form)
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Bloco de água adicionado.")
@@ -1504,7 +1572,9 @@ func (h StructuredTraining) CreateWaterWorkStep(w http.ResponseWriter, r *http.R
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, planID, w, r) {
@@ -1516,7 +1586,9 @@ func (h StructuredTraining) CreateWaterWorkStep(w http.ResponseWriter, r *http.R
 			h.System.RequestRejected(w, r)
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Passo de água adicionado.")
@@ -1542,7 +1614,9 @@ func (h StructuredTraining) CreateWaterIntensityProfile(w http.ResponseWriter, r
 	ctx, cancel := context.WithTimeout(r.Context(), trainingQueryTimeout)
 	defer cancel()
 	if _, err := h.Store.CreateWaterIntensityProfile(ctx, dbgen.CreateWaterIntensityProfileParams{Name: name, Craft: craft, Notes: notes, CreatedByID: user.ID}); err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Nova revisão do perfil de intensidade criada.")
@@ -1569,7 +1643,9 @@ func (h StructuredTraining) CreateWaterIntensityZone(w http.ResponseWriter, r *h
 			h.System.RequestRejected(w, r)
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Zona de intensidade adicionada.")
@@ -1601,7 +1677,9 @@ func (h StructuredTraining) CreateRoutine(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, source.PlanID, w, r) {
@@ -1620,7 +1698,9 @@ func (h StructuredTraining) CreateRoutine(w http.ResponseWriter, r *http.Request
 	}
 	_, err = h.Store.CreateTrainingRoutine(ctx, dbgen.CreateTrainingRoutineParams{Name: name, Description: description, Kind: kind, Visibility: visibility, OwnerUserID: user.ID, ProgrammeID: programmeID, TeamID: teamID, Modality: source.Modality, Objective: source.Objective, Method: method, Tags: tags, SourceID: sourceID, SourceUpdatedAt: source.SourceUpdatedAt, Snapshot: source.Snapshot})
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Rotina guardada como cópia independente.")
@@ -1651,7 +1731,9 @@ func (h StructuredTraining) InsertRoutine(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	var planID uuid.UUID
@@ -1663,7 +1745,7 @@ func (h StructuredTraining) InsertRoutine(w http.ResponseWriter, r *http.Request
 		planID, err = h.Store.GetStructuredSessionPlanID(ctx, targetID)
 	case dbgen.TrainingRoutineKindSESSION:
 		planID = targetID
-		parsed, parseErr := time.ParseInLocation("2006-01-02T15:04", r.PostForm.Get("starts_at"), h.location())
+		parsed, parseErr := parseTrainingLocalDateTime(r.PostForm.Get("starts_at"), h.location())
 		if parseErr != nil {
 			h.System.RequestRejected(w, r)
 			return
@@ -1677,7 +1759,9 @@ func (h StructuredTraining) InsertRoutine(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, planID, w, r) {
@@ -1688,7 +1772,9 @@ func (h StructuredTraining) InsertRoutine(w http.ResponseWriter, r *http.Request
 			h.System.RequestRejected(w, r)
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Rotina inserida como cópia independente.")
@@ -1736,7 +1822,9 @@ func (h StructuredTraining) copyBlockOrSession(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, sourcePlanID, w, r) || !h.canManageWeek(ctx, user, targetPlanID, w, r) {
@@ -1745,7 +1833,7 @@ func (h StructuredTraining) copyBlockOrSession(w http.ResponseWriter, r *http.Re
 	if block {
 		_, err = h.Store.CopyTrainingBlock(ctx, sourceID, targetID, user.ID)
 	} else {
-		startsAt, parseErr := time.ParseInLocation("2006-01-02T15:04", r.PostForm.Get("starts_at"), h.location())
+		startsAt, parseErr := parseTrainingLocalDateTime(r.PostForm.Get("starts_at"), h.location())
 		if parseErr != nil {
 			h.System.RequestRejected(w, r)
 			return
@@ -1753,6 +1841,9 @@ func (h StructuredTraining) copyBlockOrSession(w http.ResponseWriter, r *http.Re
 		_, err = h.Store.CopyTrainingSession(ctx, sourceID, targetID, pgtype.Timestamptz{Time: startsAt, Valid: true}, user.ID)
 	}
 	if err != nil {
+		if h.writeTrainingScheduleError(w, r, err) {
+			return
+		}
 		if errors.Is(err, pgx.ErrNoRows) || isStructuredCopyRejection(err) {
 			h.System.RequestRejected(w, r)
 			return
@@ -1789,7 +1880,9 @@ func (h StructuredTraining) CopyDay(w http.ResponseWriter, r *http.Request) {
 			h.System.RequestRejected(w, r)
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if count == 0 {
@@ -1823,7 +1916,9 @@ func (h StructuredTraining) CopyWeek(w http.ResponseWriter, r *http.Request) {
 			h.System.RequestRejected(w, r)
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Semana copiada como novo rascunho independente.")
@@ -1886,7 +1981,9 @@ func (h StructuredTraining) CreateVariationGroup(w http.ResponseWriter, r *http.
 	}
 	modalities, err := h.Store.ListStructuredCrewModalities(ctx)
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	crewSize, craftAllowed := structuredCrewSize(modalities, selectedCraft)
@@ -1908,7 +2005,9 @@ func (h StructuredTraining) CreateVariationGroup(w http.ResponseWriter, r *http.
 	if competitionID != nil {
 		events, err := h.Store.ListManagedStructuredCompetitionEvents(ctx, dbgen.ListManagedStructuredCompetitionEventsParams{IsAdmin: user.IsAdmin, UserID: user.ID})
 		if err != nil {
-			h.System.InternalError(w, r)
+			if !h.writeTrainingScheduleError(w, r, err) {
+				h.System.InternalError(w, r)
+			}
 			return
 		}
 		allowed := false
@@ -1933,7 +2032,9 @@ func (h StructuredTraining) CreateVariationGroup(w http.ResponseWriter, r *http.
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Subgrupo ou tripulação criado.")
@@ -1965,7 +2066,9 @@ func (h StructuredTraining) CreateVariation(w http.ResponseWriter, r *http.Reque
 	}
 	encodedPatch, err := json.Marshal(patch)
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	params := dbgen.CreateTrainingVariationParams{PlanID: planID, SubjectKind: subjectKind, SubjectID: subjectID, Operation: operation, ChangeSummary: summary, Patch: encodedPatch, CreatedByID: user.ID}
@@ -1988,7 +2091,9 @@ func (h StructuredTraining) CreateVariation(w http.ResponseWriter, r *http.Reque
 			h.System.RequestRejected(w, r)
 			return
 		}
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	h.flash(r, "Variação adicionada; confirme a pré-visualização por atleta.")
@@ -2015,7 +2120,9 @@ func (h StructuredTraining) RetireVariation(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, planID, w, r) {
@@ -2023,7 +2130,9 @@ func (h StructuredTraining) RetireVariation(w http.ResponseWriter, r *http.Reque
 	}
 	rows, err := h.Store.RetireTrainingVariation(ctx, dbgen.RetireTrainingVariationParams{RetiredByID: &user.ID, ID: id, Version: int32(version64)})
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if rows != 1 {
@@ -2058,14 +2167,18 @@ func (h StructuredTraining) MoveGymExercise(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, planID, w, r) {
 		return
 	}
 	if _, err := h.Store.MoveGymExercise(ctx, dbgen.MoveGymExerciseParams{ExerciseID: id, Direction: direction}); err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if returnTo := structuredPlannerReturn(r.PostForm.Get("return_to")); returnTo != "" {
@@ -2106,7 +2219,9 @@ func (h StructuredTraining) move(w http.ResponseWriter, r *http.Request, segment
 		return
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if !h.canManageWeek(ctx, user, planID, w, r) {
@@ -2118,7 +2233,9 @@ func (h StructuredTraining) move(w http.ResponseWriter, r *http.Request, segment
 		_, err = h.Store.MoveTrainingSegmentBlock(ctx, dbgen.MoveTrainingSegmentBlockParams{BlockID: id, Direction: direction})
 	}
 	if err != nil {
-		h.System.InternalError(w, r)
+		if !h.writeTrainingScheduleError(w, r, err) {
+			h.System.InternalError(w, r)
+		}
 		return
 	}
 	if returnTo := structuredPlannerReturn(r.PostForm.Get("return_to")); returnTo != "" {
@@ -2850,7 +2967,12 @@ func structuredVariationPreviews(rows []dbgen.ListTrainingVariationMatchesForMan
 			end++
 		}
 		highest := row.Priority
-		preview := pages.StructuredVariationPreview{Athlete: row.AthleteName, Plan: row.PlanTitle, Session: row.SessionTitle, When: row.StartsAt.Time.In(location).Format("02/01/2006 15:04"), Subject: row.SubjectLabel}
+		schedule, scheduleErr := trainingScheduleFromRecord(row.SchedulePrecision, row.ScheduledOn, row.StartsAt, row.EndsAt, row.DayBand)
+		when := trainingScheduleView(schedule, location).Label
+		if scheduleErr != nil {
+			when = trainingScheduleDisplayError(scheduleErr)
+		}
+		preview := pages.StructuredVariationPreview{Athlete: row.AthleteName, Plan: row.PlanTitle, Session: row.SessionTitle, When: when, Subject: row.SubjectLabel}
 		for _, candidate := range rows[index:end] {
 			applied := candidate.Priority == highest
 			preview.Rules = append(preview.Rules, pages.StructuredVariationRule{ID: candidate.VariationID.String(), Target: candidate.TargetKind + " · " + candidate.TargetName, Operation: trainingVariationOperationLabel(candidate.Operation), Summary: candidate.ChangeSummary, Patch: trainingVariationPatchLabel(candidate.Patch), Version: int(candidate.Version), Applied: applied})
@@ -2907,7 +3029,22 @@ func trainingVariationPatchLabel(encoded []byte) string {
 func (h StructuredTraining) structuredPublicationStates(ctx context.Context, audiences []pages.StructuredTrainingAudience, rows []dbgen.ListManagedTrainingPublicationStatesRow, matches []dbgen.ListTrainingVariationMatchesForManagerRow) []pages.StructuredPublicationState {
 	result := make([]pages.StructuredPublicationState, 0, len(rows))
 	for _, row := range rows {
-		recipients, err := h.Store.ListStructuredTrainingPublicationMembers(ctx, dbgen.ListStructuredTrainingPublicationMembersParams{PlanID: row.ID, TimeZone: h.location().String()})
+		if inspector, ok := h.Store.(trainingScheduleWriteStatusStore); ok {
+			state, statusErr := inspector.TrainingSchedulePlanWriteStatus(ctx, dbgen.TrainingSchedulePlanWriteStatusParams{ActorID: trainingWriteActor(ctx), PlanID: row.ID})
+			if statusErr != nil || state.HasPartial || state.HasV2Publication {
+				status := "Não foi possível confirmar a comparação desta publicação."
+				if statusErr == nil {
+					status = trainingScheduleUnsupportedMessage
+				}
+				publishedAt := ""
+				if row.PublishedAt.Valid {
+					publishedAt = row.PublishedAt.Time.In(h.location()).Format("02/01/2006 15:04")
+				}
+				result = append(result, pages.StructuredPublicationState{PlanID: row.ID.String(), Plan: row.Title, Status: status, Revision: int(row.PublishedRevision), PublishedAt: publishedAt, PublishedBy: stringValue(row.PublishedByName), SourceUpdatedAt: row.SourceUpdatedAt.Time.Format(time.RFC3339Nano), Unavailable: true, Current: false})
+				continue
+			}
+		}
+		recipients, err := h.Store.ListStructuredTrainingPublicationMembers(ctx, row.ID)
 		if err != nil {
 			result = append(result, pages.StructuredPublicationState{PlanID: row.ID.String(), Plan: row.Title, Unavailable: true})
 			continue
@@ -3014,6 +3151,10 @@ func structuredPublicationWeek(audiences []pages.StructuredTrainingAudience, pla
 func buildStructuredPrescriptionInputs(planID uuid.UUID, audience pages.StructuredTrainingAudience, week pages.StructuredTrainingWeek, recipients []dbgen.ListStructuredTrainingPublicationMembersRow, matches []dbgen.ListTrainingVariationMatchesForManagerRow) ([]StructuredPrescriptionInput, error) {
 	sessions := map[uuid.UUID]pages.StructuredTrainingSession{}
 	for _, session := range week.Sessions {
+		if session.Schedule.Known && (session.Schedule.Unavailable || session.Schedule.Precision != "INTERVAL") {
+			return nil, ErrTrainingScheduleWriteUnsupported
+		}
+
 		id, err := uuid.Parse(session.ID)
 		if err == nil {
 			sessions[id] = session
@@ -3075,7 +3216,7 @@ func (h StructuredTraining) buildStructuredPublication(ctx context.Context, user
 	if !found {
 		return StructuredPublicationInput{}, pgx.ErrNoRows
 	}
-	recipients, err := h.Store.ListStructuredTrainingPublicationMembers(ctx, dbgen.ListStructuredTrainingPublicationMembersParams{PlanID: planID, TimeZone: h.location().String()})
+	recipients, err := h.Store.ListStructuredTrainingPublicationMembers(ctx, planID)
 	if err != nil {
 		return StructuredPublicationInput{}, err
 	}
@@ -3264,12 +3405,12 @@ func structuredPrescriptionWaterStep(step pages.StructuredWaterStep) string {
 	return strings.Join(parts, " · ")
 }
 
-func structuredPublishedTraining(rows []dbgen.ListTrainingPrescriptionsForViewerRow, location *time.Location) []pages.StructuredTrainingAudience {
+func structuredPublishedTraining(rows []dbgen.ListTrainingPrescriptionsForViewerRow, location *time.Location) ([]pages.StructuredTrainingAudience, error) {
 	result := []pages.StructuredTrainingAudience{}
 	for _, row := range rows {
-		var snapshot structuredPrescriptionSnapshot
-		if json.Unmarshal(row.Snapshot, &snapshot) != nil || snapshot.SchemaVersion != structuredPrescriptionSchemaVersion {
-			continue
+		snapshot, err := decodeStructuredPrescription(row.Snapshot, location)
+		if err != nil {
+			return nil, err
 		}
 		snapshot.Session.PrescriptionID = row.ID.String()
 		snapshot.Session.Outcome, _ = row.OutcomeStatus.(string)
@@ -3324,7 +3465,7 @@ func structuredPublishedTraining(rows []dbgen.ListTrainingPrescriptionsForViewer
 			result[audienceIndex].Weeks[weekIndex].Summary = calculateStructuredWeekSummary(result[audienceIndex].Weeks[weekIndex].Sessions)
 		}
 	}
-	return result
+	return result, nil
 }
 
 func slicesContains(values []string, value string) bool {
@@ -3358,8 +3499,15 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 			continue
 		}
 		if len(week.Sessions) == 0 || week.Sessions[len(week.Sessions)-1].ID != row.sessionID.String() {
-			when := row.startsAt.In(location).Format("02/01/2006 15:04") + "–" + row.endsAt.In(location).Format("15:04")
-			week.Sessions = append(week.Sessions, pages.StructuredTrainingSession{ID: row.sessionID.String(), Title: row.sessionTitle, Description: row.sessionDescription, When: when, EntryKind: row.entryKind, StartsOn: row.startsAt.In(location).Format("2006-01-02"), EndsOn: row.endsAt.In(location).Format("2006-01-02"), StartsAt: row.startsAt.In(location).Format("15:04"), EndsAt: row.endsAt.In(location).Format("15:04"), Status: row.sessionStatus})
+			schedule, scheduleErr := trainingScheduleFromRecord(row.schedulePrecision, row.scheduledOn, pgtype.Timestamptz{Time: row.startsAt, Valid: row.startsKnown || (row.schedulePrecision == "" && !row.startsAt.IsZero())}, pgtype.Timestamptz{Time: row.endsAt, Valid: row.endsKnown || (row.schedulePrecision == "" && !row.endsAt.IsZero())}, row.dayBand)
+			view := trainingScheduleView(schedule, location)
+			when := view.Label
+			// Preserve exact v1 legacy formatting and hashes. Partial rows use only
+			// the typed display path and cannot enter C's publication/copy writers.
+			if scheduleErr == nil && schedule.Precision == TrainingScheduleInterval {
+				when = row.startsAt.In(location).Format("02/01/2006 15:04") + "–" + row.endsAt.In(location).Format("15:04")
+			}
+			week.Sessions = append(week.Sessions, pages.StructuredTrainingSession{ID: row.sessionID.String(), Title: row.sessionTitle, Description: row.sessionDescription, When: when, EntryKind: row.entryKind, StartsOn: schedule.Date, EndsOn: view.EndsOn, StartsAt: view.StartsAt, EndsAt: view.EndsAt, Status: row.sessionStatus, Schedule: view, WriteUnsupported: scheduleErr != nil || schedule.Precision != TrainingScheduleInterval, UnsupportedMessage: trainingScheduleUnsupportedMessage})
 		}
 		session := &week.Sessions[len(week.Sessions)-1]
 		if row.segmentID == nil {
@@ -3371,9 +3519,9 @@ func assembleStructuredTraining(rows []structuredTrainingRow, location *time.Loc
 				duration = fmt.Sprintf("%d min", row.duration)
 			}
 			plannedStart := ""
-			if row.startOffset > 0 {
+			if (row.startsKnown || (row.schedulePrecision == "" && !row.startsAt.IsZero())) && row.startOffset > 0 {
 				plannedStart = row.startsAt.Add(time.Duration(row.startOffset) * time.Minute).In(location).Format("15:04")
-			} else if row.plannedStartSet {
+			} else if (row.startsKnown || (row.schedulePrecision == "" && !row.startsAt.IsZero())) && row.plannedStartSet {
 				plannedStart = row.startsAt.In(location).Format("15:04")
 			}
 			session.Segments = append(session.Segments, pages.StructuredTrainingSegment{ID: row.segmentID.String(), Modality: row.modality, Title: row.segmentTitle, Location: row.segmentLocation, Duration: duration, PlannedStart: plannedStart, Transition: row.transition, EquipmentNotes: row.equipmentNotes, Position: row.segmentPosition})
@@ -3640,12 +3788,20 @@ func structuredRoutineRows(rows []dbgen.ListVisibleTrainingRoutinesRow, location
 		if row.Visibility == dbgen.TrainingRoutineVisibilitySHARED {
 			visibility = "Partilhada"
 		}
-		result = append(result, pages.StructuredTrainingRoutine{ID: row.ID.String(), Name: row.Name, Description: row.Description, Kind: string(row.Kind), Visibility: visibility, Owner: row.OwnerName, Scope: scope, Modality: enumString(row.Modality), Objective: enumString(row.Objective), Method: row.Method, Tags: strings.Join(row.Tags, ", "), Preview: trainingRoutinePreview(row.Snapshot, row.Kind), Provenance: "Guardada de " + trainingRoutineKindName(row.Kind) + " em " + row.SourceUpdatedAt.Time.In(location).Format("02/01/2006 15:04")})
+		result = append(result, pages.StructuredTrainingRoutine{ID: row.ID.String(), Name: row.Name, Description: row.Description, Kind: string(row.Kind), Visibility: visibility, Owner: row.OwnerName, Scope: scope, Modality: enumString(row.Modality), Objective: enumString(row.Objective), Method: row.Method, Tags: strings.Join(row.Tags, ", "), WriteUnsupported: unsupportedTrainingArtifact(row.Snapshot) != nil, Preview: trainingRoutinePreview(row.Snapshot, row.Kind), Provenance: "Guardada de " + trainingRoutineKindName(row.Kind) + " em " + row.SourceUpdatedAt.Time.In(location).Format("02/01/2006 15:04")})
 	}
 	return result
 }
 
 func trainingRoutinePreview(snapshot []byte, kind dbgen.TrainingRoutineKind) string {
+	schedule, err := decodeRoutineSchedule(snapshot, lisbonLocation())
+	if err != nil {
+		return trainingScheduleDisplayError(err)
+	}
+	if schedule.Known {
+		return schedule.Label + " · " + trainingScheduleUnsupportedMessage
+	}
+
 	var value struct {
 		Title        string            `json:"title"`
 		Instructions string            `json:"instructions"`
@@ -3653,7 +3809,7 @@ func trainingRoutinePreview(snapshot []byte, kind dbgen.TrainingRoutineKind) str
 		Segments     []json.RawMessage `json:"segments"`
 	}
 	if json.Unmarshal(snapshot, &value) != nil {
-		return "Conteúdo estruturado"
+		return trainingScheduleDisplayError(ErrTrainingSnapshotUnsupported)
 	}
 	switch kind {
 	case dbgen.TrainingRoutineKindBLOCK:
@@ -3782,7 +3938,7 @@ func managerStructuredRows(rows []dbgen.ListStructuredTrainingOverviewForManager
 		if row.TeamName != nil {
 			scope += " · " + *row.TeamName
 		}
-		assembled := structuredRowFromValues(structuredTrainingRow{groupID: &row.GroupID, groupName: row.GroupName, scope: scope, memberCount: int(row.MemberCount), planID: row.PlanID, planTitle: stringValue(row.PlanTitle), planDescription: stringValue(row.PlanDescription), seasonName: stringValue(row.SeasonName), weekStart: row.WeekStart.Time, plannedLoadPercentage: row.PlannedLoadPercentage, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, entryKind: enumString(row.EntryKind), sessionStatus: stringValue(row.SessionStatus), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes)
+		assembled := structuredRowFromValues(structuredTrainingRow{groupID: &row.GroupID, groupName: row.GroupName, scope: scope, memberCount: int(row.MemberCount), planID: row.PlanID, planTitle: stringValue(row.PlanTitle), planDescription: stringValue(row.PlanDescription), seasonName: stringValue(row.SeasonName), weekStart: row.WeekStart.Time, schedulePrecision: stringValue(row.SchedulePrecision), scheduledOn: row.ScheduledOn, dayBand: row.DayBand, plannedLoadPercentage: row.PlannedLoadPercentage, sessionID: row.SessionID, sessionTitle: stringValue(row.SessionTitle), sessionDescription: stringValue(row.SessionDescription), startsAt: row.StartsAt.Time, endsAt: row.EndsAt.Time, startsKnown: row.StartsAt.Valid, endsKnown: row.EndsAt.Valid, entryKind: enumString(row.EntryKind), sessionStatus: stringValue(row.SessionStatus), segmentID: row.SegmentID, segmentPosition: intValue(row.SegmentPosition), modality: enumString(row.SegmentModality), segmentTitle: stringValue(row.SegmentTitle), segmentLocation: stringValue(row.SegmentLocation), duration: intValue(row.PlannedDurationMinutes), startOffset: intValue(row.PlannedStartOffsetMinutes), plannedStartSet: row.PlannedStartOffsetMinutes != nil, transition: intValue(row.TransitionDurationMinutes), equipmentNotes: stringValue(row.EquipmentNotes), blockID: row.BlockID, blockPosition: intValue(row.BlockPosition), blockPurpose: enumString(row.BlockPurpose), blockTitle: stringValue(row.BlockTitle), instructions: stringValue(row.BlockInstructions)}, row.GymStructure, row.GymObjective, row.GymRounds, row.RoundRecoverySeconds, row.ExerciseID, row.ExercisePosition, row.ExerciseName, row.ExerciseSets, row.ExerciseRepetitions, row.ExerciseDurationSeconds, row.ExerciseDistanceMetres, row.ExerciseRecoverySeconds, row.ResistanceKind, row.ResistanceValue, row.ResistanceText, row.ExecutionIntent, row.Tempo, row.ExerciseNotes)
 		result = append(result, structuredWaterRow(assembled, row.WaterMethod, row.WaterTargetDistanceMetres, row.WaterTargetDistanceCertainty, row.WaterProfileName, row.WaterProfileRevision, row.WaterProfileCraft, row.WaterStepID, row.WaterParentStepID, row.WaterStepPosition, row.WaterStepKind, row.WaterStepName, row.WaterStepRepeats, row.WaterStepDurationSeconds, row.WaterStepDurationCertainty, row.WaterStepDistanceMetres, row.WaterStepDistanceCertainty, row.WaterStepRecoverySeconds, row.WaterStepIntensityCode, row.WaterStepCadenceSpm, row.WaterZoneLabel, row.WaterZoneCadenceMin, row.WaterZoneCadenceMax, row.WaterZoneMeaning, row.WaterStepDrillFocus, row.WaterStepDrillFormat, row.WaterStepRoleNotes, row.WaterStepInstructions))
 	}
 	return result

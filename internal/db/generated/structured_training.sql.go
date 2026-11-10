@@ -464,7 +464,7 @@ WHERE plan.id = $7
   AND plan.training_group_id IS NOT NULL
   AND $3 >= (plan.week_start::timestamp AT TIME ZONE 'Europe/Lisbon')
   AND $4 <= ((plan.week_start + 7)::timestamp AT TIME ZONE 'Europe/Lisbon')
-RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at
+RETURNING id, plan_id, title, description, starts_at, ends_at, modality_id, entry_kind, status, cancelled_at, cancelled_by_id, cancellation_reason, created_by_id, created_at, updated_at,schedule_precision,scheduled_on,day_band
 `
 
 type CreateStructuredTrainingSessionParams struct {
@@ -504,6 +504,9 @@ func (q *Queries) CreateStructuredTrainingSession(ctx context.Context, arg Creat
 		&i.CreatedByID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SchedulePrecision,
+		&i.ScheduledOn,
+		&i.DayBand,
 	)
 	return i, err
 }
@@ -706,7 +709,7 @@ WHERE publication.id = $1
   AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
   AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
   AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
-  AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
+  AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 RETURNING id, publication_id, session_id, membership_id, athlete_user_id, snapshot, snapshot_sha256, created_at
 `
 
@@ -885,25 +888,25 @@ func (q *Queries) CreateTrainingSessionSegment(ctx context.Context, arg CreateTr
 const createTrainingVariation = `-- name: CreateTrainingVariation :one
 WITH subject_plan AS (
     SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date AS session_date
+           public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_date
     FROM training_session_segments segment
     JOIN training_sessions session ON session.id = segment.session_id
     UNION ALL
     SELECT block.id, 'BLOCK'::training_variation_subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+           public.training_session_local_date(session.scheduled_on,session.starts_at)
     FROM training_segment_blocks block
     JOIN training_session_segments segment ON segment.id = block.segment_id
     JOIN training_sessions session ON session.id = segment.session_id
     UNION ALL
     SELECT step.id, 'WATER_STEP'::training_variation_subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+           public.training_session_local_date(session.scheduled_on,session.starts_at)
     FROM water_work_steps step
     JOIN training_segment_blocks block ON block.id = step.block_id
     JOIN training_session_segments segment ON segment.id = block.segment_id
     JOIN training_sessions session ON session.id = segment.session_id
     UNION ALL
     SELECT exercise.id, 'GYM_EXERCISE'::training_variation_subject_kind, session.plan_id,
-           (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date
+           public.training_session_local_date(session.scheduled_on,session.starts_at)
     FROM gym_exercises exercise
     JOIN training_segment_blocks block ON block.id = exercise.block_id
     JOIN training_session_segments segment ON segment.id = block.segment_id
@@ -1324,21 +1327,31 @@ func (q *Queries) GetSegmentRoutineSource(ctx context.Context, sourceID uuid.UUI
 
 const getSessionRoutineSource = `-- name: GetSessionRoutineSource :one
 SELECT session.plan_id, session.updated_at AS source_updated_at, plan.programme_id, plan.team_id,
+ session.schedule_precision,session.scheduled_on,session.day_band,session.starts_at,session.ends_at,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on,
        NULL::training_segment_modality AS modality, NULL::training_objective AS objective,
-       training_session_snapshot(session.id) AS snapshot
+       training_session_snapshot_v2(session.id) AS schedule_snapshot,
+       CASE WHEN session.schedule_precision='INTERVAL' THEN training_session_snapshot(session.id) ELSE NULL::jsonb END AS snapshot
 FROM training_sessions session
 JOIN training_plans plan ON plan.id = session.plan_id AND plan.training_group_id IS NOT NULL
 WHERE session.id = $1 AND session.status = 'ACTIVE'
 `
 
 type GetSessionRoutineSourceRow struct {
-	PlanID          uuid.UUID                `json:"plan_id"`
-	SourceUpdatedAt pgtype.Timestamptz       `json:"source_updated_at"`
-	ProgrammeID     *uuid.UUID               `json:"programme_id"`
-	TeamID          *uuid.UUID               `json:"team_id"`
-	Modality        *TrainingSegmentModality `json:"modality"`
-	Objective       *TrainingObjective       `json:"objective"`
-	Snapshot        []byte                   `json:"snapshot"`
+	PlanID            uuid.UUID                `json:"plan_id"`
+	SourceUpdatedAt   pgtype.Timestamptz       `json:"source_updated_at"`
+	ProgrammeID       *uuid.UUID               `json:"programme_id"`
+	TeamID            *uuid.UUID               `json:"team_id"`
+	SchedulePrecision string                   `json:"schedule_precision"`
+	ScheduledOn       pgtype.Date              `json:"scheduled_on"`
+	DayBand           *string                  `json:"day_band"`
+	StartsAt          pgtype.Timestamptz       `json:"starts_at"`
+	EndsAt            pgtype.Timestamptz       `json:"ends_at"`
+	SessionOn         pgtype.Date              `json:"session_on"`
+	Modality          *TrainingSegmentModality `json:"modality"`
+	Objective         *TrainingObjective       `json:"objective"`
+	ScheduleSnapshot  []byte                   `json:"schedule_snapshot"`
+	Snapshot          []byte                   `json:"snapshot"`
 }
 
 func (q *Queries) GetSessionRoutineSource(ctx context.Context, sourceID uuid.UUID) (GetSessionRoutineSourceRow, error) {
@@ -1349,8 +1362,15 @@ func (q *Queries) GetSessionRoutineSource(ctx context.Context, sourceID uuid.UUI
 		&i.SourceUpdatedAt,
 		&i.ProgrammeID,
 		&i.TeamID,
+		&i.SchedulePrecision,
+		&i.ScheduledOn,
+		&i.DayBand,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.SessionOn,
 		&i.Modality,
 		&i.Objective,
+		&i.ScheduleSnapshot,
 		&i.Snapshot,
 	)
 	return i, err
@@ -2317,11 +2337,13 @@ func (q *Queries) ListStructuredCrewModalities(ctx context.Context) ([]CanoeCraf
 }
 
 const listStructuredSessionSnapshotsForDay = `-- name: ListStructuredSessionSnapshotsForDay :many
-SELECT session.id, session.starts_at, session.updated_at, training_session_snapshot(session.id) AS snapshot
+SELECT session.id, session.starts_at,session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on, session.updated_at, training_session_snapshot_v2(session.id) AS schedule_snapshot,
+       CASE WHEN session.schedule_precision='INTERVAL' THEN training_session_snapshot(session.id) ELSE NULL::jsonb END AS snapshot
 FROM training_sessions session
 WHERE session.plan_id = $1 AND session.status = 'ACTIVE'
-  AND (session.starts_at AT TIME ZONE 'Europe/Lisbon')::date = $2::date
-ORDER BY session.starts_at, session.id
+  AND public.training_session_local_date(session.scheduled_on,session.starts_at) = $2::date
+ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at),session.starts_at NULLS LAST, session.id
 `
 
 type ListStructuredSessionSnapshotsForDayParams struct {
@@ -2330,10 +2352,16 @@ type ListStructuredSessionSnapshotsForDayParams struct {
 }
 
 type ListStructuredSessionSnapshotsForDayRow struct {
-	ID        uuid.UUID          `json:"id"`
-	StartsAt  pgtype.Timestamptz `json:"starts_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-	Snapshot  []byte             `json:"snapshot"`
+	ID                uuid.UUID          `json:"id"`
+	StartsAt          pgtype.Timestamptz `json:"starts_at"`
+	EndsAt            pgtype.Timestamptz `json:"ends_at"`
+	SchedulePrecision string             `json:"schedule_precision"`
+	ScheduledOn       pgtype.Date        `json:"scheduled_on"`
+	DayBand           *string            `json:"day_band"`
+	SessionOn         pgtype.Date        `json:"session_on"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ScheduleSnapshot  []byte             `json:"schedule_snapshot"`
+	Snapshot          []byte             `json:"snapshot"`
 }
 
 func (q *Queries) ListStructuredSessionSnapshotsForDay(ctx context.Context, arg ListStructuredSessionSnapshotsForDayParams) ([]ListStructuredSessionSnapshotsForDayRow, error) {
@@ -2348,7 +2376,13 @@ func (q *Queries) ListStructuredSessionSnapshotsForDay(ctx context.Context, arg 
 		if err := rows.Scan(
 			&i.ID,
 			&i.StartsAt,
+			&i.EndsAt,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
 			&i.UpdatedAt,
+			&i.ScheduleSnapshot,
 			&i.Snapshot,
 		); err != nil {
 			return nil, err
@@ -2362,17 +2396,25 @@ func (q *Queries) ListStructuredSessionSnapshotsForDay(ctx context.Context, arg 
 }
 
 const listStructuredSessionSnapshotsForPlan = `-- name: ListStructuredSessionSnapshotsForPlan :many
-SELECT session.id, session.starts_at, session.updated_at, training_session_snapshot(session.id) AS snapshot
+SELECT session.id, session.starts_at,session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
+ public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on, session.updated_at, training_session_snapshot_v2(session.id) AS schedule_snapshot,
+       CASE WHEN session.schedule_precision='INTERVAL' THEN training_session_snapshot(session.id) ELSE NULL::jsonb END AS snapshot
 FROM training_sessions session
 WHERE session.plan_id = $1 AND session.status = 'ACTIVE'
-ORDER BY session.starts_at, session.id
+ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at),session.starts_at NULLS LAST, session.id
 `
 
 type ListStructuredSessionSnapshotsForPlanRow struct {
-	ID        uuid.UUID          `json:"id"`
-	StartsAt  pgtype.Timestamptz `json:"starts_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-	Snapshot  []byte             `json:"snapshot"`
+	ID                uuid.UUID          `json:"id"`
+	StartsAt          pgtype.Timestamptz `json:"starts_at"`
+	EndsAt            pgtype.Timestamptz `json:"ends_at"`
+	SchedulePrecision string             `json:"schedule_precision"`
+	ScheduledOn       pgtype.Date        `json:"scheduled_on"`
+	DayBand           *string            `json:"day_band"`
+	SessionOn         pgtype.Date        `json:"session_on"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ScheduleSnapshot  []byte             `json:"schedule_snapshot"`
+	Snapshot          []byte             `json:"snapshot"`
 }
 
 func (q *Queries) ListStructuredSessionSnapshotsForPlan(ctx context.Context, planID uuid.UUID) ([]ListStructuredSessionSnapshotsForPlanRow, error) {
@@ -2387,7 +2429,13 @@ func (q *Queries) ListStructuredSessionSnapshotsForPlan(ctx context.Context, pla
 		if err := rows.Scan(
 			&i.ID,
 			&i.StartsAt,
+			&i.EndsAt,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
 			&i.UpdatedAt,
+			&i.ScheduleSnapshot,
 			&i.Snapshot,
 		); err != nil {
 			return nil, err
@@ -2406,7 +2454,9 @@ SELECT group_row.id AS group_id, group_row.name AS group_name,
        (SELECT count(*)::integer FROM training_group_members member WHERE member.group_id = group_row.id) AS member_count,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
-       session.starts_at, session.ends_at, session.entry_kind, session.status AS session_status,
+       session.starts_at, session.ends_at, session.entry_kind,
+       session.schedule_precision,session.scheduled_on,session.day_band,
+       public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on, session.status AS session_status,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
        segment.title AS segment_title, segment.location AS segment_location,
        segment.planned_duration_minutes, segment.planned_start_offset_minutes,
@@ -2463,7 +2513,7 @@ WHERE $1::boolean
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
    )
 ORDER BY group_row.name, group_row.id, plan.week_start DESC NULLS LAST, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position,
+         public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST, session.id, segment.position, block.position,
          water_step.created_at NULLS FIRST, exercise.position
 `
 
@@ -2490,6 +2540,10 @@ type ListStructuredTrainingOverviewForManagerRow struct {
 	StartsAt                     pgtype.Timestamptz        `json:"starts_at"`
 	EndsAt                       pgtype.Timestamptz        `json:"ends_at"`
 	EntryKind                    *TrainingEntryKind        `json:"entry_kind"`
+	SchedulePrecision            *string                   `json:"schedule_precision"`
+	ScheduledOn                  pgtype.Date               `json:"scheduled_on"`
+	DayBand                      *string                   `json:"day_band"`
+	SessionOn                    pgtype.Date               `json:"session_on"`
 	SessionStatus                *string                   `json:"session_status"`
 	SegmentID                    *uuid.UUID                `json:"segment_id"`
 	SegmentPosition              *int32                    `json:"segment_position"`
@@ -2580,6 +2634,10 @@ func (q *Queries) ListStructuredTrainingOverviewForManager(ctx context.Context, 
 			&i.StartsAt,
 			&i.EndsAt,
 			&i.EntryKind,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
 			&i.SessionStatus,
 			&i.SegmentID,
 			&i.SegmentPosition,
@@ -2658,6 +2716,8 @@ SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
        session.id AS session_id, session.title AS session_title, session.description AS session_description,
        session.starts_at, session.ends_at, session.entry_kind,
+       session.schedule_precision,session.scheduled_on,session.day_band,
+       public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on,
        segment.id AS segment_id, segment.position AS segment_position, segment.modality AS segment_modality,
        segment.title AS segment_title, segment.location AS segment_location,
        segment.planned_duration_minutes, segment.planned_start_offset_minutes,
@@ -2712,7 +2772,7 @@ WHERE (subject.id = $1
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
 ORDER BY subject.name, subject.id, group_row.name, group_row.id, plan.week_start DESC, plan.id,
-         session.starts_at NULLS LAST, session.id, segment.position, block.position,
+         public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST, session.id, segment.position, block.position,
          water_step.created_at NULLS FIRST, exercise.position
 `
 
@@ -2733,6 +2793,10 @@ type ListStructuredTrainingOverviewForSubjectRow struct {
 	StartsAt                     pgtype.Timestamptz        `json:"starts_at"`
 	EndsAt                       pgtype.Timestamptz        `json:"ends_at"`
 	EntryKind                    *TrainingEntryKind        `json:"entry_kind"`
+	SchedulePrecision            *string                   `json:"schedule_precision"`
+	ScheduledOn                  pgtype.Date               `json:"scheduled_on"`
+	DayBand                      *string                   `json:"day_band"`
+	SessionOn                    pgtype.Date               `json:"session_on"`
 	SegmentID                    *uuid.UUID                `json:"segment_id"`
 	SegmentPosition              *int32                    `json:"segment_position"`
 	SegmentModality              *TrainingSegmentModality  `json:"segment_modality"`
@@ -2821,6 +2885,10 @@ func (q *Queries) ListStructuredTrainingOverviewForSubject(ctx context.Context, 
 			&i.StartsAt,
 			&i.EndsAt,
 			&i.EntryKind,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
+			&i.SessionOn,
 			&i.SegmentID,
 			&i.SegmentPosition,
 			&i.SegmentModality,
@@ -2907,14 +2975,9 @@ WHERE plan.id = $1
   AND (plan.programme_id IS NULL OR plan.programme_id = membership.programme_id)
   AND (plan.team_id IS NULL OR plan.team_id = membership.team_id)
   AND (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
-  AND (session.starts_at AT TIME ZONE $2::text)::date BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
+  AND public.training_session_local_date(session.scheduled_on,session.starts_at) BETWEEN membership.starts_on AND COALESCE(membership.ends_on, 'infinity'::date)
 ORDER BY subject.name, membership.id, session.id
 `
-
-type ListStructuredTrainingPublicationMembersParams struct {
-	PlanID   uuid.UUID `json:"plan_id"`
-	TimeZone string    `json:"time_zone"`
-}
 
 type ListStructuredTrainingPublicationMembersRow struct {
 	MembershipID  uuid.UUID   `json:"membership_id"`
@@ -2925,8 +2988,8 @@ type ListStructuredTrainingPublicationMembersRow struct {
 	SessionID     uuid.UUID   `json:"session_id"`
 }
 
-func (q *Queries) ListStructuredTrainingPublicationMembers(ctx context.Context, arg ListStructuredTrainingPublicationMembersParams) ([]ListStructuredTrainingPublicationMembersRow, error) {
-	rows, err := q.db.Query(ctx, listStructuredTrainingPublicationMembers, arg.PlanID, arg.TimeZone)
+func (q *Queries) ListStructuredTrainingPublicationMembers(ctx context.Context, planID uuid.UUID) ([]ListStructuredTrainingPublicationMembersRow, error) {
+	rows, err := q.db.Query(ctx, listStructuredTrainingPublicationMembers, planID)
 	if err != nil {
 		return nil, err
 	}
@@ -3190,6 +3253,8 @@ const listTrainingVariationMatchesForManager = `-- name: ListTrainingVariationMa
 WITH subject_details AS (
     SELECT segment.id AS subject_id, 'SEGMENT'::training_variation_subject_kind AS subject_kind,
            session.plan_id, session.id AS session_id, session.title AS session_title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at) AS session_on,
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Segmento · ', segment.position, ' · ', segment.modality::text,
                   CASE WHEN segment.title = '' THEN '' ELSE ' · ' || segment.title END)::text AS subject_label
     FROM training_session_segments segment
@@ -3197,6 +3262,8 @@ WITH subject_details AS (
     UNION ALL
     SELECT block.id, 'BLOCK'::training_variation_subject_kind, session.plan_id, session.id,
            session.title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at),
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Bloco · ', block.position, ' · ', block.purpose::text,
                   CASE WHEN block.title = '' THEN '' ELSE ' · ' || block.title END)::text
     FROM training_segment_blocks block
@@ -3205,6 +3272,8 @@ WITH subject_details AS (
     UNION ALL
     SELECT step.id, 'WATER_STEP'::training_variation_subject_kind, session.plan_id, session.id,
            session.title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at),
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Passo de água · ', step.position, ' · ', step.name)::text
     FROM water_work_steps step
     JOIN training_segment_blocks block ON block.id = step.block_id
@@ -3213,6 +3282,8 @@ WITH subject_details AS (
     UNION ALL
     SELECT exercise.id, 'GYM_EXERCISE'::training_variation_subject_kind, session.plan_id, session.id,
            session.title, session.starts_at,
+           public.training_session_local_date(session.scheduled_on,session.starts_at),
+           session.ends_at,session.schedule_precision,session.scheduled_on,session.day_band,
            concat('Exercício · ', exercise.position, ' · ', exercise.name)::text
     FROM gym_exercises exercise
     JOIN training_segment_blocks block ON block.id = exercise.block_id
@@ -3230,7 +3301,7 @@ WITH subject_details AS (
     SELECT variation.id, variation_member.membership_id, 1,
            CASE variation_group.kind WHEN 'CREW' THEN 'Tripulação' ELSE 'Subgrupo' END,
            variation_group.name, variation_group.effective_from,
-           COALESCE(variation_group.effective_until, (event_row.starts_at AT TIME ZONE $1::text)::date)
+           COALESCE(variation_group.effective_until, (event_row.starts_at AT TIME ZONE $3::text)::date)
     FROM training_variations variation
     JOIN training_variation_groups variation_group ON variation_group.id = variation.target_group_id
     JOIN training_variation_group_members variation_member ON variation_member.variation_group_id = variation_group.id
@@ -3238,7 +3309,8 @@ WITH subject_details AS (
     WHERE variation.target_group_id IS NOT NULL
 )
 SELECT variation.id AS variation_id, variation.plan_id, plan.title AS plan_title,
-       details.session_id, details.session_title, details.starts_at,
+       details.session_id, details.session_title, details.starts_at, details.session_on,
+       details.ends_at,details.schedule_precision,details.scheduled_on,details.day_band,
        variation.subject_kind, variation.subject_id, details.subject_label,
        variation.operation, variation.change_summary, variation.patch, variation.version,
        targets.membership_id, athlete.name AS athlete_name, targets.priority,
@@ -3257,55 +3329,60 @@ JOIN training_group_members current_group_member
 JOIN users athlete ON athlete.id = membership.user_id
 WHERE variation.is_active
   AND athlete.is_active
-  AND membership.starts_on <= (details.starts_at AT TIME ZONE $1::text)::date
-  AND (membership.ends_on IS NULL OR membership.ends_on >= (details.starts_at AT TIME ZONE $1::text)::date)
-  AND (targets.effective_from IS NULL OR (details.starts_at AT TIME ZONE $1::text)::date >= targets.effective_from)
-  AND (targets.effective_until IS NULL OR (details.starts_at AT TIME ZONE $1::text)::date <= targets.effective_until)
+  AND membership.starts_on <= details.session_on
+  AND (membership.ends_on IS NULL OR membership.ends_on >= details.session_on)
+  AND (targets.effective_from IS NULL OR details.session_on >= targets.effective_from)
+  AND (targets.effective_until IS NULL OR details.session_on <= targets.effective_until)
   AND (
-      $2::boolean
+      $1::boolean
       OR EXISTS (
           SELECT 1 FROM staff_grants grant_row
-          WHERE grant_row.user_id = $3
+          WHERE grant_row.user_id = $2
             AND grant_row.capability = 'COACH'
             AND grant_row.revoked_at IS NULL
             AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
       )
   )
-ORDER BY plan.week_start DESC, details.starts_at, athlete.name, details.subject_label,
+ORDER BY plan.week_start DESC,details.session_on, details.starts_at NULLS LAST, athlete.name, details.subject_label,
          targets.priority DESC, variation.created_at, variation.id
 `
 
 type ListTrainingVariationMatchesForManagerParams struct {
-	TimeZone string    `json:"time_zone"`
 	IsAdmin  bool      `json:"is_admin"`
 	UserID   uuid.UUID `json:"user_id"`
+	TimeZone string    `json:"time_zone"`
 }
 
 type ListTrainingVariationMatchesForManagerRow struct {
-	VariationID    uuid.UUID                    `json:"variation_id"`
-	PlanID         uuid.UUID                    `json:"plan_id"`
-	PlanTitle      string                       `json:"plan_title"`
-	SessionID      uuid.UUID                    `json:"session_id"`
-	SessionTitle   string                       `json:"session_title"`
-	StartsAt       pgtype.Timestamptz           `json:"starts_at"`
-	SubjectKind    TrainingVariationSubjectKind `json:"subject_kind"`
-	SubjectID      uuid.UUID                    `json:"subject_id"`
-	SubjectLabel   string                       `json:"subject_label"`
-	Operation      TrainingVariationOperation   `json:"operation"`
-	ChangeSummary  string                       `json:"change_summary"`
-	Patch          []byte                       `json:"patch"`
-	Version        int32                        `json:"version"`
-	MembershipID   *uuid.UUID                   `json:"membership_id"`
-	AthleteName    string                       `json:"athlete_name"`
-	Priority       int32                        `json:"priority"`
-	TargetKind     string                       `json:"target_kind"`
-	TargetName     string                       `json:"target_name"`
-	EffectiveFrom  pgtype.Date                  `json:"effective_from"`
-	EffectiveUntil pgtype.Date                  `json:"effective_until"`
+	VariationID       uuid.UUID                    `json:"variation_id"`
+	PlanID            uuid.UUID                    `json:"plan_id"`
+	PlanTitle         string                       `json:"plan_title"`
+	SessionID         uuid.UUID                    `json:"session_id"`
+	SessionTitle      string                       `json:"session_title"`
+	StartsAt          pgtype.Timestamptz           `json:"starts_at"`
+	SessionOn         pgtype.Date                  `json:"session_on"`
+	EndsAt            pgtype.Timestamptz           `json:"ends_at"`
+	SchedulePrecision string                       `json:"schedule_precision"`
+	ScheduledOn       pgtype.Date                  `json:"scheduled_on"`
+	DayBand           *string                      `json:"day_band"`
+	SubjectKind       TrainingVariationSubjectKind `json:"subject_kind"`
+	SubjectID         uuid.UUID                    `json:"subject_id"`
+	SubjectLabel      string                       `json:"subject_label"`
+	Operation         TrainingVariationOperation   `json:"operation"`
+	ChangeSummary     string                       `json:"change_summary"`
+	Patch             []byte                       `json:"patch"`
+	Version           int32                        `json:"version"`
+	MembershipID      *uuid.UUID                   `json:"membership_id"`
+	AthleteName       string                       `json:"athlete_name"`
+	Priority          int32                        `json:"priority"`
+	TargetKind        string                       `json:"target_kind"`
+	TargetName        string                       `json:"target_name"`
+	EffectiveFrom     pgtype.Date                  `json:"effective_from"`
+	EffectiveUntil    pgtype.Date                  `json:"effective_until"`
 }
 
 func (q *Queries) ListTrainingVariationMatchesForManager(ctx context.Context, arg ListTrainingVariationMatchesForManagerParams) ([]ListTrainingVariationMatchesForManagerRow, error) {
-	rows, err := q.db.Query(ctx, listTrainingVariationMatchesForManager, arg.TimeZone, arg.IsAdmin, arg.UserID)
+	rows, err := q.db.Query(ctx, listTrainingVariationMatchesForManager, arg.IsAdmin, arg.UserID, arg.TimeZone)
 	if err != nil {
 		return nil, err
 	}
@@ -3320,6 +3397,11 @@ func (q *Queries) ListTrainingVariationMatchesForManager(ctx context.Context, ar
 			&i.SessionID,
 			&i.SessionTitle,
 			&i.StartsAt,
+			&i.SessionOn,
+			&i.EndsAt,
+			&i.SchedulePrecision,
+			&i.ScheduledOn,
+			&i.DayBand,
 			&i.SubjectKind,
 			&i.SubjectID,
 			&i.SubjectLabel,

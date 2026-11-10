@@ -98,6 +98,8 @@ type structuredTrainingStoreStub struct {
 	createSegmentErr        error
 	createBlockErr          error
 	moveGymErr              error
+	moveContentErr          error
+	copyContentErr          error
 	dayCopyErr              error
 	weekCopyErr             error
 	createWaterBlockErr     error
@@ -174,7 +176,8 @@ func (tx structuredTrainingTransactionFake) Commit(context.Context) error { retu
 
 type structuredTrainingSuccessTransactionFake struct {
 	pgx.Tx
-	committed bool
+	commitError error
+	committed   bool
 }
 
 func (tx *structuredTrainingSuccessTransactionFake) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -188,11 +191,16 @@ func (*structuredTrainingSuccessTransactionFake) QueryRow(context.Context, strin
 }
 func (*structuredTrainingSuccessTransactionFake) Rollback(context.Context) error { return nil }
 func (tx *structuredTrainingSuccessTransactionFake) Commit(context.Context) error {
+	if tx.commitError != nil {
+		return tx.commitError
+	}
 	tx.committed = true
 	return nil
 }
 
 type structuredTrainingCycleQueriesFake struct {
+	guardErrors      map[uuid.UUID]error
+	guards           []uuid.UUID
 	cycles           []dbgen.TrainingCycle
 	weekScopes       map[uuid.UUID]dbgen.GetTrainingCycleWeekScopeRow
 	copySource       dbgen.TrainingCycle
@@ -208,6 +216,14 @@ type structuredTrainingCycleQueriesFake struct {
 	restored         []dbgen.RestoreTrainingSessionParams
 	updated          bool
 	failAt           string
+}
+
+func (q *structuredTrainingCycleQueriesFake) TrainingScheduleGuardPlanV1(_ context.Context, p dbgen.TrainingScheduleGuardPlanV1Params) (bool, error) {
+	q.guards = append(q.guards, p.PlanID)
+	return true, q.guardErrors[p.PlanID]
+}
+func (q *structuredTrainingCycleQueriesFake) LockStructuredTrainingPlanForPublication(context.Context, uuid.UUID) (dbgen.LockStructuredTrainingPlanForPublicationRow, error) {
+	return dbgen.LockStructuredTrainingPlanForPublicationRow{}, q.failure("lock plan")
 }
 
 func (q *structuredTrainingCycleQueriesFake) failure(operation string) error {
@@ -315,6 +331,8 @@ type structuredTrainingSuccessRowFake struct{}
 func (structuredTrainingSuccessRowFake) Scan(dest ...any) error {
 	for _, target := range dest {
 		switch value := target.(type) {
+		case *bool:
+			*value = true
 		case *uuid.UUID:
 			*value = uuid.New()
 		case *pgtype.Timestamptz:
@@ -338,6 +356,28 @@ func (structuredTrainingSuccessRowFake) Scan(dest ...any) error {
 	return nil
 }
 
+type structuredRoutineReadTransactionFake struct {
+	structuredTrainingSuccessTransactionFake
+	routine dbgen.TrainingRoutine
+}
+
+func (tx *structuredRoutineReadTransactionFake) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "-- name: GetVisibleTrainingRoutine") {
+		return structuredRoutineReadRowFake{routine: tx.routine}
+	}
+	return tx.structuredTrainingSuccessTransactionFake.QueryRow(ctx, sql, args...)
+}
+
+type structuredRoutineReadRowFake struct{ routine dbgen.TrainingRoutine }
+
+func (row structuredRoutineReadRowFake) Scan(dest ...any) error {
+	values := reflect.ValueOf(row.routine)
+	for i, target := range dest {
+		reflect.ValueOf(target).Elem().Set(values.Field(i))
+	}
+	return nil
+}
+
 type structuredTrainingPublicationTransactionFake struct {
 	structuredTrainingSuccessTransactionFake
 	updated time.Time
@@ -352,6 +392,8 @@ type structuredTrainingPublicationRowFake struct{ updated time.Time }
 func (row structuredTrainingPublicationRowFake) Scan(dest ...any) error {
 	for _, target := range dest {
 		switch value := target.(type) {
+		case *bool:
+			*value = true
 		case *uuid.UUID:
 			*value = uuid.New()
 		case *int32:
@@ -530,7 +572,7 @@ func (s *structuredTrainingStoreStub) ListActiveWaterIntensityProfiles(context.C
 	return nil, s.listProfilesErr
 }
 
-func (s *structuredTrainingStoreStub) ListStructuredTrainingPublicationMembers(context.Context, dbgen.ListStructuredTrainingPublicationMembersParams) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error) {
+func (s *structuredTrainingStoreStub) ListStructuredTrainingPublicationMembers(context.Context, uuid.UUID) ([]dbgen.ListStructuredTrainingPublicationMembersRow, error) {
 	return s.publicationMembers, s.publicationMembersErr
 }
 
@@ -1036,7 +1078,7 @@ func TestPostgresStructuredTrainingStorePropagatesDirectDatabaseFailures(t *test
 			return err
 		}},
 		{"publication members", func() error {
-			_, err := store.ListStructuredTrainingPublicationMembers(ctx, dbgen.ListStructuredTrainingPublicationMembersParams{})
+			_, err := store.ListStructuredTrainingPublicationMembers(ctx, uuid.Nil)
 			return err
 		}},
 		{"viewer prescriptions", func() error {
@@ -1118,7 +1160,7 @@ func TestPostgresStructuredTrainingStorePropagatesDirectDatabaseFailures(t *test
 		{"move exercise", func() error { _, err := store.MoveGymExercise(ctx, dbgen.MoveGymExerciseParams{}); return err }},
 		{"routine source", func() error { _, err := store.GetRoutineSource(ctx, dbgen.TrainingRoutineKindBLOCK, id); return err }},
 		{"create routine", func() error {
-			_, err := store.CreateTrainingRoutine(ctx, dbgen.CreateTrainingRoutineParams{})
+			_, err := store.CreateTrainingRoutine(ctx, dbgen.CreateTrainingRoutineParams{Snapshot: []byte(`{}`)})
 			return err
 		}},
 		{"visible routines", func() error {
@@ -1186,7 +1228,10 @@ func TestPostgresStructuredTrainingStorePropagatesTransactionStartFailures(t *te
 		{"create segment", func() error { _, err := store.CreateSegment(ctx, StructuredTrainingSegmentInput{}); return err }},
 		{"create gym block", func() error { _, err := store.CreateGymBlock(ctx, StructuredGymBlockInput{}); return err }},
 		{"create water block", func() error { _, err := store.CreateWaterBlock(ctx, StructuredWaterBlockInput{}); return err }},
-		{"insert routine", func() error { _, err := store.InsertTrainingRoutine(ctx, StructuredRoutineInsertInput{}); return err }},
+		{"insert routine", func() error {
+			_, err := store.InsertTrainingRoutine(ctx, StructuredRoutineInsertInput{Routine: dbgen.TrainingRoutine{Kind: dbgen.TrainingRoutineKindBLOCK, Snapshot: []byte(`{}`)}})
+			return err
+		}},
 		{"copy block", func() error { _, err := store.CopyTrainingBlock(ctx, id, id, id); return err }},
 		{"copy session", func() error { _, err := store.CopyTrainingSession(ctx, id, id, pgtype.Timestamptz{}, id); return err }},
 		{"copy day", func() error { _, err := store.CopyStructuredTrainingDay(ctx, StructuredDayCopyInput{}); return err }},
@@ -1274,7 +1319,7 @@ func TestPostgresStructuredTrainingStoreCopiesCyclesAtomically(t *testing.T) {
 			{ID: weekOneID, Title: "Semana 1", TrainingGroupID: &groupID, SeasonID: &seasonID, WeekStart: pgtype.Date{Time: start, Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}},
 			{ID: weekTwoID, Title: "Semana 2", TrainingGroupID: &groupID, SeasonID: &seasonID, WeekStart: pgtype.Date{Time: start.AddDate(0, 0, 7), Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}},
 		},
-		snapshots:    map[uuid.UUID][]dbgen.ListStructuredSessionSnapshotsForPlanRow{weekOneID: {{ID: sessionID, StartsAt: pgtype.Timestamptz{Time: start.Add(9 * time.Hour), Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}, Snapshot: []byte(`{}`)}}},
+		snapshots:    map[uuid.UUID][]dbgen.ListStructuredSessionSnapshotsForPlanRow{weekOneID: {{ID: sessionID, StartsAt: pgtype.Timestamptz{Time: start.Add(9 * time.Hour), Valid: true}, EndsAt: pgtype.Timestamptz{Time: start.Add(10 * time.Hour), Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}, Snapshot: []byte(`{}`)}}},
 		createdPlans: []dbgen.TrainingPlan{{ID: planOneID, TrainingGroupID: &groupID, SeasonID: &seasonID}, {ID: planTwoID, TrainingGroupID: &groupID, SeasonID: &seasonID}},
 		createdCycle: dbgen.TrainingCycle{ID: uuid.New()},
 	}
@@ -1347,7 +1392,7 @@ func TestPostgresStructuredTrainingStoreRollsBackCycleCopyFailures(t *testing.T)
 				failAt:       operation,
 				copySource:   dbgen.TrainingCycle{ID: sourceID, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}},
 				copyWeeks:    []dbgen.ListTrainingCycleWeekCopySourcesRow{{ID: weekID, TrainingGroupID: &groupID, SeasonID: &seasonID, WeekStart: pgtype.Date{Time: start, Valid: true}, UpdatedAt: pgtype.Timestamptz{Time: start, Valid: true}}},
-				snapshots:    map[uuid.UUID][]dbgen.ListStructuredSessionSnapshotsForPlanRow{weekID: {{ID: uuid.New(), StartsAt: pgtype.Timestamptz{Time: start, Valid: true}}}},
+				snapshots:    map[uuid.UUID][]dbgen.ListStructuredSessionSnapshotsForPlanRow{weekID: {{ID: uuid.New(), StartsAt: pgtype.Timestamptz{Time: start, Valid: true}, EndsAt: pgtype.Timestamptz{Time: start.Add(time.Hour), Valid: true}, Snapshot: []byte(`{}`)}}},
 				createdPlans: []dbgen.TrainingPlan{{ID: uuid.New(), TrainingGroupID: &groupID, SeasonID: &seasonID}},
 				createdCycle: dbgen.TrainingCycle{ID: uuid.New()},
 			}
@@ -1404,9 +1449,6 @@ func TestPostgresStructuredTrainingStorePropagatesFirstTransactionalOperationFai
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expected := want
-			if tc.name == "copy week" {
-				expected = pgx.ErrNoRows
-			}
 			if err := tc.call(); !errors.Is(err, expected) {
 				t.Fatalf("error=%v want=%v", err, expected)
 			}
@@ -1452,7 +1494,7 @@ func TestPostgresStructuredTrainingStoreRestoresEveryRoutineKindAtomically(t *te
 		{"session", dbgen.TrainingRoutine{ID: uuid.New(), Kind: dbgen.TrainingRoutineKindSESSION, Snapshot: []byte(`{}`)}, pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tx := &structuredTrainingSuccessTransactionFake{}
+			tx := &structuredRoutineReadTransactionFake{routine: tc.routine}
 			id, err := (PostgresStructuredTrainingStore{Pool: structuredTrainingDBFake{tx: tx}}).InsertTrainingRoutine(ctx, StructuredRoutineInsertInput{Routine: tc.routine, TargetID: uuid.New(), StartsAt: tc.starts, ActorID: uuid.New()})
 			if err != nil || id == uuid.Nil || !tx.committed {
 				t.Fatalf("id=%s committed=%v error=%v", id, tx.committed, err)
@@ -1608,12 +1650,12 @@ func (s *structuredTrainingStoreStub) ListManagedTrainingPublicationStates(conte
 
 func (s *structuredTrainingStoreStub) MoveTrainingSessionSegment(_ context.Context, params dbgen.MoveTrainingSessionSegmentParams) (bool, error) {
 	s.movedSegments = append(s.movedSegments, params)
-	return true, nil
+	return true, s.moveContentErr
 }
 
 func (s *structuredTrainingStoreStub) MoveTrainingSegmentBlock(_ context.Context, params dbgen.MoveTrainingSegmentBlockParams) (bool, error) {
 	s.movedBlocks = append(s.movedBlocks, params)
-	return true, nil
+	return true, s.moveContentErr
 }
 
 func (s *structuredTrainingStoreStub) MoveGymExercise(_ context.Context, params dbgen.MoveGymExerciseParams) (bool, error) {
@@ -1641,7 +1683,7 @@ func (s *structuredTrainingStoreStub) InsertTrainingRoutine(_ context.Context, i
 
 func (s *structuredTrainingStoreStub) CopyTrainingBlock(_ context.Context, sourceID, targetID, actorID uuid.UUID) (uuid.UUID, error) {
 	s.copiedBlocks = append(s.copiedBlocks, [3]uuid.UUID{sourceID, targetID, actorID})
-	return uuid.New(), nil
+	return uuid.New(), s.copyContentErr
 }
 
 func TestFilterStructuredTrainingSubjectRowsUsesOnlyAuthorizedQueryResults(t *testing.T) {
@@ -1680,7 +1722,7 @@ func (s *structuredTrainingStoreStub) CopyTrainingSession(_ context.Context, sou
 		SourceID, TargetID, ActorID uuid.UUID
 		StartsAt                    pgtype.Timestamptz
 	}{sourceID, targetID, actorID, startsAt})
-	return uuid.New(), nil
+	return uuid.New(), s.copyContentErr
 }
 
 func (s *structuredTrainingStoreStub) ListTrainingPrescriptionLinksForSessionViewer(context.Context, dbgen.ListTrainingPrescriptionLinksForSessionViewerParams) ([]dbgen.ListTrainingPrescriptionLinksForSessionViewerRow, error) {
@@ -2687,7 +2729,7 @@ func TestStructuredTrainingFormattingHelpersCoverSupportedPrescriptions(t *testi
 		{dbgen.TrainingRoutineKindBLOCK, `{"instructions":"3x5"}`, "3x5"},
 		{dbgen.TrainingRoutineKindSEGMENT, `{"blocks":[{},{}]}`, "Segmento · 2 blocos"},
 		{dbgen.TrainingRoutineKindSESSION, `{"segments":[{}]}`, "Sessão · 1 segmentos"},
-		{dbgen.TrainingRoutineKindSESSION, `{`, "Conteúdo estruturado"},
+		{dbgen.TrainingRoutineKindSESSION, `{`, trainingScheduleDisplayError(ErrTrainingSnapshotUnsupported)},
 	} {
 		if got := trainingRoutinePreview([]byte(tc.snapshot), tc.kind); got != tc.want {
 			t.Errorf("preview = %q, want %q", got, tc.want)
@@ -3600,10 +3642,12 @@ func TestStructuredPublishedTrainingGroupsCurrentAndHistoricRevisions(t *testing
 		{ID: uuid.New(), AthleteName: "Ana", Revision: 2, PublishedAt: publishedAt, PublishedByName: "Treinador", Snapshot: snapshot(firstSessionID, "Água"), IsCurrent: true, OutcomeStatus: "COMPLETED", ActualDurationMinutes: int32Ptr(72), PerceivedExertion: int16Ptr(7), RecoveryFeeling: int16Ptr(4), PerceptionNote: stringPtr("Boa sessão"), OutcomeUpdatedAt: publishedAt},
 		{ID: uuid.New(), AthleteName: "Ana", Revision: 2, PublishedAt: publishedAt, PublishedByName: "Treinador", Snapshot: snapshot(secondSessionID, "Ginásio"), IsCurrent: true},
 		{ID: uuid.New(), AthleteName: "Ana", Revision: 1, PublishedAt: publishedAt, PublishedByName: "Treinador", Snapshot: snapshot(firstSessionID, "Água anterior")},
-		{ID: uuid.New(), AthleteName: "Ignorada", Snapshot: []byte(`{"schema_version":99}`)},
 	}
 
-	audiences := structuredPublishedTraining(rows, time.UTC)
+	audiences, err := structuredPublishedTraining(rows, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(audiences) != 2 || len(audiences[0].Weeks) != 1 || len(audiences[0].Weeks[0].Sessions) != 2 || len(audiences[1].Weeks) != 1 {
 		t.Fatalf("audiences = %#v", audiences)
 	}
@@ -3814,5 +3858,111 @@ func TestPostgresStructuredTrainingStoreRejectsInvalidGroupBeforeTransaction(t *
 		if !errors.Is(err, errStructuredTrainingMembershipScope) {
 			t.Fatalf("invalid group error=%v", err)
 		}
+	}
+}
+
+func TestStructuredPublishedTrainingDoesNotSilentlyOmitUnknownSnapshot(t *testing.T) {
+	rows := []dbgen.ListTrainingPrescriptionsForViewerRow{{ID: uuid.New(), Snapshot: []byte(`{"schema_version":99}`)}}
+	audiences, err := structuredPublishedTraining(rows, time.UTC)
+	if !errors.Is(err, ErrTrainingSnapshotUnsupported) || len(audiences) != 0 {
+		t.Fatalf("%#v %v", audiences, err)
+	}
+}
+
+func TestCycleCopyRejectsUnsupportedLastWeekBeforeCreatingAnyDestination(t *testing.T) {
+	group, season, first, last := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	start := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	q := &structuredTrainingCycleQueriesFake{copyWeeks: []dbgen.ListTrainingCycleWeekCopySourcesRow{
+		{ID: first, TrainingGroupID: &group, SeasonID: &season, WeekStart: pgtype.Date{Time: start, Valid: true}},
+		{ID: last, TrainingGroupID: &group, SeasonID: &season, WeekStart: pgtype.Date{Time: start.AddDate(0, 0, 7), Valid: true}},
+	}, guardErrors: map[uuid.UUID]error{last: ErrTrainingScheduleWriteUnsupported}}
+	tx := &structuredTrainingSuccessTransactionFake{}
+	s := PostgresStructuredTrainingStore{beginCycleTx: func(context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
+		return tx, q, nil
+	}}
+	_, err := s.CopyStructuredTrainingCycle(context.Background(), StructuredTrainingCycleCopyInput{SourceCycleID: uuid.New(), ActorID: uuid.New(), FirstMonday: start})
+	if !errors.Is(err, ErrTrainingScheduleWriteUnsupported) || tx.committed || q.createdPlanIndex != 0 || len(q.restored) != 0 || len(q.copyEvents) != 0 {
+		t.Fatalf("err=%v committed=%v created=%d restored=%d events=%d", err, tx.committed, q.createdPlanIndex, len(q.restored), len(q.copyEvents))
+	}
+}
+
+func TestCycleCopyNormalizesSerializationFailureAtCommit(t *testing.T) {
+	for _, code := range []string{"40001", "40P01"} {
+		t.Run(code, func(t *testing.T) {
+			group, season, week := uuid.New(), uuid.New(), uuid.New()
+			start := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+			q := &structuredTrainingCycleQueriesFake{copyWeeks: []dbgen.ListTrainingCycleWeekCopySourcesRow{{ID: week, TrainingGroupID: &group, SeasonID: &season, WeekStart: pgtype.Date{Time: start, Valid: true}}}, createdPlans: []dbgen.TrainingPlan{{ID: uuid.New(), TrainingGroupID: &group, SeasonID: &season}}, createdCycle: dbgen.TrainingCycle{ID: uuid.New()}}
+			tx := &structuredTrainingSuccessTransactionFake{commitError: &pgconn.PgError{Code: code}}
+			store := PostgresStructuredTrainingStore{beginCycleTx: func(context.Context) (structuredTrainingCycleTx, structuredTrainingCycleQueries, error) {
+				return tx, q, nil
+			}}
+			_, err := store.CopyStructuredTrainingCycle(context.Background(), StructuredTrainingCycleCopyInput{ActorID: uuid.New(), SourceCycleID: uuid.New(), FirstMonday: start})
+			if !errors.Is(err, errStructuredTrainingPublicationConflict) || tx.committed {
+				t.Fatalf("%s err%v committed%v", code, err, tx.committed)
+			}
+		})
+	}
+}
+
+func TestStructuredCopyAndMoveCompatibilityErrorsRemainRecoverableAndRevocationPrivate(t *testing.T) {
+	for _, action := range []string{"copy-block", "copy-session", "move-segment", "move-block"} {
+		for _, tc := range []struct {
+			name   string
+			err    error
+			status int
+		}{{"unsupported", ErrTrainingScheduleWriteUnsupported, 409}, {"conflict", &pgconn.PgError{Code: "40001"}, 409}, {"revoked", errTrainingScheduleUnavailable, 404}} {
+			t.Run(action+"/"+tc.name, func(t *testing.T) {
+				store := &structuredTrainingStoreStub{planID: uuid.New(), weekOK: true, moveContentErr: tc.err, copyContentErr: tc.err}
+				h := StructuredTraining{Store: store, Location: time.UTC}
+				var handler http.HandlerFunc
+				switch action {
+				case "copy-block":
+					handler = h.CopyBlock
+				case "copy-session":
+					handler = h.CopySession
+				case "move-segment":
+					handler = h.MoveSegment
+				case "move-block":
+					handler = h.MoveBlock
+				}
+				id := uuid.New()
+				values := url.Values{"target_id": {uuid.NewString()}, "starts_at": {"2026-11-15T10:00"}, "direction": {"down"}, "title": {"Pedido conservado"}, "return_to": {structuredPlannerPath}}
+				w := performStructuredTrainingRequest(t, CurrentUser{ID: uuid.New(), IsAdmin: true}, http.MethodPost, structuredPlannerPath, values, "id", id.String(), handler)
+				if w.Code != tc.status {
+					t.Fatalf("code%d want%d body%s", w.Code, tc.status, w.Body.String())
+				}
+				retained := strings.Contains(w.Body.String(), "Pedido conservado")
+				if tc.status == 404 && retained || tc.status == 409 && !retained {
+					t.Fatalf("retention after %s: %v", tc.name, retained)
+				}
+			})
+		}
+	}
+}
+
+type trainingScheduleStatusTestStore struct {
+	*structuredTrainingStoreStub
+	status dbgen.TrainingSchedulePlanWriteStatusRow
+	err    error
+}
+
+func (s trainingScheduleStatusTestStore) TrainingSchedulePlanWriteStatus(context.Context, dbgen.TrainingSchedulePlanWriteStatusParams) (dbgen.TrainingSchedulePlanWriteStatusRow, error) {
+	return s.status, s.err
+}
+func TestPublicationCompatibilityStatusRejectsV2ComparisonAndReadFailureWithoutLosingRevision(t *testing.T) {
+	plan := uuid.New()
+	rows := []dbgen.ListManagedTrainingPublicationStatesRow{{ID: plan, Title: "Semana", PublishedRevision: 3}}
+	for _, tc := range []struct {
+		name   string
+		status dbgen.TrainingSchedulePlanWriteStatusRow
+		err    error
+	}{{name: "latest-v2", status: dbgen.TrainingSchedulePlanWriteStatusRow{HasV2Publication: true}}, {name: "partial", status: dbgen.TrainingSchedulePlanWriteStatusRow{HasPartial: true}}, {name: "failed-status", err: errors.New("database offline")}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := StructuredTraining{Store: trainingScheduleStatusTestStore{structuredTrainingStoreStub: &structuredTrainingStoreStub{}, status: tc.status, err: tc.err}}
+			out := h.structuredPublicationStates(context.Background(), nil, rows, nil)
+			if len(out) != 1 || !out[0].Unavailable || out[0].Current || out[0].Revision != 3 {
+				t.Fatalf("%#v", out)
+			}
+		})
 	}
 }

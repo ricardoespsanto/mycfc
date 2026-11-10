@@ -3461,6 +3461,19 @@ type TrainingRoutine struct {
 	UpdatedAt       pgtype.Timestamptz        `json:"updated_at"`
 }
 
+type TrainingScheduleControlState struct {
+	Singleton            bool               `json:"singleton"`
+	DatabaseIncarnation  uuid.UUID          `json:"database_incarnation"`
+	SchemaContract       string             `json:"schema_contract"`
+	StateEpoch           int64              `json:"state_epoch"`
+	RequiredReader       int32              `json:"required_reader"`
+	FloorCommitID        *uuid.UUID         `json:"floor_commit_id"`
+	FloorManifestSha256  *string            `json:"floor_manifest_sha256"`
+	PartialV2Enabled     bool               `json:"partial_v2_enabled"`
+	EverPartialV2Enabled bool               `json:"ever_partial_v2_enabled"`
+	ChangedAt            pgtype.Timestamptz `json:"changed_at"`
+}
+
 type TrainingSegmentBlock struct {
 	ID           uuid.UUID            `json:"id"`
 	SegmentID    uuid.UUID            `json:"segment_id"`
@@ -3488,6 +3501,9 @@ type TrainingSession struct {
 	CreatedByID        uuid.UUID          `json:"created_by_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	SchedulePrecision  string             `json:"schedule_precision"`
+	ScheduledOn        pgtype.Date        `json:"scheduled_on"`
+	DayBand            *string            `json:"day_band"`
 }
 
 type TrainingSessionActivityMatch struct {

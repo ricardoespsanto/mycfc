@@ -12,6 +12,8 @@ type StructuredWorkspaceWeekChoice struct {
 	Selected                         bool
 }
 type StructuredWorkspaceAppointment struct {
+	Precision, Band, Label string
+	TimeUnknown, EndUnknown bool
 	ID, Title, StartsOn, EndsOn, StartsAt, EndsAt, EntryKind, Status, URL string
 	Modalities                                                            []string
 	Selected                                                              bool
@@ -20,6 +22,7 @@ type StructuredWorkspaceDay struct {
 	Date, Label, ShortLabel, URL, AddSessionURL string
 	Selected                                    bool
 	Morning, Afternoon                          []StructuredWorkspaceAppointment
+	Unscheduled []StructuredWorkspaceAppointment
 }
 type StructuredWorkspacePublication struct {
 	State, Label, PublishedAt, PublishedBy, SourceUpdatedAt  string
@@ -110,6 +113,9 @@ templ structuredWeekWorkspace(page StructuredTrainingPage) {
 						aria-labelledby={ "week-day-title-" + day.Date }
 					>
 						<header><h3 id={ "week-day-title-" + day.Date }>{ day.Label }</h3><p>{ day.Date }</p></header>
+						if len(day.Unscheduled) > 0 {
+@structuredWorkspaceBand("Hora por definir", day.Unscheduled)
+}
 						@structuredWorkspaceBand("Manhã", day.Morning)
 						@structuredWorkspaceBand("Tarde", day.Afternoon)
 						<a
@@ -121,7 +127,7 @@ templ structuredWeekWorkspace(page StructuredTrainingPage) {
 				}
 			</div>
 			@structuredWorkspaceSummary(page.Workspace.Summary)
-		} else {
+		} else if page.Error == "" {
 			@components.EmptyState("Ainda sem semanas neste grupo", "Crie a primeira semana com uma data explícita. Os horários das sessões são introduzidos depois.")
 		}
 		<nav class="cluster" aria-label="Outras tarefas da semana">
@@ -239,11 +245,18 @@ func structuredWorkspaceCurrent(selected bool) string {
 	return "false"
 }
 func structuredWorkspaceTime(appointment StructuredWorkspaceAppointment) string {
-	if appointment.StartsAt == "" {
+ if appointment.Label!=""{return appointment.Label}
+ if appointment.Precision != "" {
+  endDate := ""
+ if appointment.EndsOn != appointment.StartsOn { endDate = appointment.EndsOn }
+ return trainingScheduleLabel(TrainingScheduleView{Known:true,Precision:appointment.Precision,Band:appointment.Band,StartsAt:appointment.StartsAt,EndsAt:appointment.EndsAt,EndsOn:endDate}, "")
+ }
+
+	if appointment.TimeUnknown || appointment.StartsAt == "" {
 		return "Hora por definir"
 	}
 	start := appointment.StartsAt
-	if appointment.EndsAt == "" {
+	if appointment.EndUnknown || appointment.EndsAt == "" {
 		return start + " · Fim por definir"
 	}
 	end := appointment.EndsAt

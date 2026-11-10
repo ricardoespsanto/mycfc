@@ -26,7 +26,7 @@ var postgresIdentifier = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 const (
 	baselineVersion              = "reset-baseline-v1"
-	baselineIncludesThrough      = "202610010003_privacy_attachment_trigger_runtime"
+	baselineIncludesThrough      = "202611100001_training_schedule_compatibility"
 	mediaCleanupRole             = "mycfc_media_cleanup"
 	dataRetentionRole            = "mycfc_data_retention"
 	privacyRetentionRole         = "mycfc_privacy_retention"
@@ -529,6 +529,9 @@ func HardenPrivacyExecutionRoles(ctx context.Context, conn bootstrapConnection, 
 			return fmt.Errorf("harden privacy execution roles (%s): %w", statement.name, err)
 		}
 	}
+	if err := hardenTrainingScheduleRoles(ctx, conn, credentials); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -619,6 +622,9 @@ func commitBaseline(ctx context.Context, tx pgx.Tx, beforeCommit func(context.Co
 		}
 	}
 	if err := VerifyDatedParticipationContract(ctx, tx); err != nil {
+		return err
+	}
+	if err := VerifyTrainingScheduleMigrationFinal(ctx, tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -162,11 +162,20 @@ func buildStructuredWeekWorkspace(audiences []pages.StructuredTrainingAudience, 
 			if session.StartsOn != date {
 				continue
 			}
-			appointment := pages.StructuredWorkspaceAppointment{ID: session.ID, Title: session.Title, StartsOn: session.StartsOn, EndsOn: session.EndsOn, StartsAt: session.StartsAt, EndsAt: session.EndsAt, EntryKind: session.EntryKind, Status: session.Status, URL: structuredPlannerURL(groupID, weekID, session.ID, date), Modalities: session.Modalities, Selected: session.ID == sessionID}
-			if session.StartsAt != "" && session.StartsAt < "12:00" {
+			appointment := pages.StructuredWorkspaceAppointment{Label: session.Schedule.Label, Precision: session.Schedule.Precision, Band: session.Schedule.Band, TimeUnknown: session.Schedule.Known && session.Schedule.StartsAt == "", EndUnknown: session.Schedule.Known && session.Schedule.EndsAt == "", ID: session.ID, Title: session.Title, StartsOn: session.StartsOn, EndsOn: session.EndsOn, StartsAt: session.StartsAt, EndsAt: session.EndsAt, EntryKind: session.EntryKind, Status: session.Status, URL: structuredPlannerURL(groupID, weekID, session.ID, date), Modalities: session.Modalities, Selected: session.ID == sessionID}
+			switch {
+			case session.Schedule.Known && session.Schedule.Precision == "DAY":
+				record.Unscheduled = append(record.Unscheduled, appointment)
+			case session.Schedule.Known && session.Schedule.Precision == "BAND" && session.Schedule.Band == "MORNING":
 				record.Morning = append(record.Morning, appointment)
-			} else {
+			case session.Schedule.Known && session.Schedule.Precision == "BAND" && session.Schedule.Band == "AFTERNOON":
 				record.Afternoon = append(record.Afternoon, appointment)
+			case session.StartsAt != "" && session.StartsAt < "12:00":
+				record.Morning = append(record.Morning, appointment)
+			case session.StartsAt != "":
+				record.Afternoon = append(record.Afternoon, appointment)
+			default:
+				record.Unscheduled = append(record.Unscheduled, appointment)
 			}
 		}
 		order := func(a []pages.StructuredWorkspaceAppointment) {

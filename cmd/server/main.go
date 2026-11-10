@@ -16,6 +16,7 @@ import (
 	"github.com/cfcoimbra/mycfc/internal/config"
 	"github.com/cfcoimbra/mycfc/internal/db"
 	"github.com/cfcoimbra/mycfc/internal/releasecontract"
+	"github.com/cfcoimbra/mycfc/internal/trainingcompat"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -59,6 +60,29 @@ func main() {
 }
 
 func runServerCommand(ctx context.Context, args []string) error {
+	if len(args) == 1 && args[0] == "normal-release-contract" {
+		if !releasecontract.Matches(releasecontract.Version, releasecontract.Candidate, releasecontract.Database) || releasecontract.FinalDigest != db.EmbeddedMigrationDigest() {
+			return errors.New("normal release compiled identity or inventory mismatch")
+		}
+		return json.NewEncoder(os.Stdout).Encode(struct {
+			Contract     string `json:"contract"`
+			Version      string `json:"version"`
+			Candidate    string `json:"candidate"`
+			Database     string `json:"database"`
+			ParentDigest string `json:"parent_digest"`
+			FinalDigest  string `json:"final_digest"`
+		}{"mycfc/normal-release/v1", releasecontract.Version, releasecontract.Candidate, releasecontract.Database, releasecontract.NormalParentDigest, releasecontract.FinalDigest})
+	}
+
+	if len(args) == 1 && args[0] == "precision-capabilities" {
+		return json.NewEncoder(os.Stdout).Encode(trainingcompat.Compiled())
+	}
+	if len(args) == 1 && args[0] == "precision-status" {
+		return trainingPrecisionStatus(ctx)
+	}
+	if len(args) == 0 {
+		return errors.New("server command required")
+	}
 	if len(args) == 1 && args[0] == "disposable-release-contract" {
 		return json.NewEncoder(os.Stdout).Encode(map[string]string{"version": releasecontract.Version, "candidate": releasecontract.Candidate, "database": releasecontract.Database, "predecessor_digest": releasecontract.PredecessorDigest, "final_digest": releasecontract.FinalDigest, "baseline_digest": releasecontract.BaselineDigest})
 	}

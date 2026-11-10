@@ -138,11 +138,12 @@ func FreshInitializationMatchesWithInspector(ctx context.Context, receiptConn in
 	// Before the reviewed forward migration, the original protected receipt
 	// still has its genesis ledger. After migration, the immutable receipt
 	// remains genesis-owned while the actual ledger advances to this binary.
-	if ledgerDigest != EmbeddedMigrationDigest() && !(genesis && ledgerDigest == releasecontract.FreshGenesisDigest) {
+	if ledgerDigest != EmbeddedMigrationDigest() && !(genesis && (ledgerDigest == releasecontract.FreshGenesisDigest || ledgerDigest == releasecontract.NormalParentDigest)) {
 		return false, errors.New("fresh initialization ledger mismatch")
 	}
 	if err := VerifyDatedParticipationContract(ctx, tx); err != nil {
 		return false, errors.New("fresh initialization schema mismatch")
 	}
+	if err := verifyTrainingScheduleAdmissionSchema(ctx,tx,ledgerDigest);err!=nil{return false,err}
 	return true, nil
 }
