@@ -16,10 +16,9 @@ for the new features. Use new disposable local fixtures and proportionate real
 tests. Authentication, authorization, privacy and enforced protections remain
 required.
 
-Recipient publication review and plain-water workout creation are implemented
-and locally verified. The next bounded increment expands structured water and
-mixed-activity creation using the existing models, followed by identity-preserving
-editing. Necessary work includes fresh schema integrity definitions, scoped
+Recipient publication review and full structured/mixed workout creation are
+implemented and locally verified. The next bounded increment is identity-preserving
+editing using the existing models and lifecycle rules. Necessary work includes fresh schema integrity definitions, scoped
 queries, authenticated handler/UI integration and proportionate real tests.
 Saving a draft does not publish it. Existing-record conversion, backfill and
 legacy upgrade rehearsals remain outside delivery gates; their optional work
