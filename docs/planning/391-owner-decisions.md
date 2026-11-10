@@ -70,15 +70,11 @@ of existing records are different work. Existing-record conversion, backfill,
 legacy upgrade controllers and upgrade rehearsals are dropped from required
 #391 delivery; their existing checkpoints remain saved, not deleted.
 
-The current #401 copy/routine-reuse increment requires no additional DDL. Its
-scoped queries, native coach UI and authenticated application integration are
-assembled locally. Focused Go/PostgreSQL checks and independent QA/security
-reviews cover the current production source. The combined browser verification
-is still pending: two attempts stopped during synthetic fixture seeding before
-any browser case ran. Correct the fixtures while preserving schema protections;
-do not report those attempts as browser passes.
-
-This is the next shippable increment, subject to that bounded verification.
+The current #401 draft copy/routine-reuse increment requires no additional DDL.
+Its scoped queries, native coach UI and authenticated integration are locally
+verified, including the combined twelve-case browser run. The next bounded
+integration is mixed-schedule review/publication followed by actual native
+copy → edit → publish evidence. This does not establish full #401/#391 acceptance.
 Later dated placements still need fresh-schema placement/return/access-withdrawal
 definitions, generated queries and all affected read/publication integration.
 Those are feature requirements, not a request to convert existing records.

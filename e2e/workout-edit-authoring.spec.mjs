@@ -68,7 +68,17 @@ async function openFromWeek(page, plan, session) {
   const link = page.locator(`a[href="${route(plan, session)}"]`);
   await expect(link).toHaveCount(1); await expect(link).toHaveAttribute('aria-label', /Alterar.*sintétic/i);
   const parent = link.locator('xpath=..');
-  await expect(parent.locator(':scope > a')).toHaveCount(3); // detail, edit, cancel are siblings
+  // Copy/routine/adapt may add siblings; the original task links stay exact.
+  await expect(parent.locator(`:scope > a[href="${route(plan, session)}"]`)).toHaveCount(1);
+  await expect(parent.locator(`:scope > a[href="${route(plan, session, 'cancelar')}"]`)).toHaveCount(1);
+  await expect(page.locator(`a[href="${route(plan, session, 'cancelar')}"]`)).toHaveCount(1);
+  const detail = parent.locator(':scope > a').first();
+  const detailURL = new URL(await detail.getAttribute('href'), 'http://fixture.test');
+  expect(detailURL.pathname).toBe('/admin/treinos/estruturados');
+  expect(detailURL.searchParams.get('group_id')).toBe(id(200));
+  expect(detailURL.searchParams.get('week_id')).toBe(id(plan));
+  expect(detailURL.searchParams.get('session_id')).toBe(id(session));
+  await expect(parent.locator('a a')).toHaveCount(0);
   await link.click(); await expect(page).toHaveURL(route(plan, session));
   await expect(editor(page)).toHaveCount(1); await expect(field(page, 'session_id')).toHaveValue(id(session));
   await expect(field(page, 'schedule.date')).not.toHaveAttribute('readonly', '');
