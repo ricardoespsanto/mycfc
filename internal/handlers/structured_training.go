@@ -3513,88 +3513,12 @@ type waterMeasureTotal struct {
 }
 
 func calculateWaterTotals(steps []pages.StructuredWaterStep) []pages.StructuredWaterTotal {
-	if len(steps) == 0 {
-		return nil
+	totals, err := calculateWaterTotalsChecked(steps)
+	if err == nil {
+		return totals
 	}
-	children := map[string][]pages.StructuredWaterStep{}
-	for _, step := range steps {
-		children[step.ParentID] = append(children[step.ParentID], step)
-	}
-	duration, distance, recovery := waterMeasureTotal{}, waterMeasureTotal{}, waterMeasureTotal{hasValue: true}
-	byIntensity := map[string]*waterMeasureTotal{}
-	var walk func(string, int64, map[string]bool)
-	walk = func(parentID string, multiplier int64, ancestors map[string]bool) {
-		for _, step := range children[parentID] {
-			if ancestors[step.ID] {
-				duration.unknown, distance.unknown, recovery.unknown = true, true, true
-				continue
-			}
-			if step.Kind == "REPEAT_GROUP" {
-				repeats := int64(step.Repeats)
-				if repeats < 1 || multiplier > (1<<63-1)/repeats {
-					duration.unknown, distance.unknown, recovery.unknown = true, true, true
-					continue
-				}
-				next := make(map[string]bool, len(ancestors)+1)
-				for id := range ancestors {
-					next[id] = true
-				}
-				next[step.ID] = true
-				walk(step.ID, multiplier*repeats, next)
-				if step.Recovery > 0 && repeats > 1 {
-					recovery.value += int64(step.Recovery) * (repeats - 1) * multiplier
-				}
-				continue
-			}
-			if step.DurationSeconds > 0 {
-				duration.value += int64(step.DurationSeconds) * multiplier
-				duration.hasValue = true
-				duration.estimated = duration.estimated || step.DurationCertainty == "ESTIMATED"
-			} else {
-				duration.unknown = true
-			}
-			if step.DistanceMetres > 0 {
-				distance.value += int64(step.DistanceMetres) * multiplier
-				distance.hasValue = true
-				distance.estimated = distance.estimated || step.DistanceCertainty == "ESTIMATED"
-			} else {
-				distance.unknown = true
-			}
-			if step.Recovery > 0 {
-				recovery.value += int64(step.Recovery) * multiplier
-			}
-			if step.Intensity != "" {
-				code := strings.TrimSpace(strings.Split(step.Intensity, " · ")[0])
-				total := byIntensity[code]
-				if total == nil {
-					total = &waterMeasureTotal{}
-					byIntensity[code] = total
-				}
-				if step.DurationSeconds > 0 {
-					total.value += int64(step.DurationSeconds) * multiplier
-					total.hasValue = true
-					total.estimated = total.estimated || step.DurationCertainty == "ESTIMATED"
-				} else {
-					total.unknown = true
-				}
-			}
-		}
-	}
-	walk("", 1, map[string]bool{})
-	totals := []pages.StructuredWaterTotal{
-		waterTotalView("Esforço planeado", duration, formatTrainingDuration),
-		waterTotalView("Recuperação planeada", recovery, formatTrainingDuration),
-		waterTotalView("Distância planeada", distance, func(value int64) string { return formatKilometres(value) }),
-	}
-	codes := make([]string, 0, len(byIntensity))
-	for code := range byIntensity {
-		codes = append(codes, code)
-	}
-	sort.Strings(codes)
-	for _, code := range codes {
-		totals = append(totals, waterTotalView("Tempo em "+code, *byIntensity[code], formatTrainingDuration))
-	}
-	return totals
+	unknown := waterMeasureTotal{unknown: true}
+	return []pages.StructuredWaterTotal{waterTotalView("Esforço planeado", unknown, formatTrainingDuration), waterTotalView("Recuperação planeada", unknown, formatTrainingDuration), waterTotalView("Distância planeada", unknown, func(n int64) string { return formatKilometres(n) })}
 }
 
 func waterTotalView(label string, total waterMeasureTotal, format func(int64) string) pages.StructuredWaterTotal {

@@ -39,7 +39,7 @@ func publicationTransactionError(outcome db.SessionTxResult, err error) error {
 	return trainingScheduleWriteError(err)
 }
 
-// Only the intentional recipient/event NOWAIT stages use this55P03 mapping.
+// Only intentional recipient/event/selected-profile NOWAIT stages use this55P03 mapping.
 func publicationNowaitError(err error) error {
 	var pgError *pgconn.PgError
 	if errors.As(err, &pgError) && pgError.Code == "55P03" {

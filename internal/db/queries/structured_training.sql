@@ -468,12 +468,16 @@ SELECT created.id, created.name, created.craft, created.revision, created.supers
 FROM created;
 
 -- name: CreateWaterIntensityZone :one
+WITH selected_profile AS (
+ UPDATE ONLY water_intensity_profiles profile SET is_active=profile.is_active
+ WHERE profile.id=sqlc.arg(profile_id) AND profile.is_active RETURNING profile.id
+)
 INSERT INTO water_intensity_zones (profile_id, position, code, label, cadence_min, cadence_max, meaning)
 SELECT profile.id, COALESCE(max(zone.position), 0) + 1, sqlc.arg(code), sqlc.arg(label),
        sqlc.narg(cadence_min), sqlc.narg(cadence_max), sqlc.arg(meaning)
-FROM water_intensity_profiles profile
+FROM selected_profile profile
 LEFT JOIN water_intensity_zones zone ON zone.profile_id = profile.id
-WHERE profile.id = sqlc.arg(profile_id) AND profile.is_active
+WHERE profile.id = sqlc.arg(profile_id)
 GROUP BY profile.id
 ON CONFLICT (profile_id, code) DO UPDATE SET
  label = EXCLUDED.label,
@@ -500,6 +504,7 @@ SELECT move_training_segment_block(sqlc.arg(block_id), sqlc.arg(direction));
 SELECT move_gym_exercise(sqlc.arg(exercise_id), sqlc.arg(direction));
 
 -- name: ListStructuredTrainingOverviewForManager :many
+WITH RECURSIVE scoped_overview AS (
 SELECT group_row.id AS group_id, group_row.name AS group_name,
        programme.name_pt AS programme_name, team.name AS team_name,
        (SELECT count(*)::integer FROM training_group_members member WHERE member.group_id = group_row.id) AS member_count,
@@ -563,11 +568,18 @@ WHERE sqlc.arg(is_admin)::boolean
          AND grant_row.revoked_at IS NULL
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
    )
-ORDER BY group_row.name, group_row.id, plan.week_start DESC NULLS LAST, plan.id,
-         public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST, session.id, segment.position, block.position,
-         water_step.created_at NULLS FIRST, exercise.position;
+), water_nodes AS (
+ SELECT DISTINCT water_step_id AS id,water_parent_step_id AS parent_id,water_step_position AS position FROM scoped_overview WHERE water_step_id IS NOT NULL
+), water_tree(id,order_path,id_path) AS (
+ SELECT root.id,ARRAY[root.position]::integer[],ARRAY[root.id]::uuid[] FROM water_nodes root WHERE root.parent_id IS NULL
+ UNION ALL
+ SELECT child.id,water_tree.order_path||child.position,water_tree.id_path||child.id FROM water_nodes child JOIN water_tree ON child.parent_id=water_tree.id WHERE NOT child.id=ANY(water_tree.id_path)
+)
+SELECT source.* FROM scoped_overview source LEFT JOIN water_tree ON water_tree.id=source.water_step_id
+ORDER BY source.group_name,source.group_id,source.week_start DESC NULLS LAST,source.plan_id,source.session_on NULLS LAST,source.starts_at NULLS LAST,source.session_id,source.segment_position,source.block_position,water_tree.order_path NULLS LAST,water_tree.id_path NULLS LAST,source.water_parent_step_id NULLS FIRST,source.water_step_position,source.water_step_id,source.exercise_position,source.exercise_id;
 
 -- name: ListStructuredTrainingOverviewForSubject :many
+WITH RECURSIVE scoped_overview AS (
 SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        group_row.id AS group_id, group_row.name AS group_name,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
@@ -628,9 +640,15 @@ WHERE (subject.id = sqlc.arg(user_id)
   AND subject.is_active
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
-ORDER BY subject.name, subject.id, group_row.name, group_row.id, plan.week_start DESC, plan.id,
-         public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST, session.id, segment.position, block.position,
-         water_step.created_at NULLS FIRST, exercise.position;
+), water_nodes AS (
+ SELECT DISTINCT water_step_id AS id,water_parent_step_id AS parent_id,water_step_position AS position FROM scoped_overview WHERE water_step_id IS NOT NULL
+), water_tree(id,order_path,id_path) AS (
+ SELECT root.id,ARRAY[root.position]::integer[],ARRAY[root.id]::uuid[] FROM water_nodes root WHERE root.parent_id IS NULL
+ UNION ALL
+ SELECT child.id,water_tree.order_path||child.position,water_tree.id_path||child.id FROM water_nodes child JOIN water_tree ON child.parent_id=water_tree.id WHERE NOT child.id=ANY(water_tree.id_path)
+)
+SELECT source.* FROM scoped_overview source LEFT JOIN water_tree ON water_tree.id=source.water_step_id
+ORDER BY source.athlete_name,source.athlete_id,source.group_name,source.group_id,source.week_start DESC,source.plan_id,source.session_on NULLS LAST,source.starts_at NULLS LAST,source.session_id,source.segment_position,source.block_position,water_tree.order_path NULLS LAST,water_tree.id_path NULLS LAST,source.water_parent_step_id NULLS FIRST,source.water_step_position,source.water_step_id,source.exercise_position,source.exercise_id;
 
 -- name: GetStructuredSessionPlanID :one
 SELECT session.plan_id

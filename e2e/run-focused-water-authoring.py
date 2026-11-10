@@ -24,6 +24,7 @@ parser.add_argument('--pg-port', type=int, required=True)
 parser.add_argument('--app-port', type=int, required=True)
 parser.add_argument('--runtime-manifest', type=pathlib.Path, action='append', required=True)
 parser.add_argument('--fixture-date', type=datetime.date.fromisoformat, default=datetime.date.today())
+parser.add_argument('--full-create', action='store_true', help='Also run the three generic full-CREATE cases on extended synthetic fixtures')
 args = parser.parse_args()
 root = pathlib.Path(__file__).resolve().parents[1]
 out = args.evidence.resolve()
@@ -85,13 +86,17 @@ SELECT jsonb_build_object(
      'segments',COALESCE((SELECT jsonb_agg(to_jsonb(g)||jsonb_build_object('blocks',
        COALESCE((SELECT jsonb_agg(to_jsonb(b)||jsonb_build_object(
           'water_prescription',(SELECT to_jsonb(w) FROM water_block_prescriptions w WHERE w.block_id=b.id),
-          'gym_prescription',(SELECT to_jsonb(w) FROM gym_block_prescriptions w WHERE w.block_id=b.id))
+          'gym_prescription',(SELECT to_jsonb(w) FROM gym_block_prescriptions w WHERE w.block_id=b.id),
+          'water_steps',COALESCE((SELECT jsonb_agg(to_jsonb(w) ORDER BY w.parent_step_id NULLS FIRST,w.position,w.id) FROM water_work_steps w WHERE w.block_id=b.id),'[]'::jsonb),
+          'gym_exercises',COALESCE((SELECT jsonb_agg(to_jsonb(e) ORDER BY e.position,e.id) FROM gym_exercises e WHERE e.block_id=b.id),'[]'::jsonb))
          ORDER BY b.position,b.id) FROM training_segment_blocks b WHERE b.segment_id=g.id),'[]'::jsonb))
        ORDER BY g.position,g.id) FROM training_session_segments g WHERE g.session_id=s.id),'[]'::jsonb))
      ORDER BY s.id) FROM training_sessions s WHERE s.plan_id=p.id),'[]'::jsonb))) FROM training_plans p),
  'publications',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM training_plan_publications p),'[]'::jsonb),
  'prescriptions',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM training_prescriptions p),'[]'::jsonb),
- 'outcomes',COALESCE((SELECT jsonb_agg(to_jsonb(o) ORDER BY o.session_id,o.user_id) FROM training_session_outcomes o),'[]'::jsonb));
+ 'outcomes',COALESCE((SELECT jsonb_agg(to_jsonb(o) ORDER BY o.session_id,o.user_id) FROM training_session_outcomes o),'[]'::jsonb),
+ 'profiles',COALESCE((SELECT jsonb_agg(to_jsonb(p) ORDER BY p.id) FROM water_intensity_profiles p),'[]'::jsonb),
+ 'zones',COALESCE((SELECT jsonb_agg(to_jsonb(z) ORDER BY z.profile_id,z.position,z.id) FROM water_intensity_zones z),'[]'::jsonb));
 """))
 
 
@@ -119,7 +124,9 @@ def runtime_hashes():
 def test_hashes():
     return {f: hashlib.sha256((root / f).read_bytes()).hexdigest() for f in [
         'e2e/focused-water-authoring.spec.mjs', 'e2e/focused-water-authoring-seed.sql', 'e2e/run-focused-water-authoring.py',
-        'package.json', 'package-lock.json', 'playwright.config.mjs']}
+        'package.json', 'package-lock.json', 'playwright.config.mjs', *([
+            'e2e/full-workout-authoring.spec.mjs', 'e2e/full-workout-authoring-seed.sql', 'e2e/run-full-workout-authoring.py'
+        ] if args.full_create else [])]}
 
 
 try:
@@ -171,10 +178,17 @@ try:
     params = {'fixture_date': args.fixture_date.isoformat(), 'fixture_start': (args.fixture_date - datetime.timedelta(days=365)).isoformat(),
               'fixture_end': (args.fixture_date + datetime.timedelta(days=400)).isoformat(), 'fixture_week': week.isoformat()}
     variables = [v for key, value in params.items() for v in ['-v', key + '=' + value]]
-    (out / 'seed.log').write_text(sql((root / 'e2e/focused-water-authoring-seed.sql').read_text(), variables))
-    (out / 'fixture.json').write_text(json.dumps({'days': [(week + datetime.timedelta(days=i * 7)).isoformat() for i in range(3)], 'synthetic_dates': params, 'actual_club_season_dates': 'unknown, configurable'}))
-    state = json.loads(sql("SELECT json_build_object('ledger_count',(SELECT count(*) FROM mycfc_meta.schema_migrations),'floor',(SELECT required_reader FROM training_schedule_control.state),'schema',(SELECT schema_contract FROM training_schedule_control.state),'partial_enabled',(SELECT partial_v2_enabled FROM training_schedule_control.state),'database',current_database())"))
-    assert state['floor'] == 3 and state['schema'] == 'schedule-p1' and state['partial_enabled'] is True and state['ledger_count'] == 81
+    seed = (root / 'e2e/focused-water-authoring-seed.sql').read_text()
+    if args.full_create:
+        seed += '\n' + (root / 'e2e/full-workout-authoring-seed.sql').read_text()
+    (out / 'seed.log').write_text(sql(seed, variables))
+    (out / 'fixture.json').write_text(json.dumps({'days': [(week + datetime.timedelta(days=i * 7)).isoformat() for i in range(6 if args.full_create else 3)], 'synthetic_dates': params, 'actual_club_season_dates': 'unknown, configurable', 'full_create': args.full_create, 'synthetic_profile': '39139900-0000-0000-0000-000000000900'}))
+    state = json.loads(sql("SELECT json_build_object('ledger_count',(SELECT count(*) FROM mycfc_meta.schema_migrations),'ledger_versions',(SELECT json_agg(version ORDER BY version) FROM mycfc_meta.schema_migrations),'floor',(SELECT required_reader FROM training_schedule_control.state),'schema',(SELECT schema_contract FROM training_schedule_control.state),'partial_enabled',(SELECT partial_v2_enabled FROM training_schedule_control.state),'database',current_database())"))
+    # Match actual source go:embed migrations/*.sql plus the explicit baseline marker.
+    expected_versions = sorted(['reset-baseline-v1', *[path.stem for path in (root / 'internal/db/migrations').glob('*.sql')]])
+    assert state['floor'] == 3 and state['schema'] == 'schedule-p1' and state['partial_enabled'] is True
+    assert state['ledger_count'] == len(expected_versions) and state['ledger_versions'] == expected_versions
+    state['expected_source_inventory'] = expected_versions
     (out / 'prepared-state.json').write_text(json.dumps(state))
     env['DATABASE_URL'] = dsn('authoring_web', 'synthetic-web')
     with (out / 'app.log').open('w') as stream:
@@ -211,13 +225,17 @@ try:
     (source / 'e2e').mkdir(parents=True)
     for filename in ['package.json', 'package-lock.json', 'playwright.config.mjs']:
         shutil.copyfile(root / filename, source / filename)
-    shutil.copyfile(root / 'e2e/focused-water-authoring.spec.mjs', source / 'e2e/focused-water-authoring.spec.mjs')
+    specs = ['e2e/focused-water-authoring.spec.mjs']
+    if args.full_create:
+        specs.append('e2e/full-workout-authoring.spec.mjs')
+    for relative in specs:
+        shutil.copyfile(root / relative, source / relative)
     run(['npm', 'ci', '--ignore-scripts', '--prefix', str(source)], 'dependencies.log')
     run(['docker', 'run', '--rm', '--name', browser, '--cidfile', str(out / 'browser.cid'), '--label', label + '=' + name, '--network', 'host',
          '--user', f'{os.getuid()}:{os.getgid()}', '-e', 'HOME=/tmp', '-e', 'E2E_BASE_URL=' + base, '-e', 'E2E_FOCUSED_WATER_AUTHORING=1',
-         '-e', 'E2E_FOCUSED_WATER_EVIDENCE=/evidence', '-e', 'E2E_JSON_OUTPUT=/evidence/browser.json',
+         '-e', 'E2E_FOCUSED_WATER_EVIDENCE=/evidence', '-e', 'E2E_FULL_WORKOUT_AUTHORING=' + ('1' if args.full_create else '0'), '-e', 'E2E_JSON_OUTPUT=/evidence/browser.json',
          '-v', str(source) + ':/src:ro', '-v', str(out) + ':/evidence', '-w', '/src', 'mcr.microsoft.com/playwright:v1.63.0-noble',
-         'node', 'node_modules/@playwright/test/cli.js', 'test', 'e2e/focused-water-authoring.spec.mjs', '--workers=1', '--retries=0', '--output=/evidence/artifacts'], 'browser.log')
+         'node', 'node_modules/@playwright/test/cli.js', 'test', *specs, '--workers=1', '--retries=0', '--output=/evidence/artifacts'], 'browser.log')
     assert runtime == runtime_hashes()
     assert tests == test_hashes()
     (out / 'final-facts.json').write_text(json.dumps(facts(), indent=2))

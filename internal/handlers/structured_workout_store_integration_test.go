@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func focusedRealReview(t *testing.T, store PostgresFocusedWorkoutStore, request FocusedWorkoutRequest) (focusedWorkoutPayload, focusedWorkoutReviewed) {
+func focusedRealReview(t *testing.T, store PostgresFocusedWorkoutStore, request FocusedWorkoutRequest) (focusedGraphReviewPayload, focusedGraphReviewed) {
 	t.Helper()
 	c, err := store.LoadFocusedWorkout(t.Context(), request)
 	if err != nil {
@@ -26,17 +26,21 @@ func focusedRealReview(t *testing.T, store PostgresFocusedWorkoutStore, request 
 	draft.Values.Set("schedule.start_time", "16:00")
 	draft.Values.Set(focusedPhasePrefix("p_1")+".instructions", "Preparar a técnica e aquecer.")
 	draft.Values.Set(focusedPhasePrefix("p_3")+".instructions", "Regressar com remada leve.")
-	proposal, errs := normalizeFocusedWater(c, draft)
+	graphDraft, parseErr := parseFocusedGraph(focusedDraftWithRemovalFields(draft))
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	proposal, errs := normalizeFocusedGraph(c, graphDraft)
 	if len(errs) > 0 {
 		t.Fatal(errs)
 	}
-	allocateFocusedWaterIDs(&proposal)
-	payload := focusedWorkoutPayload{Proposal: proposal, Draft: focusedDraftWithRemovalFields(draft)}
-	raw, token, err := focusedWorkoutReviews.sign(payload, time.Now())
+	allocateFocusedGraphIDs(&proposal, nil)
+	payload := focusedGraphReviewPayload{Proposal: proposal, Draft: focusedGraphValues(graphDraft)}
+	raw, token, err := focusedWorkoutReviews.signGraph(payload, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, reviewed, err := focusedWorkoutReviews.verify(raw, token, c.ActorID, c.PlanID, time.Now())
+	_, reviewed, err := focusedWorkoutReviews.verifyGraph(raw, token, c.ActorID, c.PlanID, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,11 +80,11 @@ func TestFocusedWaterFreshAtomicCreateReplayGateAndHistory(t *testing.T) {
 	if err = f.web.QueryRow(t.Context(), `SELECT coalesce(jsonb_agg(to_jsonb(x)),'[]'::jsonb)::text FROM training_prescriptions x`).Scan(&historyBefore); err != nil {
 		t.Fatal(err)
 	}
-	result, err := store.SaveFocusedWorkout(t.Context(), reviewed)
+	result, err := store.SaveFocusedGraph(t.Context(), reviewed)
 	if err != nil || result.AlreadyCreated || result.SessionID != payload.Proposal.SessionID {
 		t.Fatalf("save %+v %v", result, err)
 	}
-	repeated, err := store.SaveFocusedWorkout(t.Context(), reviewed)
+	repeated, err := store.SaveFocusedGraph(t.Context(), reviewed)
 	if err != nil || !repeated.AlreadyCreated || repeated.SessionID != result.SessionID {
 		t.Fatalf("exact replay %+v %v", repeated, err)
 	}
@@ -101,14 +105,14 @@ func TestFocusedWaterFreshAtomicCreateReplayGateAndHistory(t *testing.T) {
 	// Another draft modification after review is an honest stale conflict.
 	_, stale := focusedRealReview(t, store, request)
 	f.exec(t, `UPDATE training_plans SET title='Changed source week' WHERE id=$1`, f.plan)
-	if _, err = store.SaveFocusedWorkout(t.Context(), stale); !errors.Is(err, errFocusedWorkoutConflict) {
+	if _, err = store.SaveFocusedGraph(t.Context(), stale); !errors.Is(err, errFocusedWorkoutConflict) {
 		t.Fatal("stale source accepted", err)
 	}
 	_, fresh := focusedRealReview(t, store, request)
 	if _, err = f.low.Exec(t.Context(), `SELECT training_schedule_control.set_enabled($1,$2,false)`, fresh.Proposal.Context.DatabaseIncarnation, fresh.Proposal.Context.StateEpoch); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.SaveFocusedWorkout(t.Context(), fresh); err == nil {
+	if _, err = store.SaveFocusedGraph(t.Context(), fresh); err == nil {
 		t.Fatal("closed/epochchanged gate accepted")
 	}
 }
@@ -130,14 +134,14 @@ func TestFocusedWaterCreateFinalPhaseFailureRollsBackWholeGraph(t *testing.T) {
 	// Test-only late DB fault, outside protected publication catalog: rollback
 	// must remove the new session and all previously inserted plain phases.
 	name := "focused_fault_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	if _, err = f.root.Exec(t.Context(), `CREATE FUNCTION `+name+`() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id='`+reviewed.Proposal.Phases[2].ID.String()+`'::uuid THEN RAISE EXCEPTION 'synthetic final phase fault'; END IF; RETURN NEW; END $$;CREATE TRIGGER `+name+` BEFORE INSERT ON training_segment_blocks FOR EACH ROW EXECUTE FUNCTION `+name+`() `); err != nil {
+	if _, err = f.root.Exec(t.Context(), `CREATE FUNCTION `+name+`() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id='`+reviewed.Proposal.Activities[0].Phases[2].ID.String()+`'::uuid THEN RAISE EXCEPTION 'synthetic final phase fault'; END IF; RETURN NEW; END $$;CREATE TRIGGER `+name+` BEFORE INSERT ON training_segment_blocks FOR EACH ROW EXECUTE FUNCTION `+name+`() `); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.SaveFocusedWorkout(t.Context(), reviewed); err == nil {
+	if _, err = store.SaveFocusedGraph(t.Context(), reviewed); err == nil {
 		t.Fatal("late phase fault accepted")
 	}
 	var sessions, segments, phases int
-	if err = f.web.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM training_sessions WHERE id=$1),(SELECT count(*) FROM training_session_segments WHERE session_id=$1),(SELECT count(*) FROM training_segment_blocks WHERE id=ANY($2::uuid[]))`, reviewed.Proposal.SessionID, []uuid.UUID{reviewed.Proposal.Phases[0].ID, reviewed.Proposal.Phases[1].ID, reviewed.Proposal.Phases[2].ID}).Scan(&sessions, &segments, &phases); err != nil || sessions != 0 || segments != 0 || phases != 0 {
+	if err = f.web.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM training_sessions WHERE id=$1),(SELECT count(*) FROM training_session_segments WHERE session_id=$1),(SELECT count(*) FROM training_segment_blocks WHERE id=ANY($2::uuid[]))`, reviewed.Proposal.SessionID, []uuid.UUID{reviewed.Proposal.Activities[0].Phases[0].ID, reviewed.Proposal.Activities[0].Phases[1].ID, reviewed.Proposal.Activities[0].Phases[2].ID}).Scan(&sessions, &segments, &phases); err != nil || sessions != 0 || segments != 0 || phases != 0 {
 		t.Fatalf("partial graph %d/%d/%d %v", sessions, segments, phases, err)
 	}
 }
@@ -162,7 +166,7 @@ func TestFocusedWaterRealScopedRevocation(t *testing.T) {
 	if _, err = f.root.Exec(t.Context(), `DELETE FROM user_platform_roles WHERE user_id=$1`, f.actor); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.SaveFocusedWorkout(context.Background(), reviewed); !errors.Is(err, pgx.ErrNoRows) {
+	if _, err = store.SaveFocusedGraph(context.Background(), reviewed); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatal("fresh revoked scope not denied", err)
 	}
 }
@@ -187,21 +191,21 @@ func TestFocusedWaterActualArtifactBoundaryAndWholeRollback(t *testing.T) {
 	payload, _ := focusedRealReview(t, store, req)
 	p := payload.Proposal
 	p.Description = ""
-	p.Phases = nil
+	p.Activities[0].Phases = nil
 	for i := 0; i < 32; i++ {
-		p.Phases = append(p.Phases, focusedWaterPhase{Key: fmt.Sprintf("p_%d", i+1), ID: uuid.New(), Purpose: "MAIN", Instructions: "\\\\"})
+		p.Activities[0].Phases = append(p.Activities[0].Phases, focusedGraphPhaseInput{Key: fmt.Sprintf("p_%d", i+1), ID: uuid.New(), Purpose: "MAIN", Instructions: "\\\\"})
 	}
 	setSize := func(extra int, pad bool) int32 {
-		for i := range p.Phases {
+		for i := range p.Activities[0].Phases {
 			n := min(extra, 3998)
 			extra -= n
-			p.Phases[i].Instructions = strings.Repeat("\\", 2+n)
+			p.Activities[0].Phases[i].Instructions = strings.Repeat("\\", 2+n)
 		}
 		p.Description = ""
 		if pad {
 			p.Description = "x"
 		}
-		raw, e := focusedWaterArtifact(p)
+		raw, e := focusedGraphArtifact(p)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -227,8 +231,8 @@ func TestFocusedWaterActualArtifactBoundaryAndWholeRollback(t *testing.T) {
 	if size != focusedWorkoutMaxArtifactBytes {
 		t.Fatalf("could not construct actual boundary: %d", size)
 	}
-	accepted := focusedWorkoutReviewed{Proposal: p, verified: true, expiresAt: time.Now().Add(time.Minute)}
-	if _, err = store.SaveFocusedWorkout(t.Context(), accepted); err != nil {
+	accepted := focusedGraphReviewed{Proposal: p, verified: true, expiresAt: time.Now().Add(time.Minute)}
+	if _, err = store.SaveFocusedGraph(t.Context(), accepted); err != nil {
 		t.Fatal("actual 200000B boundary rejected", err)
 	}
 	c, err := store.LoadFocusedWorkout(t.Context(), req)
@@ -237,13 +241,13 @@ func TestFocusedWaterActualArtifactBoundaryAndWholeRollback(t *testing.T) {
 	}
 	p.Context = c
 	p.SessionID = uuid.New()
-	p.Activity.ID = uuid.New()
-	for i := range p.Phases {
-		p.Phases[i].ID = uuid.New()
+	p.Activities[0].ID = uuid.New()
+	for i := range p.Activities[0].Phases {
+		p.Activities[0].Phases[i].ID = uuid.New()
 	}
 	// One ordinary ASCII byte changes actual JSONB size by exactly one.
 	p.Description += "x"
-	raw, err := focusedWaterArtifact(p)
+	raw, err := focusedGraphArtifact(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,8 +255,8 @@ func TestFocusedWaterActualArtifactBoundaryAndWholeRollback(t *testing.T) {
 	if err != nil || over != focusedWorkoutMaxArtifactBytes+1 {
 		t.Fatal("actual overboundary", over, err)
 	}
-	rejected := focusedWorkoutReviewed{Proposal: p, verified: true, expiresAt: time.Now().Add(time.Minute)}
-	if _, err = store.SaveFocusedWorkout(t.Context(), rejected); !errors.Is(err, errFocusedWorkoutLimit) {
+	rejected := focusedGraphReviewed{Proposal: p, verified: true, expiresAt: time.Now().Add(time.Minute)}
+	if _, err = store.SaveFocusedGraph(t.Context(), rejected); !errors.Is(err, errFocusedWorkoutLimit) {
 		t.Fatal("artifact overflow not rejected", err)
 	}
 	var count int

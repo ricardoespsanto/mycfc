@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"github.com/jackc/pgx/v5/pgtype"
 	"sort"
 	"strings"
@@ -201,26 +200,5 @@ func projectFocusedWater(p focusedWaterProposal) pages.StructuredTrainingSession
 	return audiences[0].Weeks[0].Sessions[0]
 }
 func focusedWaterArtifact(p focusedWaterProposal) ([]byte, error) {
-	projected := projectFocusedWater(p)
-	encoded, err := json.Marshal(projected)
-	if err != nil {
-		return nil, err
-	}
-	session := map[string]json.RawMessage{}
-	if err = json.Unmarshal(encoded, &session); err != nil {
-		return nil, err
-	}
-	delete(session, "EntryKind")
-	session["entry_kind"] = json.RawMessage(`"TRAINING"`)
-	session["schedule"], err = json.Marshal(p.Schedule)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(struct {
-		Version   int                        `json:"schema_version"`
-		PlanID    string                     `json:"plan_id"`
-		PlanTitle string                     `json:"plan_title"`
-		GroupName string                     `json:"group_name"`
-		Session   map[string]json.RawMessage `json:"session"`
-	}{2, p.Context.PlanID.String(), p.Context.PlanTitle, p.Context.GroupName, session})
+	return focusedWorkoutBaseArtifact(projectFocusedWater(p), p.Context, p.Schedule)
 }

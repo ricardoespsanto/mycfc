@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -87,11 +86,8 @@ type FocusedWorkoutSaveResult struct {
 	SessionID                     uuid.UUID
 	AlreadyCreated, CleanupFailed bool
 }
-type FocusedWorkoutStore interface {
-	LoadFocusedWorkout(context.Context, FocusedWorkoutRequest) (FocusedWorkoutContext, error)
-	FocusedWorkoutArtifactSize(context.Context, FocusedWorkoutRequest, []byte) (int32, error)
-	SaveFocusedWorkout(context.Context, focusedWorkoutReviewed) (FocusedWorkoutSaveResult, error)
-}
+type FocusedWorkoutStore = FocusedWorkoutGraphStore
+
 type StructuredWorkout struct {
 	Store            FocusedWorkoutStore
 	System           System

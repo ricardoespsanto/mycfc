@@ -37,7 +37,8 @@ async function login(context) {
 async function openFromWeek(page, plan) {
   const day = fixture().days[plan - 300];
   await page.goto(`/admin/treinos/estruturados?group_id=${id(200)}&week_id=${id(plan)}&day=${day}`);
-  const link = page.getByRole('link', { name: new RegExp(`^Treino de água · .*${day}$`) });
+  const link = page.locator(`a[aria-label$="${day}"][href="/admin/treinos/estruturados/semanas/${id(plan)}/treinos/criar?day=${day}"]`).filter({ hasText: /treino/i });
+  await expect(link).toHaveAttribute('aria-label', new RegExp(`${day}$`));
   await expect(link).toHaveCount(1); await link.click();
   await expect(page).toHaveURL(new RegExp(`/semanas/${id(plan)}/treinos/criar\\?day=${day}$`));
   await expect(editor(page).locator('[name="schedule.date"]')).toHaveValue(day);

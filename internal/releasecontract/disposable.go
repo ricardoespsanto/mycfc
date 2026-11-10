@@ -24,10 +24,10 @@ const FinalDigest = "88bdc8ccf003c6a4994310c11e2d1c18ce5d4b212ccb6eff8113f8499b9
 const BaselineDigest = "fc8f9dbb96dcfd7f49aa81e562bf53684416a32282a26d4d9a9d329f20c14a1f"
 
 // NormalBaselineDigest is for corrected normal fresh/forward verification, not reset.
-const NormalBaselineDigest = "fc6a1662514ccc42cad6d33df3524dd0e74bb1b456b9028bfd80b25a54b52476"
+const NormalBaselineDigest = "55f3ae27c72a07fa75e7d509d513ca434be6a15554eab70da2cb155649cc7f16"
 
 // NormalFinalDigest is independent of the retired disposable FinalDigest pin.
-const NormalFinalDigest = "d35f88da495d5818ae924cb7ca2dabe1488039c0a0d00aa5472847ebe3f579e1"
+const NormalFinalDigest = "3a4600ebe142d7b430c69ce9e9360f974825f4cf6764ff1dcdc4e36eda2976c0"
 
 // NormalAuthoringParentDigest identifies the exact closed C/recipient80 schema.
 const NormalAuthoringParentDigest = "c90c7f02fcc0859420133135bd4b12ea0a4aa27cfccdf150eaea08a9fb08c335"

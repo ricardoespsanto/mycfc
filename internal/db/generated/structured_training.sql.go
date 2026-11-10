@@ -1138,12 +1138,16 @@ func (q *Queries) CreateWaterIntensityProfile(ctx context.Context, arg CreateWat
 }
 
 const createWaterIntensityZone = `-- name: CreateWaterIntensityZone :one
+WITH selected_profile AS (
+ UPDATE ONLY water_intensity_profiles profile SET is_active=profile.is_active
+ WHERE profile.id=$6 AND profile.is_active RETURNING profile.id
+)
 INSERT INTO water_intensity_zones (profile_id, position, code, label, cadence_min, cadence_max, meaning)
 SELECT profile.id, COALESCE(max(zone.position), 0) + 1, $1, $2,
        $3, $4, $5
-FROM water_intensity_profiles profile
+FROM selected_profile profile
 LEFT JOIN water_intensity_zones zone ON zone.profile_id = profile.id
-WHERE profile.id = $6 AND profile.is_active
+WHERE profile.id = $6
 GROUP BY profile.id
 ON CONFLICT (profile_id, code) DO UPDATE SET
  label = EXCLUDED.label,
@@ -2449,6 +2453,7 @@ func (q *Queries) ListStructuredSessionSnapshotsForPlan(ctx context.Context, pla
 }
 
 const listStructuredTrainingOverviewForManager = `-- name: ListStructuredTrainingOverviewForManager :many
+WITH RECURSIVE scoped_overview AS (
 SELECT group_row.id AS group_id, group_row.name AS group_name,
        programme.name_pt AS programme_name, team.name AS team_name,
        (SELECT count(*)::integer FROM training_group_members member WHERE member.group_id = group_row.id) AS member_count,
@@ -2512,9 +2517,15 @@ WHERE $1::boolean
          AND grant_row.revoked_at IS NULL
          AND (grant_row.programme_id = group_row.programme_id OR grant_row.team_id = group_row.team_id)
    )
-ORDER BY group_row.name, group_row.id, plan.week_start DESC NULLS LAST, plan.id,
-         public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST, session.id, segment.position, block.position,
-         water_step.created_at NULLS FIRST, exercise.position
+), water_nodes AS (
+ SELECT DISTINCT water_step_id AS id,water_parent_step_id AS parent_id,water_step_position AS position FROM scoped_overview WHERE water_step_id IS NOT NULL
+), water_tree(id,order_path,id_path) AS (
+ SELECT root.id,ARRAY[root.position]::integer[],ARRAY[root.id]::uuid[] FROM water_nodes root WHERE root.parent_id IS NULL
+ UNION ALL
+ SELECT child.id,water_tree.order_path||child.position,water_tree.id_path||child.id FROM water_nodes child JOIN water_tree ON child.parent_id=water_tree.id WHERE NOT child.id=ANY(water_tree.id_path)
+)
+SELECT source.group_id, source.group_name, source.programme_name, source.team_name, source.member_count, source.plan_id, source.plan_title, source.plan_description, source.season_name, source.week_start, source.planned_load_percentage, source.session_id, source.session_title, source.session_description, source.starts_at, source.ends_at, source.entry_kind, source.schedule_precision, source.scheduled_on, source.day_band, source.session_on, source.session_status, source.segment_id, source.segment_position, source.segment_modality, source.segment_title, source.segment_location, source.planned_duration_minutes, source.planned_start_offset_minutes, source.transition_duration_minutes, source.equipment_notes, source.block_id, source.block_position, source.block_purpose, source.block_title, source.block_instructions, source.gym_structure, source.gym_objective, source.gym_rounds, source.round_recovery_seconds, source.water_method, source.water_intensity_profile_id, source.water_profile_name, source.water_profile_revision, source.water_profile_craft, source.water_target_distance_metres, source.water_target_distance_certainty, source.water_step_id, source.water_parent_step_id, source.water_step_position, source.water_step_kind, source.water_step_name, source.water_step_repeats, source.water_step_duration_seconds, source.water_step_duration_certainty, source.water_step_distance_metres, source.water_step_distance_certainty, source.water_step_recovery_seconds, source.water_step_intensity_code, source.water_step_cadence_spm, source.water_zone_label, source.water_zone_cadence_min, source.water_zone_cadence_max, source.water_zone_meaning, source.water_step_drill_focus, source.water_step_drill_format, source.water_step_role_notes, source.water_step_instructions, source.exercise_id, source.exercise_position, source.exercise_name, source.exercise_sets, source.exercise_repetitions, source.exercise_duration_seconds, source.exercise_distance_metres, source.exercise_recovery_seconds, source.resistance_kind, source.resistance_value, source.resistance_text, source.execution_intent, source.tempo, source.exercise_notes FROM scoped_overview source LEFT JOIN water_tree ON water_tree.id=source.water_step_id
+ORDER BY source.group_name,source.group_id,source.week_start DESC NULLS LAST,source.plan_id,source.session_on NULLS LAST,source.starts_at NULLS LAST,source.session_id,source.segment_position,source.block_position,water_tree.order_path NULLS LAST,water_tree.id_path NULLS LAST,source.water_parent_step_id NULLS FIRST,source.water_step_position,source.water_step_id,source.exercise_position,source.exercise_id
 `
 
 type ListStructuredTrainingOverviewForManagerParams struct {
@@ -2711,6 +2722,7 @@ func (q *Queries) ListStructuredTrainingOverviewForManager(ctx context.Context, 
 }
 
 const listStructuredTrainingOverviewForSubject = `-- name: ListStructuredTrainingOverviewForSubject :many
+WITH RECURSIVE scoped_overview AS (
 SELECT subject.id AS athlete_id, subject.name AS athlete_name,
        group_row.id AS group_id, group_row.name AS group_name,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
@@ -2771,9 +2783,15 @@ WHERE (subject.id = $1
   AND subject.is_active
   AND membership.starts_on <= CURRENT_DATE
   AND (membership.ends_on IS NULL OR membership.ends_on >= CURRENT_DATE)
-ORDER BY subject.name, subject.id, group_row.name, group_row.id, plan.week_start DESC, plan.id,
-         public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST, session.id, segment.position, block.position,
-         water_step.created_at NULLS FIRST, exercise.position
+), water_nodes AS (
+ SELECT DISTINCT water_step_id AS id,water_parent_step_id AS parent_id,water_step_position AS position FROM scoped_overview WHERE water_step_id IS NOT NULL
+), water_tree(id,order_path,id_path) AS (
+ SELECT root.id,ARRAY[root.position]::integer[],ARRAY[root.id]::uuid[] FROM water_nodes root WHERE root.parent_id IS NULL
+ UNION ALL
+ SELECT child.id,water_tree.order_path||child.position,water_tree.id_path||child.id FROM water_nodes child JOIN water_tree ON child.parent_id=water_tree.id WHERE NOT child.id=ANY(water_tree.id_path)
+)
+SELECT source.athlete_id, source.athlete_name, source.group_id, source.group_name, source.plan_id, source.plan_title, source.plan_description, source.season_name, source.week_start, source.planned_load_percentage, source.session_id, source.session_title, source.session_description, source.starts_at, source.ends_at, source.entry_kind, source.schedule_precision, source.scheduled_on, source.day_band, source.session_on, source.segment_id, source.segment_position, source.segment_modality, source.segment_title, source.segment_location, source.planned_duration_minutes, source.planned_start_offset_minutes, source.transition_duration_minutes, source.equipment_notes, source.block_id, source.block_position, source.block_purpose, source.block_title, source.block_instructions, source.gym_structure, source.gym_objective, source.gym_rounds, source.round_recovery_seconds, source.water_method, source.water_intensity_profile_id, source.water_profile_name, source.water_profile_revision, source.water_profile_craft, source.water_target_distance_metres, source.water_target_distance_certainty, source.water_step_id, source.water_parent_step_id, source.water_step_position, source.water_step_kind, source.water_step_name, source.water_step_repeats, source.water_step_duration_seconds, source.water_step_duration_certainty, source.water_step_distance_metres, source.water_step_distance_certainty, source.water_step_recovery_seconds, source.water_step_intensity_code, source.water_step_cadence_spm, source.water_zone_label, source.water_zone_cadence_min, source.water_zone_cadence_max, source.water_zone_meaning, source.water_step_drill_focus, source.water_step_drill_format, source.water_step_role_notes, source.water_step_instructions, source.exercise_id, source.exercise_position, source.exercise_name, source.exercise_sets, source.exercise_repetitions, source.exercise_duration_seconds, source.exercise_distance_metres, source.exercise_recovery_seconds, source.resistance_kind, source.resistance_value, source.resistance_text, source.execution_intent, source.tempo, source.exercise_notes FROM scoped_overview source LEFT JOIN water_tree ON water_tree.id=source.water_step_id
+ORDER BY source.athlete_name,source.athlete_id,source.group_name,source.group_id,source.week_start DESC,source.plan_id,source.session_on NULLS LAST,source.starts_at NULLS LAST,source.session_id,source.segment_position,source.block_position,water_tree.order_path NULLS LAST,water_tree.id_path NULLS LAST,source.water_parent_step_id NULLS FIRST,source.water_step_position,source.water_step_id,source.exercise_position,source.exercise_id
 `
 
 type ListStructuredTrainingOverviewForSubjectRow struct {

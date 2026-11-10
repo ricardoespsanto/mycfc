@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const TrainingWorkoutGraphIntegrityMigration = "202611100004_training_workout_graph_integrity"
+
 const TrainingPartialAuthoringMigration = "202611100003_training_partial_authoring"
 
 const TrainingRecipientRevisionMigration = "202611100002_training_publication_recipient_revision"
@@ -102,6 +104,7 @@ func trainingRecipientInventory(digest string) ([]string, RecipientSchemaPhase) 
 	}
 	if phase != RecipientFinal {
 		excluded[TrainingPartialAuthoringMigration] = true
+		excluded[TrainingWorkoutGraphIntegrityMigration] = true
 	}
 	var inventory []string
 	for _, version := range EmbeddedMigrationInventory() {
@@ -126,7 +129,10 @@ func VerifyTrainingRecipientMigrationFinal(ctx context.Context, q TrainingSchedu
 	if err := VerifyTrainingScheduleMigrationFinal(ctx, q); err != nil {
 		return err
 	}
-	return verifyTrainingRecipientCatalog(ctx, q, false)
+	if err := verifyTrainingRecipientCatalog(ctx, q, false); err != nil {
+		return err
+	}
+	return verifyTrainingWorkoutGraphDefinition(ctx, q)
 }
 
 // VerifyTrainingRecipientRuntime proves DB facts only. The external controller /

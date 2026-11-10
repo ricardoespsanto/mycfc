@@ -293,9 +293,16 @@ func (s *focusedRecoveryStore) FocusedWorkoutArtifactSize(context.Context, Focus
 	s.sizes++
 	return 1, nil
 }
-func (s *focusedRecoveryStore) SaveFocusedWorkout(context.Context, focusedWorkoutReviewed) (FocusedWorkoutSaveResult, error) {
+func (s *focusedRecoveryStore) SaveFocusedGraph(context.Context, focusedGraphReviewed) (FocusedWorkoutSaveResult, error) {
 	s.saves++
 	return FocusedWorkoutSaveResult{}, errors.New("unexpected recovery save")
+}
+
+func (s *focusedRecoveryStore) ListFocusedGraphProfileChoices(context.Context, FocusedWorkoutRequest) ([]focusedGraphProfileChoice, bool, error) {
+	return nil, false, nil
+}
+func (s *focusedRecoveryStore) ReadFocusedGraphPreview(context.Context, FocusedWorkoutRequest, []uuid.UUID) (focusedGraphPreviewSource, error) {
+	return focusedGraphPreviewSource{}, errors.New("unexpected recovery preview")
 }
 
 // Real task routing/ingress/rendering with a fake persistence seam: only proof
@@ -305,12 +312,16 @@ func TestFocusedWaterUnusableProofRecoveryRetainsCopyableRawWithoutFutilePreview
 	c, d := focusedWorkoutFixture()
 	own := "Texto recuperável\n\tsem guardar."
 	d.Values.Set("description", own)
-	p, errs := normalizeFocusedWater(c, d)
+	graphDraft, parseErr := parseFocusedGraph(focusedDraftWithRemovalFields(d))
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	p, errs := normalizeFocusedGraph(c, graphDraft)
 	if len(errs) != 0 {
 		t.Fatal(errs)
 	}
-	allocateFocusedWaterIDs(&p)
-	payload := focusedWorkoutPayload{p, focusedDraftWithRemovalFields(d)}
+	allocateFocusedGraphIDs(&p, nil)
+	payload := focusedGraphReviewPayload{p, focusedGraphValues(graphDraft)}
 	for _, bad := range []string{"expired", "restarted", "invalid"} {
 		t.Run(bad, func(t *testing.T) {
 			signer := focusedWorkoutReviews
@@ -321,7 +332,7 @@ func TestFocusedWaterUnusableProofRecoveryRetainsCopyableRawWithoutFutilePreview
 			if bad == "restarted" {
 				signer.key[0] ^= 1
 			}
-			raw, token, err := signer.sign(payload, issued)
+			raw, token, err := signer.signGraph(payload, issued)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-func TestCompatibilityBinaryDeclaresOnlyExactV1WritesAndDualReaders(t *testing.T) {
+func TestAuthoringBinaryDeclaresImplementedSchedulesAndV1ArtifactWrites(t *testing.T) {
 	c := Compiled()
 	raw, e := json.Marshal(c)
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, expected := range []string{`"reader_generation":3`, `"writer_generation":2`, `"snapshot_read":[1,2]`, `"schema_read":["schedule-c1","schedule-p1"]`, `"write":["INTERVAL","START_ONLY","snapshot-v1"]`} {
+	for _, expected := range []string{`"reader_generation":3`, `"writer_generation":2`, `"snapshot_read":[1,2]`, `"schema_read":["schedule-c1","schedule-p1"]`, `"write":["INTERVAL","START_ONLY","DAY","BAND","snapshot-v1"]`} {
 		if !strings.Contains(string(raw), expected) {
 			t.Fatalf("missing %s: %s", expected, raw)
 		}

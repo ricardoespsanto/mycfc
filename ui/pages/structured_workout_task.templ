@@ -130,7 +130,11 @@ func workoutHasOption(options []StructuredWorkoutChoice, value string) bool {
 	return false
 }
 func workoutScheduleOptions(page StructuredWorkoutTaskPage) []StructuredWorkoutChoice {
-	options := []StructuredWorkoutChoice{{"START_ONLY", "Só hora de início"}, {"INTERVAL", "Início e fim"}}
+	startLabel := "Só hora de início"
+	if page.Context.SessionID == "" {
+		startLabel = "Início, com fim opcional"
+	}
+	options := []StructuredWorkoutChoice{{"START_ONLY", startLabel}, {"INTERVAL", "Início e fim"}}
 	if k := workoutKind(page); k == "REST" || k == "LOGISTICS" {
 		options = append(options, StructuredWorkoutChoice{"DAY", "Hora por definir"}, StructuredWorkoutChoice{"BAND", "Manhã ou tarde, sem hora definida"})
 	}
@@ -377,7 +381,7 @@ func workoutScheduleFieldVisible(page StructuredWorkoutTaskPage, name string) bo
 	case "schedule.start_time":
 		return workoutKind(page) == "TRAINING" || workoutKind(page) == "COMPETITION" || mode == "START_ONLY" || mode == "INTERVAL" || page.Values.Get(name) != ""
 	case "schedule.end_date", "schedule.end_time":
-		return mode == "INTERVAL" || page.Values.Get("schedule.end_date") != "" || page.Values.Get("schedule.end_time") != ""
+		return (page.Context.SessionID == "" && mode == "START_ONLY") || mode == "INTERVAL" || page.Values.Get("schedule.end_date") != "" || page.Values.Get("schedule.end_time") != ""
 	case "schedule.band":
 		return mode == "BAND" || page.Values.Get(name) != ""
 	case "schedule.start_occurrence":
@@ -506,12 +510,14 @@ templ structuredWorkoutTaskContent(page StructuredWorkoutTaskPage) {
 							<p>Tipo: <strong>Treino</strong> · Atividade: <strong>Água</strong></p>
 							<input type="hidden" name="entry_kind" value={ page.Values.Get("entry_kind") }/>
 							@structuredWorkoutHidden(workoutWaterHiddenFields(page))
-							<p>Este treino será guardado como rascunho. A publicação para os atletas é uma ação separada.</p>
 						} else if page.Editing {
 							<p>Tipo: <strong>{ structuredEntryKindLabel(page.Context.EntryKind) }</strong></p>
 							<input type="hidden" name="entry_kind" value={ page.Context.EntryKind }/>
 						} else {
 							@structuredWorkoutSelect(page, "entry_kind", "Tipo", []StructuredWorkoutChoice{{"TRAINING", "Treino"}, {"REST", "Descanso"}, {"COMPETITION", "Competição"}, {"LOGISTICS", "Logística"}}, true, "Alterar o tipo mantém os dados introduzidos até serem revistos.")
+						}
+						if page.WaterCreateOnly || page.Context.SessionID == "" {
+							<p>Este treino será guardado como rascunho. A publicação para os atletas é uma ação separada.</p>
 						}
 						@structuredWorkoutSchedule(page)
 						@structuredWorkoutText(page, "description", "Instruções gerais (opcional)", 4000, false, "")
@@ -590,13 +596,11 @@ templ structuredWorkoutErrors(page StructuredWorkoutTaskPage) {
 
 // Prior proof belongs to transport, never to raw editor values or the new draft.
 templ structuredWorkoutPriorProof(page StructuredWorkoutTaskPage) {
-	if page.WaterCreateOnly {
-		if page.ProposalJSON != "" {
-			<input type="hidden" name="prior_proposal" value={ page.ProposalJSON }/>
-		}
-		if page.ReviewToken != "" {
-			<input type="hidden" name="prior_review_token" value={ page.ReviewToken }/>
-		}
+	if page.ProposalJSON != "" {
+		<input type="hidden" name="prior_proposal" value={ page.ProposalJSON }/>
+	}
+	if page.ReviewToken != "" {
+		<input type="hidden" name="prior_review_token" value={ page.ReviewToken }/>
 	}
 }
 
@@ -613,7 +617,7 @@ templ structuredWorkoutCommand(command, label string, disabled bool) {
 templ structuredWorkoutInput(page StructuredWorkoutTaskPage, name, label, kind, inputMode string, maxLength int, required bool, help string) {
 	<div class="field-group">
 		@components.FieldLabel(workoutFieldID(name), label, required)
-		<input id={ workoutFieldID(name) } name={ name } type={ workoutInputType(kind, page.Values.Get(name)) } inputmode={ inputMode } value={ page.Values.Get(name) } maxlength={ fmt.Sprint(maxLength) } required?={ required } readonly?={ page.WaterCreateOnly && name == "schedule.date" } aria-invalid={ fmt.Sprint(workoutError(page, name) != "") } aria-describedby={ workoutDescribedBy(page, name, help) }/>
+		<input id={ workoutFieldID(name) } name={ name } type={ workoutInputType(kind, page.Values.Get(name)) } inputmode={ inputMode } value={ page.Values.Get(name) } maxlength={ fmt.Sprint(maxLength) } required?={ required } readonly?={ page.Context.SessionID == "" && name == "schedule.date" } aria-invalid={ fmt.Sprint(workoutError(page, name) != "") } aria-describedby={ workoutDescribedBy(page, name, help) }/>
 		if help!="" {
 			@components.FieldHelp(workoutFieldID(name)+"-help", help)
 		}
@@ -660,6 +664,9 @@ templ structuredWorkoutSchedule(page StructuredWorkoutTaskPage) {
 		if !page.WaterCreateOnly {
 			@structuredWorkoutSelect(page, "schedule.mode", "O que sabe sobre o horário?", workoutScheduleOptions(page), true, "")
 			<p>Treinos e competições precisam de uma hora de início real. Descanso e logística também podem ter apenas uma data ou parte do dia.</p>
+			if page.Context.SessionID == "" && page.Values.Get("schedule.mode") == "START_ONLY" {
+				<p>Indique a hora de início real. O fim é opcional; se o indicar, preencha a data e a hora de fim. Nenhuma data ou hora de fim é calculada automaticamente.</p>
+			}
 		} else {
 			<p>Indique a hora de início real. O fim pode ficar por definir; não é calculado a partir das instruções.</p>
 		}
@@ -715,8 +722,8 @@ templ structuredWorkoutActivityForm(page StructuredWorkoutTaskPage, a Structured
 templ structuredWorkoutPhaseForm(page StructuredWorkoutTaskPage, a StructuredWorkoutActivity, p StructuredWorkoutPhase, index int) {
 	<fieldset class="form-section">
 		<legend>{ fmt.Sprintf("Fase %d",index+1) }</legend>
-		@structuredWorkoutSelect(page, workoutPrefix(a.Key, p.Key)+".purpose", "Fase", workoutPhaseOptions(page), true, "")
-		@structuredWorkoutInput(page, workoutPrefix(a.Key, p.Key)+".title", "Título da fase", "text", "", 120, page.Values.Get(workoutPrefix(a.Key, p.Key)+".purpose") == "CUSTOM" && (!page.WaterCreateOnly || workoutPhaseRequired(page, a, p)), "")
+		@structuredWorkoutSelect(page, workoutPrefix(a.Key, p.Key)+".purpose", "Fase", workoutPhaseOptions(page), workoutPhaseRequired(page, a, p), "")
+		@structuredWorkoutInput(page, workoutPrefix(a.Key, p.Key)+".title", "Título da fase", "text", "", 120, page.Values.Get(workoutPrefix(a.Key, p.Key)+".purpose") == "CUSTOM" && workoutPhaseRequired(page, a, p), "")
 		@structuredWorkoutText(page, workoutPrefix(a.Key, p.Key)+".instructions", "Instruções", 4000, workoutPhaseRequired(page, a, p), "Escreva como pretende apresentar esta fase. Não é necessário transformar todas as instruções em números.")
 		<div class="cluster">
 			@structuredWorkoutCommand("phase_up:"+a.Key+":"+p.Key, "Subir fase", index == 0)
@@ -849,7 +856,7 @@ templ structuredWorkoutExerciseForm(page StructuredWorkoutTaskPage, a Structured
 templ structuredWorkoutReview(page StructuredWorkoutTaskPage) {
 	<section aria-labelledby="workout-preview-heading">
 		<h2 id="workout-preview-heading">Pré-visualização do treino</h2>
-		if page.WaterCreateOnly {
+		if page.WaterCreateOnly || page.Context.SessionID == "" {
 			<p>Estas são as instruções de base do treino, antes de adaptações individuais. Confirmar guarda um rascunho; não publica para os atletas.</p>
 		}
 		if page.Message!="" {
@@ -872,7 +879,7 @@ templ structuredWorkoutReview(page StructuredWorkoutTaskPage) {
 					<input type="hidden" name="proposal" value={ page.ProposalJSON }/>
 					<input type="hidden" name="review_token" value={ page.ReviewToken }/>
 					<button class="action action--primary" type="submit">
-						if page.WaterCreateOnly {
+						if page.WaterCreateOnly || page.Context.SessionID == "" {
 							Guardar rascunho
 						} else {
 							Guardar treino

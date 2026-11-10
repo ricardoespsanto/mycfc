@@ -3,11 +3,13 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	csrf "filippo.io/csrf/gorilla"
 	"github.com/a-h/templ"
@@ -49,7 +51,7 @@ func (h StructuredWorkout) serve(w http.ResponseWriter, r *http.Request, action 
 	}
 	defer cancel()
 	r = r.WithContext(ctx)
-	var probe focusedWorkoutPayload
+	var probe focusedGraphReviewPayload
 	day := r.URL.Query().Get("day")
 	if action != "get" {
 		if err = r.ParseForm(); err != nil {
@@ -80,8 +82,8 @@ func (h StructuredWorkout) serve(w http.ResponseWriter, r *http.Request, action 
 		}
 		return
 	}
-	draft := newFocusedWorkoutDraft(day)
-	page := h.page(r, user, source, draft)
+	draft := newFocusedGraphDraft(day)
+	page := h.graphPage(r, user, source, draft)
 	if action == "get" {
 		if !source.AuthoringEnabled || source.SchemaContract != "schedule-p1" {
 			page.ReadOnly = true
@@ -101,22 +103,22 @@ func (h StructuredWorkout) serve(w http.ResponseWriter, r *http.Request, action 
 			h.failure(w, r, 422, page, errFocusedWorkoutInvalid)
 			return
 		}
-		rawDraft, draftErr := parseFocusedWorkoutDraft(probe.Draft)
+		rawDraft, draftErr := parseFocusedGraph(probe.Draft)
 		if draftErr == nil {
 			draft = rawDraft
-			page = h.page(r, user, source, draft)
+			page = h.graphPage(r, user, source, draft)
 			page.Context = focusedPageContext(probe.Proposal.Context)
 		}
 		page.ProposalJSON, page.ReviewToken = r.PostForm.Get("proposal"), r.PostForm.Get("review_token")
-		payload, reviewed, verifyErr := focusedWorkoutReviews.verify(r.PostForm.Get("proposal"), r.PostForm.Get("review_token"), user.ID, plan, time.Now())
+		payload, reviewed, verifyErr := focusedWorkoutReviews.verifyGraph(r.PostForm.Get("proposal"), r.PostForm.Get("review_token"), user.ID, plan, time.Now())
 		if verifyErr != nil {
 			h.unusableReview(w, r, page)
 			return
 		}
-		page = h.page(r, user, source, focusedDraftFromPayload(payload))
+		page = h.graphPage(r, user, source, focusedGraphDraftFromPayload(payload))
 		page.Context = focusedPageContext(payload.Proposal.Context)
 		page.ProposalJSON, page.ReviewToken = r.PostForm.Get("proposal"), r.PostForm.Get("review_token")
-		result, saveErr := h.Store.SaveFocusedWorkout(ctx, reviewed)
+		result, saveErr := h.Store.SaveFocusedGraph(ctx, reviewed)
 		if saveErr != nil {
 			if errors.Is(saveErr, pgx.ErrNoRows) {
 				h.System.NotFound(w, r)
@@ -125,7 +127,7 @@ func (h StructuredWorkout) serve(w http.ResponseWriter, r *http.Request, action 
 			if errors.Is(saveErr, db.ErrCommitOutcomeUnknown) {
 				page.ReadOnly = true
 				page.Message = "Não foi possível confirmar o resultado. Consulte a semana antes de iniciar outro treino."
-				page.Preview = pages.StructuredWorkoutInstructions(projectFocusedWater(payload.Proposal))
+				page.Preview = pages.StructuredWorkoutInstructions(focusedGraphView(payload.Proposal))
 				h.render(w, r, 409, page)
 				return
 			}
@@ -143,15 +145,15 @@ func (h StructuredWorkout) serve(w http.ResponseWriter, r *http.Request, action 
 	// command. Check it before editable validation/version recovery so an
 	// unusable proof stays an honest terminal recovery on every native path.
 	priorRaw, priorToken := r.PostForm.Get("prior_proposal"), r.PostForm.Get("prior_review_token")
-	var prior *focusedWaterProposal
+	var prior *focusedWorkoutGraph
 	if priorRaw != "" || priorToken != "" {
-		old, _, priorErr := focusedWorkoutReviews.verify(priorRaw, priorToken, user.ID, plan, time.Now())
+		old, _, priorErr := focusedWorkoutReviews.verifyGraph(priorRaw, priorToken, user.ID, plan, time.Now())
 		if priorErr != nil || !focusedSameCreateIdentity(old.Proposal.Context, source) {
-			retained, parseErr := parseFocusedWorkoutDraft(r.PostForm)
+			retained, parseErr := parseFocusedGraph(r.PostForm)
 			if parseErr != nil {
-				retained = retainFocusedWorkoutDraft(r.PostForm, day)
+				retained = retainFocusedGraphDraft(r.PostForm, day)
 			}
-			page = h.page(r, user, source, retained)
+			page = h.graphPage(r, user, source, retained)
 			retainFocusedContext(&page, r.PostForm, source)
 			page.ProposalJSON, page.ReviewToken = priorRaw, priorToken
 			h.unusableReview(w, r, page)
@@ -159,15 +161,15 @@ func (h StructuredWorkout) serve(w http.ResponseWriter, r *http.Request, action 
 		}
 		prior = &old.Proposal
 	}
-	draft, err = parseFocusedWorkoutDraft(r.PostForm)
+	draft, err = parseFocusedGraph(r.PostForm)
 	if err != nil {
-		page = h.page(r, user, source, retainFocusedWorkoutDraft(r.PostForm, day))
+		page = h.graphPage(r, user, source, retainFocusedGraphDraft(r.PostForm, day))
 		retainFocusedContext(&page, r.PostForm, source)
 		page.ProposalJSON, page.ReviewToken = priorRaw, priorToken
 		h.failure(w, r, 422, page, err)
 		return
 	}
-	page = h.page(r, user, source, draft)
+	page = h.graphPage(r, user, source, draft)
 	retainFocusedContext(&page, r.PostForm, source)
 	page.ProposalJSON, page.ReviewToken = r.PostForm.Get("prior_proposal"), r.PostForm.Get("prior_review_token")
 	if action == "draft" && !focusedPostedContextValid(r.PostForm, source) {
@@ -175,12 +177,12 @@ func (h StructuredWorkout) serve(w http.ResponseWriter, r *http.Request, action 
 		return
 	}
 	if action == "draft" {
-		draft, err = applyFocusedWorkoutCommand(draft, r.PostForm.Get("command"))
+		draft, err = applyFocusedGraphCommand(draft, r.PostForm.Get("command"))
 		if err != nil {
 			h.failure(w, r, 422, page, err)
 			return
 		}
-		updated := h.page(r, user, source, draft)
+		updated := h.graphPage(r, user, source, draft)
 		updated.Context = page.Context
 		updated.ProposalJSON, updated.ReviewToken = page.ProposalJSON, page.ReviewToken
 		h.render(w, r, 200, updated)
@@ -194,25 +196,35 @@ func (h StructuredWorkout) serve(w http.ResponseWriter, r *http.Request, action 
 		h.failure(w, r, 409, page, errFocusedWorkoutClosed)
 		return
 	}
-	proposal, fieldErrors := normalizeFocusedWater(source, draft)
+	proposal, fieldErrors := normalizeFocusedGraph(source, draft)
 	if len(fieldErrors) > 0 {
 		page.Errors = fieldErrors
 		h.render(w, r, 422, page)
 		return
 	}
-	allocateFocusedWaterIDs(&proposal)
-	if prior != nil {
-		proposal.SessionID = prior.SessionID
-		proposal.Activity.ID = prior.Activity.ID
-		for i := range proposal.Phases {
-			for _, old := range prior.Phases {
-				if proposal.Phases[i].Key == old.Key {
-					proposal.Phases[i].ID = old.ID
-				}
-			}
+	// Source and selected reference facts come from one fresh scoped read
+	// snapshot. Deliberate preview may refresh version, never create identity.
+	previewSource, readErr := h.Store.ReadFocusedGraphPreview(ctx, request, focusedGraphSelectedProfileIDs(proposal))
+	if readErr != nil {
+		if errors.Is(readErr, pgx.ErrNoRows) {
+			h.System.NotFound(w, r)
+			return
 		}
+		h.failure(w, r, 409, page, readErr)
+		return
 	}
-	artifact, err := focusedWaterArtifact(proposal)
+	if !previewSource.Context.AuthoringEnabled {
+		h.failure(w, r, 409, page, errFocusedWorkoutClosed)
+		return
+	}
+	if !focusedSameCreateIdentity(source, previewSource.Context) || (prior != nil && !focusedSameCreateIdentity(prior.Context, previewSource.Context)) {
+		h.unusableReview(w, r, page)
+		return
+	}
+	source = previewSource.Context
+	proposal.Context, proposal.References = source, previewSource.References
+	allocateFocusedGraphIDs(&proposal, prior)
+	artifact, err := focusedGraphArtifact(proposal)
 	if err != nil {
 		h.failure(w, r, 422, page, err)
 		return
@@ -230,18 +242,88 @@ func (h StructuredWorkout) serve(w http.ResponseWriter, r *http.Request, action 
 		h.failure(w, r, 422, page, errFocusedWorkoutLimit)
 		return
 	}
-	payload := focusedWorkoutPayload{Proposal: proposal, Draft: focusedDraftWithRemovalFields(draft)}
-	raw, token, err := focusedWorkoutReviews.sign(payload, time.Now())
+	payload := focusedGraphReviewPayload{Proposal: proposal, Draft: focusedGraphValues(draft)}
+	raw, token, err := focusedWorkoutReviews.signGraph(payload, time.Now())
 	if err != nil {
 		h.failure(w, r, 422, page, err)
 		return
 	}
 	page.Context = focusedPageContext(source)
+	page.GroupName, page.WeekTitle = source.GroupName, source.PlanTitle
 	page.Reviewing = true
 	page.ProposalJSON, page.ReviewToken = raw, token
-	page.Preview = pages.StructuredWorkoutInstructions(projectFocusedWater(proposal))
+	page.Preview = pages.StructuredWorkoutInstructions(focusedGraphView(proposal))
 	h.render(w, r, 200, page)
 }
+func focusedGraphDraftFromPayload(p focusedGraphReviewPayload) focusedGraphDraft {
+	d, _ := parseFocusedGraph(p.Draft)
+	return d
+}
+func newFocusedGraphDraft(day string) focusedGraphDraft {
+	d, _ := parseFocusedGraph(focusedDraftWithRemovalFields(newFocusedWorkoutDraft(day)))
+	return d
+}
+func retainFocusedGraphDraft(input url.Values, day string) focusedGraphDraft {
+	// Semantic field errors retain the full parsed graph. This fallback handles
+	// structurally forged input: only safe own text and valid static scaffolding
+	// are echoed, with the original prior proof retained separately by the caller.
+	d := newFocusedGraphDraft(day)
+	for _, key := range []string{"title", "description"} {
+		if raw := input.Get(key); len(raw) < focusedWorkoutMaxRequestBytes && utf8.ValidString(raw) && !strings.ContainsRune(raw, 0) {
+			d.Values.Set(key, raw)
+		}
+	}
+	return d
+}
+func focusedGraphView(p focusedWorkoutGraph) pages.StructuredTrainingSession {
+	view, _ := projectFocusedGraph(p)
+	return view
+}
+func (h StructuredWorkout) graphPage(r *http.Request, user CurrentUser, c FocusedWorkoutContext, d focusedGraphDraft) pages.StructuredWorkoutTaskPage {
+	base := h.page(r, user, c, newFocusedWorkoutDraft(c.Day))
+	base.Values = d.Values
+	base.Activities = nil
+	base.Removed = nil
+	// The generic presentation is enabled only after the complete vertical path
+	// and the separately owned native-template corrections are integrated.
+	base.WaterCreateOnly = false
+	base.Meta.Title = "Criar treino | MyCFCoimbra"
+	base.Meta.PageLabel = "Criar treino"
+	for _, a := range d.Activities {
+		view := pages.StructuredWorkoutActivity{Key: a.Key}
+		for _, p := range a.Phases {
+			phase := pages.StructuredWorkoutPhase{Key: p.Key}
+			for _, n := range p.Nodes {
+				phase.WaterNodes = append(phase.WaterNodes, pages.StructuredWorkoutWaterNode{Key: n.Key, ParentKey: n.Parent})
+			}
+			for _, key := range p.Exercises {
+				phase.Exercises = append(phase.Exercises, pages.StructuredWorkoutExercise{Key: key})
+			}
+			view.Phases = append(view.Phases, phase)
+		}
+		base.Activities = append(base.Activities, view)
+	}
+	for _, removed := range d.Removed {
+		base.Removed = append(base.Removed, pages.StructuredWorkoutRemoval{Kind: removed.Kind, Key: removed.Key, Label: "Elemento removido", Payload: removed.Payload})
+	}
+	base.StartOccurrences = focusedOccurrenceChoices(d.Values.Get("schedule.date"), d.Values.Get("schedule.start_time"))
+	base.EndOccurrences = focusedOccurrenceChoices(d.Values.Get("schedule.end_date"), d.Values.Get("schedule.end_time"))
+	choices, overflow, err := h.Store.ListFocusedGraphProfileChoices(r.Context(), FocusedWorkoutRequest{c.ActorID, c.PlanID, c.Day})
+	if err != nil {
+		base.ProfilesMessage = "Não foi possível carregar os perfis. Pode manter instruções próprias sem selecionar um perfil."
+	} else if overflow {
+		base.ProfilesMessage = "Há demasiados perfis para esta lista. Pode manter instruções próprias sem selecionar um perfil; contacte um administrador para rever a configuração."
+	} else {
+		for _, choice := range choices {
+			base.Profiles = append(base.Profiles, pages.StructuredWorkoutChoice{Value: choice.ID.String(), Label: fmt.Sprintf("%s · %s · revisão %d", choice.Name, paddlingCraftLabel(string(choice.Craft)), choice.Revision)})
+		}
+		if len(choices) == 0 {
+			base.ProfilesMessage = "Ainda não há perfis configurados. Pode escrever as instruções sem escolher um perfil."
+		}
+	}
+	return base
+}
+
 func focusedDraftFromPayload(p focusedWorkoutPayload) focusedWorkoutDraft {
 	d, _ := parseFocusedWorkoutDraft(p.Draft)
 	return d

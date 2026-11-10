@@ -107,8 +107,9 @@ func TestFocusedWorkoutKindTimingAndNoInventedDefaults(t *testing.T) {
 		t.Fatal("training actual start not required")
 	}
 	assertWorkoutValue(t, body, "schedule.start_time", "")
-	if strings.Contains(body, `name="schedule.end_time"`) || strings.Contains(body, `name="schedule.band"`) {
-		t.Fatal("invented end/band on start-only form")
+	assertWorkoutValue(t, body, "schedule.end_time", "")
+	if strings.Contains(body, `name="schedule.band"`) {
+		t.Fatal("invented band on start-only form")
 	}
 	for _, kind := range []string{"REST", "LOGISTICS"} {
 		p.Values.Set("entry_kind", kind)
@@ -321,13 +322,13 @@ func TestFocusedWorkoutPreviewUsesCallerRendererAndBoundConfirmOnly(t *testing.T
 	}
 	p.Preview = nil
 	body = renderWorkout(t, p)
-	if strings.Contains(body, "Guardar treino") || strings.Contains(body, `action="/workout/confirm"`) {
+	if (strings.Contains(body, "Guardar treino") || strings.Contains(body, "Guardar rascunho")) || strings.Contains(body, `action="/workout/confirm"`) {
 		t.Fatal("missing canonical preview still allowed confirmation")
 	}
 	p.Preview = templ.Raw(`<p>Canonical</p>`)
 	p.ReviewToken = ""
 	body = renderWorkout(t, p)
-	if strings.Contains(body, "Guardar treino") {
+	if strings.Contains(body, "Guardar treino") || strings.Contains(body, "Guardar rascunho") {
 		t.Fatal("unsigned preview allowed confirmation")
 	}
 }
@@ -356,7 +357,7 @@ func TestFocusedWorkoutReadOnlyAndUnsupportedTopologyHaveNoMutationForms(t *test
 			p.ReviewToken = "signed"
 			p.ProposalJSON = "{}"
 			body := renderWorkout(t, p)
-			if strings.Contains(body, "<form") || strings.Contains(body, "Guardar treino") || !strings.Contains(body, "Mais opções de planeamento") || !strings.Contains(body, "Voltar à semana") {
+			if strings.Contains(body, "<form") || (strings.Contains(body, "Guardar treino") || strings.Contains(body, "Guardar rascunho")) || !strings.Contains(body, "Mais opções de planeamento") || !strings.Contains(body, "Voltar à semana") {
 				t.Fatal("read-only fallback allowed mutation or lost recovery")
 			}
 		})
@@ -439,7 +440,7 @@ func TestFocusedWorkoutInvalidReviewCannotOfferSave(t *testing.T) {
 	p.ReviewToken = "old-review"
 	p.Errors = validation.FieldErrors{"form": "A fonte mudou. Reveja o treino."}
 	body := renderWorkout(t, p)
-	if strings.Contains(body, "Guardar treino") || strings.Contains(body, `action="/workout/confirm"`) {
+	if (strings.Contains(body, "Guardar treino") || strings.Contains(body, "Guardar rascunho")) || strings.Contains(body, `action="/workout/confirm"`) {
 		t.Fatal("failed review retained live confirmation")
 	}
 	if !strings.Contains(body, "Continuar a editar") {
@@ -718,9 +719,9 @@ func TestFocusedWaterCreatePriorProofSurvivesNativeDraftAndEditBack(t *testing.T
 	p.WaterCreateOnly = false
 	p.ProposalJSON = "generic-proposal"
 	p.ReviewToken = "generic-token"
-	if body = renderWorkout(t, p); strings.Contains(body, `name="prior_`) {
-		t.Fatal("generic editor behavior changed")
-	}
+	body = renderWorkout(t, p)
+	assertWorkoutValue(t, body, "prior_proposal", p.ProposalJSON)
+	assertWorkoutValue(t, body, "prior_review_token", p.ReviewToken)
 }
 
 func TestFocusedWorkoutInstructionHeadingsMatchRenderingContext(t *testing.T) {
@@ -781,14 +782,149 @@ func TestFocusedWorkoutUnavailablePreviewRetainsEditableRecoveryDraft(t *testing
 		if _, readonly := workoutAttr(workoutControl(t, body, "title"), "readonly"); readonly {
 			t.Fatal("recovery must keep own raw draft editable/copyable")
 		}
-		if waterOnly {
-			assertWorkoutValue(t, body, "prior_proposal", p.ProposalJSON)
-			assertWorkoutValue(t, body, "prior_review_token", p.ReviewToken)
-		}
+		assertWorkoutValue(t, body, "prior_proposal", p.ProposalJSON)
+		assertWorkoutValue(t, body, "prior_review_token", p.ReviewToken)
 		p.PreviewURL = "/workout/preview"
 		body = renderWorkout(t, p)
 		if !strings.Contains(body, `name="command" value="preview" formaction="/workout/preview"`) {
 			t.Fatal("valid context lost ordinary preview action")
 		}
+	}
+}
+
+func TestGenericWorkoutCreateProofAndHonestDraftReview(t *testing.T) {
+	p := workoutFixture()
+	p.ProposalJSON = `{"session":"same-allocated-id","instructions":"</script>&\""}`
+	p.ReviewToken = `trusted-page-token<&"`
+	p.Values.Set("prior_proposal", "untrusted-values-proof")
+	p.Values.Set("prior_review_token", "untrusted-values-token")
+	body := renderWorkout(t, p)
+	assertWorkoutValue(t, body, "prior_proposal", p.ProposalJSON)
+	assertWorkoutValue(t, body, "prior_review_token", p.ReviewToken)
+	if strings.Contains(body, "untrusted-values-") || !strings.Contains(body, "guardado como rascunho") || strings.Contains(body, "<script>") {
+		t.Fatal("generic editor lost trusted escaped proof/draft context")
+	}
+	p.Reviewing = true
+	p.Preview = StructuredWorkoutInstructions(focusedInstructionFixture())
+	body = renderWorkout(t, p)
+	forms := regexp.MustCompile(`(?s)<form\b.*?</form>`).FindAllString(body, -1)
+	if len(forms) != 2 {
+		t.Fatal("edit-back and confirm must stay separate")
+	}
+	assertWorkoutValue(t, forms[0], "prior_proposal", p.ProposalJSON)
+	assertWorkoutValue(t, forms[0], "prior_review_token", p.ReviewToken)
+	assertWorkoutValue(t, forms[1], "proposal", p.ProposalJSON)
+	assertWorkoutValue(t, forms[1], "review_token", p.ReviewToken)
+	if strings.Contains(forms[1], `name="prior_`) || !strings.Contains(body, "instruções de base") || !strings.Contains(body, "não publica para os atletas") || !strings.Contains(body, "Guardar rascunho") {
+		t.Fatal("generic CREATE must explain base instructions and draft-only confirmation")
+	}
+	p.Reviewing = false
+	p.ProposalJSON = ""
+	p.ReviewToken = ""
+	if body = renderWorkout(t, p); strings.Contains(body, `name="prior_`) {
+		t.Fatal("raw Values manufactured first-GET proof")
+	}
+	p.Reviewing = true
+	p.Context.SessionID = "existing-session"
+	p.Preview = templ.Raw(`<p>Instruções existentes</p>`)
+	p.ProposalJSON = `{"existing":true}`
+	p.ReviewToken = "edit-token"
+	body = renderWorkout(t, p)
+	if !strings.Contains(body, "Guardar treino") || strings.Contains(body, "Guardar rascunho") {
+		t.Fatal("future generic EDIT copy must remain unchanged")
+	}
+}
+
+func TestGenericWorkoutCreateDateAndFutureEditContext(t *testing.T) {
+	for _, waterOnly := range []bool{false, true} {
+		for _, sessionID := range []string{"", "existing-session"} {
+			p := workoutFixture()
+			p.WaterCreateOnly = waterOnly
+			p.Context.SessionID = sessionID
+			p.Editing = sessionID != ""
+			p.Context.EntryKind = "TRAINING"
+			body := renderWorkout(t, p)
+			_, readonly := workoutAttr(workoutControl(t, body, "schedule.date"), "readonly")
+			if readonly != (sessionID == "") {
+				t.Fatalf("waterOnly=%t sessionID=%q readonly=%t", waterOnly, sessionID, readonly)
+			}
+			p.Values.Set("schedule.date", "0000-01-01")
+			body = renderWorkout(t, p)
+			assertWorkoutValue(t, body, "schedule.date", "0000-01-01")
+			if kind, _ := workoutAttr(workoutControl(t, body, "schedule.date"), "type"); kind != "text" {
+				t.Fatal("raw invalid selected-date fallback lost")
+			}
+		}
+	}
+}
+
+func TestGenericWorkoutMeaningfulPhaseNativeRequirements(t *testing.T) {
+	for _, tc := range []struct {
+		name, purpose, title, instructions, id string
+		used, custom                           bool
+	}{
+		{name: "blank"},
+		{name: "purpose only", purpose: "MAIN"},
+		{name: "unused custom", purpose: "CUSTOM"},
+		{name: "used custom instructions", purpose: "CUSTOM", instructions: "Texto do treinador", used: true, custom: true},
+		{name: "used custom title", purpose: "CUSTOM", title: "Fase do treinador", used: true, custom: true},
+		{name: "used missing purpose", instructions: "Texto do treinador", used: true},
+		{name: "persisted custom", purpose: "CUSTOM", id: "persisted-phase", used: true, custom: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := workoutFixture()
+			p.Activities[0].Phases = append(p.Activities[0].Phases, StructuredWorkoutPhase{Key: "p_2", ID: tc.id})
+			prefix := "activities[a_1].phases[p_2]"
+			p.Values.Set(prefix+".purpose", tc.purpose)
+			p.Values.Set(prefix+".title", tc.title)
+			p.Values.Set(prefix+".instructions", tc.instructions)
+			body := renderWorkout(t, p)
+			for _, field := range []struct {
+				name     string
+				required bool
+			}{{"purpose", tc.used}, {"title", tc.used && tc.custom}, {"instructions", tc.used}} {
+				_, required := workoutAttr(workoutControl(t, body, prefix+"."+field.name), "required")
+				if required != field.required {
+					t.Fatalf("%s required=%t want%t", field.name, required, field.required)
+				}
+			}
+		})
+	}
+}
+
+func TestGenericWorkoutCreateOptionalExplicitEndTiming(t *testing.T) {
+	for _, mode := range []string{"START_ONLY", "INTERVAL"} {
+		t.Run(mode, func(t *testing.T) {
+			p := workoutFixture()
+			p.Values.Set("schedule.mode", mode)
+			body := renderWorkout(t, p)
+			for _, name := range []string{"schedule.end_date", "schedule.end_time"} {
+				assertWorkoutValue(t, body, name, "")
+				_, required := workoutAttr(workoutControl(t, body, name), "required")
+				if required != (mode == "INTERVAL") {
+					t.Fatalf("%s mode%s required=%t", name, mode, required)
+				}
+			}
+			if !strings.Contains(body, "Início, com fim opcional") || (mode == "START_ONLY" && !strings.Contains(body, "Nenhuma data ou hora de fim é calculada automaticamente.")) {
+				t.Fatal("CREATE optional end label/help missing")
+			}
+		})
+	}
+	p := workoutFixture()
+	p.Context.SessionID = "existing-session"
+	if body := renderWorkout(t, p); strings.Contains(body, `name="schedule.end_time"`) || strings.Contains(body, "Início, com fim opcional") {
+		t.Fatal("generic EDIT timing visibility/copy changed")
+	}
+	p.Context.SessionID = ""
+	p.Values.Set("entry_kind", "REST")
+	for _, mode := range []string{"DAY", "BAND"} {
+		p.Values.Set("schedule.mode", mode)
+		if body := renderWorkout(t, p); strings.Contains(body, `name="schedule.end_date"`) || strings.Contains(body, `name="schedule.end_time"`) {
+			t.Fatal("empty clocks should stay hidden for DAY/BAND")
+		}
+		p.Values.Set("schedule.end_time", "raw-conflict")
+		body := renderWorkout(t, p)
+		assertWorkoutValue(t, body, "schedule.end_time", "raw-conflict")
+		p.Values.Del("schedule.end_time")
 	}
 }

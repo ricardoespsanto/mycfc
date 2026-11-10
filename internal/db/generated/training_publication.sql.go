@@ -13,7 +13,7 @@ import (
 )
 
 const insertPrescription = `-- name: InsertPrescription :one
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$7::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -89,7 +89,7 @@ func (q *Queries) InsertPrescription(ctx context.Context, arg InsertPrescription
 }
 
 const insertPublication = `-- name: InsertPublication :one
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$2::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -147,7 +147,7 @@ func (q *Queries) InsertPublication(ctx context.Context, arg InsertPublicationPa
 }
 
 const lockPublicationCandidateMemberships = `-- name: LockPublicationCandidateMemberships :many
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -206,7 +206,7 @@ func (q *Queries) LockPublicationCandidateMemberships(ctx context.Context, arg L
 }
 
 const lockPublicationCandidateUsers = `-- name: LockPublicationCandidateUsers :many
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -267,7 +267,7 @@ func (q *Queries) LockPublicationCandidateUsers(ctx context.Context, arg LockPub
 }
 
 const lockPublicationPlan = `-- name: LockPublicationPlan :one
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -320,7 +320,7 @@ func (q *Queries) LockPublicationPlan(ctx context.Context, arg LockPublicationPl
 }
 
 const lockPublicationReferencedEvents = `-- name: LockPublicationReferencedEvents :many
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -396,7 +396,7 @@ func (q *Queries) LockPublicationReferencedEvents(ctx context.Context, arg LockP
 }
 
 const publicationEligibleRecipients = `-- name: PublicationEligibleRecipients :many
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -431,8 +431,8 @@ eligible_recipients AS (
  FROM candidates candidate JOIN input_gate ON true JOIN public.users subject ON subject.id=candidate.subject_id
  WHERE subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
 ),
-overview AS (
-SELECT row_number() OVER(ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST,session.id,segment.position,block.position,water_step.created_at NULLS FIRST,exercise.position) AS _ord,group_row.id AS group_id, group_row.name AS group_name,
+unordered_overview AS (
+SELECT 0::bigint AS _ord,group_row.id AS group_id, group_row.name AS group_name,
        programme.name_pt AS programme_name, team.name AS team_name,
        0::integer AS member_count,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
@@ -488,6 +488,15 @@ LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
 LEFT JOIN water_intensity_zones water_zone ON water_zone.profile_id = water.intensity_profile_id
  AND water_zone.code = water_step.intensity_code
 
+), water_nodes AS (
+ SELECT DISTINCT water_step_id AS id,water_parent_step_id AS parent_id,water_step_position AS position FROM unordered_overview WHERE water_step_id IS NOT NULL
+), water_tree(id,order_path,id_path) AS (
+ SELECT root.id,ARRAY[root.position]::integer[],ARRAY[root.id]::uuid[] FROM water_nodes root WHERE root.parent_id IS NULL
+ UNION ALL
+ SELECT child.id,water_tree.order_path||child.position,water_tree.id_path||child.id FROM water_nodes child JOIN water_tree ON child.parent_id=water_tree.id WHERE NOT child.id=ANY(water_tree.id_path)
+), overview AS (
+ SELECT row_number() OVER(ORDER BY source.session_on NULLS LAST,source.starts_at NULLS LAST,source.session_id,source.segment_position,source.block_position,water_tree.order_path NULLS LAST,water_tree.id_path NULLS LAST,source.water_parent_step_id NULLS FIRST,source.water_step_position,source.water_step_id,source.exercise_position,source.exercise_id) AS _ord,source.group_id,source.group_name,source.programme_name,source.team_name,source.member_count,source.plan_id,source.plan_title,source.plan_description,source.season_name,source.week_start,source.planned_load_percentage,source.session_id,source.session_title,source.session_description,source.starts_at,source.ends_at,source.entry_kind,source.schedule_precision,source.scheduled_on,source.day_band,source.session_on,source.session_status,source.segment_id,source.segment_position,source.segment_modality,source.segment_title,source.segment_location,source.planned_duration_minutes,source.planned_start_offset_minutes,source.transition_duration_minutes,source.equipment_notes,source.block_id,source.block_position,source.block_purpose,source.block_title,source.block_instructions,source.gym_structure,source.gym_objective,source.gym_rounds,source.round_recovery_seconds,source.water_method,source.water_intensity_profile_id,source.water_profile_name,source.water_profile_revision,source.water_profile_craft,source.water_target_distance_metres,source.water_target_distance_certainty,source.water_step_id,source.water_parent_step_id,source.water_step_position,source.water_step_kind,source.water_step_name,source.water_step_repeats,source.water_step_duration_seconds,source.water_step_duration_certainty,source.water_step_distance_metres,source.water_step_distance_certainty,source.water_step_recovery_seconds,source.water_step_intensity_code,source.water_step_cadence_spm,source.water_zone_label,source.water_zone_cadence_min,source.water_zone_cadence_max,source.water_zone_meaning,source.water_step_drill_focus,source.water_step_drill_format,source.water_step_role_notes,source.water_step_instructions,source.exercise_id,source.exercise_position,source.exercise_name,source.exercise_sets,source.exercise_repetitions,source.exercise_duration_seconds,source.exercise_distance_metres,source.exercise_recovery_seconds,source.resistance_kind,source.resistance_value,source.resistance_text,source.execution_intent,source.tempo,source.exercise_notes
+ FROM unordered_overview source LEFT JOIN water_tree ON water_tree.id=source.water_step_id
 ),
 variation_definitions AS (
  SELECT variation.id AS variation_id,variation.plan_id,variation.subject_kind,variation.subject_id,variation.target_membership_id,variation.target_group_id,variation.operation,variation.patch,variation.change_summary,variation.version,variation.created_at
@@ -620,7 +629,7 @@ func (q *Queries) PublicationEligibleRecipients(ctx context.Context, arg Publica
 }
 
 const publicationFinalFacts = `-- name: PublicationFinalFacts :one
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -714,7 +723,7 @@ func (q *Queries) PublicationFinalFacts(ctx context.Context, arg PublicationFina
 }
 
 const publicationLatestHashes = `-- name: PublicationLatestHashes :many
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$2::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -772,7 +781,7 @@ func (q *Queries) PublicationLatestHashes(ctx context.Context, arg PublicationLa
 
 const publicationPlanForReview = `-- name: PublicationPlanForReview :one
 
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -827,7 +836,7 @@ func (q *Queries) PublicationPlanForReview(ctx context.Context, arg PublicationP
 }
 
 const publicationRawSource = `-- name: PublicationRawSource :one
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -862,8 +871,8 @@ eligible_recipients AS (
  FROM candidates candidate JOIN input_gate ON true JOIN public.users subject ON subject.id=candidate.subject_id
  WHERE subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
 ),
-overview AS (
-SELECT row_number() OVER(ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST,session.id,segment.position,block.position,water_step.created_at NULLS FIRST,exercise.position) AS _ord,group_row.id AS group_id, group_row.name AS group_name,
+unordered_overview AS (
+SELECT 0::bigint AS _ord,group_row.id AS group_id, group_row.name AS group_name,
        programme.name_pt AS programme_name, team.name AS team_name,
        0::integer AS member_count,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
@@ -919,6 +928,15 @@ LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
 LEFT JOIN water_intensity_zones water_zone ON water_zone.profile_id = water.intensity_profile_id
  AND water_zone.code = water_step.intensity_code
 
+), water_nodes AS (
+ SELECT DISTINCT water_step_id AS id,water_parent_step_id AS parent_id,water_step_position AS position FROM unordered_overview WHERE water_step_id IS NOT NULL
+), water_tree(id,order_path,id_path) AS (
+ SELECT root.id,ARRAY[root.position]::integer[],ARRAY[root.id]::uuid[] FROM water_nodes root WHERE root.parent_id IS NULL
+ UNION ALL
+ SELECT child.id,water_tree.order_path||child.position,water_tree.id_path||child.id FROM water_nodes child JOIN water_tree ON child.parent_id=water_tree.id WHERE NOT child.id=ANY(water_tree.id_path)
+), overview AS (
+ SELECT row_number() OVER(ORDER BY source.session_on NULLS LAST,source.starts_at NULLS LAST,source.session_id,source.segment_position,source.block_position,water_tree.order_path NULLS LAST,water_tree.id_path NULLS LAST,source.water_parent_step_id NULLS FIRST,source.water_step_position,source.water_step_id,source.exercise_position,source.exercise_id) AS _ord,source.group_id,source.group_name,source.programme_name,source.team_name,source.member_count,source.plan_id,source.plan_title,source.plan_description,source.season_name,source.week_start,source.planned_load_percentage,source.session_id,source.session_title,source.session_description,source.starts_at,source.ends_at,source.entry_kind,source.schedule_precision,source.scheduled_on,source.day_band,source.session_on,source.session_status,source.segment_id,source.segment_position,source.segment_modality,source.segment_title,source.segment_location,source.planned_duration_minutes,source.planned_start_offset_minutes,source.transition_duration_minutes,source.equipment_notes,source.block_id,source.block_position,source.block_purpose,source.block_title,source.block_instructions,source.gym_structure,source.gym_objective,source.gym_rounds,source.round_recovery_seconds,source.water_method,source.water_intensity_profile_id,source.water_profile_name,source.water_profile_revision,source.water_profile_craft,source.water_target_distance_metres,source.water_target_distance_certainty,source.water_step_id,source.water_parent_step_id,source.water_step_position,source.water_step_kind,source.water_step_name,source.water_step_repeats,source.water_step_duration_seconds,source.water_step_duration_certainty,source.water_step_distance_metres,source.water_step_distance_certainty,source.water_step_recovery_seconds,source.water_step_intensity_code,source.water_step_cadence_spm,source.water_zone_label,source.water_zone_cadence_min,source.water_zone_cadence_max,source.water_zone_meaning,source.water_step_drill_focus,source.water_step_drill_format,source.water_step_role_notes,source.water_step_instructions,source.exercise_id,source.exercise_position,source.exercise_name,source.exercise_sets,source.exercise_repetitions,source.exercise_duration_seconds,source.exercise_distance_metres,source.exercise_recovery_seconds,source.resistance_kind,source.resistance_value,source.resistance_text,source.execution_intent,source.tempo,source.exercise_notes
+ FROM unordered_overview source LEFT JOIN water_tree ON water_tree.id=source.water_step_id
 ),
 variation_definitions AS (
  SELECT variation.id AS variation_id,variation.plan_id,variation.subject_kind,variation.subject_id,variation.target_membership_id,variation.target_group_id,variation.operation,variation.patch,variation.change_summary,variation.version,variation.created_at
@@ -1039,7 +1057,7 @@ func (q *Queries) PublicationRawSource(ctx context.Context, arg PublicationRawSo
 }
 
 const publicationSourceBudget = `-- name: PublicationSourceBudget :one
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -1074,8 +1092,8 @@ eligible_recipients AS (
  FROM candidates candidate JOIN input_gate ON true JOIN public.users subject ON subject.id=candidate.subject_id
  WHERE subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
 ),
-overview AS (
-SELECT row_number() OVER(ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST,session.id,segment.position,block.position,water_step.created_at NULLS FIRST,exercise.position) AS _ord,group_row.id AS group_id, group_row.name AS group_name,
+unordered_overview AS (
+SELECT 0::bigint AS _ord,group_row.id AS group_id, group_row.name AS group_name,
        programme.name_pt AS programme_name, team.name AS team_name,
        0::integer AS member_count,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
@@ -1131,6 +1149,15 @@ LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
 LEFT JOIN water_intensity_zones water_zone ON water_zone.profile_id = water.intensity_profile_id
  AND water_zone.code = water_step.intensity_code
 
+), water_nodes AS (
+ SELECT DISTINCT water_step_id AS id,water_parent_step_id AS parent_id,water_step_position AS position FROM unordered_overview WHERE water_step_id IS NOT NULL
+), water_tree(id,order_path,id_path) AS (
+ SELECT root.id,ARRAY[root.position]::integer[],ARRAY[root.id]::uuid[] FROM water_nodes root WHERE root.parent_id IS NULL
+ UNION ALL
+ SELECT child.id,water_tree.order_path||child.position,water_tree.id_path||child.id FROM water_nodes child JOIN water_tree ON child.parent_id=water_tree.id WHERE NOT child.id=ANY(water_tree.id_path)
+), overview AS (
+ SELECT row_number() OVER(ORDER BY source.session_on NULLS LAST,source.starts_at NULLS LAST,source.session_id,source.segment_position,source.block_position,water_tree.order_path NULLS LAST,water_tree.id_path NULLS LAST,source.water_parent_step_id NULLS FIRST,source.water_step_position,source.water_step_id,source.exercise_position,source.exercise_id) AS _ord,source.group_id,source.group_name,source.programme_name,source.team_name,source.member_count,source.plan_id,source.plan_title,source.plan_description,source.season_name,source.week_start,source.planned_load_percentage,source.session_id,source.session_title,source.session_description,source.starts_at,source.ends_at,source.entry_kind,source.schedule_precision,source.scheduled_on,source.day_band,source.session_on,source.session_status,source.segment_id,source.segment_position,source.segment_modality,source.segment_title,source.segment_location,source.planned_duration_minutes,source.planned_start_offset_minutes,source.transition_duration_minutes,source.equipment_notes,source.block_id,source.block_position,source.block_purpose,source.block_title,source.block_instructions,source.gym_structure,source.gym_objective,source.gym_rounds,source.round_recovery_seconds,source.water_method,source.water_intensity_profile_id,source.water_profile_name,source.water_profile_revision,source.water_profile_craft,source.water_target_distance_metres,source.water_target_distance_certainty,source.water_step_id,source.water_parent_step_id,source.water_step_position,source.water_step_kind,source.water_step_name,source.water_step_repeats,source.water_step_duration_seconds,source.water_step_duration_certainty,source.water_step_distance_metres,source.water_step_distance_certainty,source.water_step_recovery_seconds,source.water_step_intensity_code,source.water_step_cadence_spm,source.water_zone_label,source.water_zone_cadence_min,source.water_zone_cadence_max,source.water_zone_meaning,source.water_step_drill_focus,source.water_step_drill_format,source.water_step_role_notes,source.water_step_instructions,source.exercise_id,source.exercise_position,source.exercise_name,source.exercise_sets,source.exercise_repetitions,source.exercise_duration_seconds,source.exercise_distance_metres,source.exercise_recovery_seconds,source.resistance_kind,source.resistance_value,source.resistance_text,source.execution_intent,source.tempo,source.exercise_notes
+ FROM unordered_overview source LEFT JOIN water_tree ON water_tree.id=source.water_step_id
 ),
 variation_definitions AS (
  SELECT variation.id AS variation_id,variation.plan_id,variation.subject_kind,variation.subject_id,variation.target_membership_id,variation.target_group_id,variation.operation,variation.patch,variation.change_summary,variation.version,variation.created_at
@@ -1246,7 +1273,7 @@ func (q *Queries) PublicationSourceBudget(ctx context.Context, arg PublicationSo
 }
 
 const publicationStructuralCandidates = `-- name: PublicationStructuralCandidates :many
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -1321,7 +1348,7 @@ func (q *Queries) PublicationStructuralCandidates(ctx context.Context, arg Publi
 }
 
 const publicationVariationMatches = `-- name: PublicationVariationMatches :many
-WITH actor AS (
+WITH RECURSIVE actor AS (
  SELECT actor_user.id,EXISTS(SELECT 1 FROM public.user_platform_roles assignment JOIN public.platform_roles role ON role.id=assignment.role_id WHERE assignment.user_id=actor_user.id AND role.code='ADMIN') AS admin
  FROM public.users actor_user WHERE actor_user.id=$1::uuid AND actor_user.is_active AND actor_user.erased_at IS NULL AND NOT actor_user.is_dependent
  AND actor_user.date_of_birth<=((now() AT TIME ZONE 'Europe/Lisbon')::date-interval '18 years')::date
@@ -1356,8 +1383,8 @@ eligible_recipients AS (
  FROM candidates candidate JOIN input_gate ON true JOIN public.users subject ON subject.id=candidate.subject_id
  WHERE subject.is_active AND subject.erased_at IS NULL AND (NOT subject.is_dependent OR EXISTS(SELECT 1 FROM public.guardian_authority_relationships relationship WHERE relationship.subject_user_id=subject.id AND public.guardian_authority_current(relationship.guardian_user_id,subject.id)))
 ),
-overview AS (
-SELECT row_number() OVER(ORDER BY public.training_session_local_date(session.scheduled_on,session.starts_at) NULLS LAST,session.starts_at NULLS LAST,session.id,segment.position,block.position,water_step.created_at NULLS FIRST,exercise.position) AS _ord,group_row.id AS group_id, group_row.name AS group_name,
+unordered_overview AS (
+SELECT 0::bigint AS _ord,group_row.id AS group_id, group_row.name AS group_name,
        programme.name_pt AS programme_name, team.name AS team_name,
        0::integer AS member_count,
        plan.id AS plan_id, plan.title AS plan_title, plan.description AS plan_description, season.name AS season_name, plan.week_start, plan.planned_load_percentage,
@@ -1413,6 +1440,15 @@ LEFT JOIN water_work_steps water_step ON water_step.block_id = water.block_id
 LEFT JOIN water_intensity_zones water_zone ON water_zone.profile_id = water.intensity_profile_id
  AND water_zone.code = water_step.intensity_code
 
+), water_nodes AS (
+ SELECT DISTINCT water_step_id AS id,water_parent_step_id AS parent_id,water_step_position AS position FROM unordered_overview WHERE water_step_id IS NOT NULL
+), water_tree(id,order_path,id_path) AS (
+ SELECT root.id,ARRAY[root.position]::integer[],ARRAY[root.id]::uuid[] FROM water_nodes root WHERE root.parent_id IS NULL
+ UNION ALL
+ SELECT child.id,water_tree.order_path||child.position,water_tree.id_path||child.id FROM water_nodes child JOIN water_tree ON child.parent_id=water_tree.id WHERE NOT child.id=ANY(water_tree.id_path)
+), overview AS (
+ SELECT row_number() OVER(ORDER BY source.session_on NULLS LAST,source.starts_at NULLS LAST,source.session_id,source.segment_position,source.block_position,water_tree.order_path NULLS LAST,water_tree.id_path NULLS LAST,source.water_parent_step_id NULLS FIRST,source.water_step_position,source.water_step_id,source.exercise_position,source.exercise_id) AS _ord,source.group_id,source.group_name,source.programme_name,source.team_name,source.member_count,source.plan_id,source.plan_title,source.plan_description,source.season_name,source.week_start,source.planned_load_percentage,source.session_id,source.session_title,source.session_description,source.starts_at,source.ends_at,source.entry_kind,source.schedule_precision,source.scheduled_on,source.day_band,source.session_on,source.session_status,source.segment_id,source.segment_position,source.segment_modality,source.segment_title,source.segment_location,source.planned_duration_minutes,source.planned_start_offset_minutes,source.transition_duration_minutes,source.equipment_notes,source.block_id,source.block_position,source.block_purpose,source.block_title,source.block_instructions,source.gym_structure,source.gym_objective,source.gym_rounds,source.round_recovery_seconds,source.water_method,source.water_intensity_profile_id,source.water_profile_name,source.water_profile_revision,source.water_profile_craft,source.water_target_distance_metres,source.water_target_distance_certainty,source.water_step_id,source.water_parent_step_id,source.water_step_position,source.water_step_kind,source.water_step_name,source.water_step_repeats,source.water_step_duration_seconds,source.water_step_duration_certainty,source.water_step_distance_metres,source.water_step_distance_certainty,source.water_step_recovery_seconds,source.water_step_intensity_code,source.water_step_cadence_spm,source.water_zone_label,source.water_zone_cadence_min,source.water_zone_cadence_max,source.water_zone_meaning,source.water_step_drill_focus,source.water_step_drill_format,source.water_step_role_notes,source.water_step_instructions,source.exercise_id,source.exercise_position,source.exercise_name,source.exercise_sets,source.exercise_repetitions,source.exercise_duration_seconds,source.exercise_distance_metres,source.exercise_recovery_seconds,source.resistance_kind,source.resistance_value,source.resistance_text,source.execution_intent,source.tempo,source.exercise_notes
+ FROM unordered_overview source LEFT JOIN water_tree ON water_tree.id=source.water_step_id
 ),
 variation_definitions AS (
  SELECT variation.id AS variation_id,variation.plan_id,variation.subject_kind,variation.subject_id,variation.target_membership_id,variation.target_group_id,variation.operation,variation.patch,variation.change_summary,variation.version,variation.created_at

@@ -334,6 +334,123 @@ func TestFreshWaterCreateActualApplicationSessionCSRF(t *testing.T) {
 	if err = root.QueryRow(t.Context(), `SELECT count(*) FROM training_sessions WHERE plan_id=$1`, plan).Scan(&count); err != nil || count != 3 {
 		t.Fatal("duplicate native create", count, err)
 	}
+	t.Run("full structured mixed native draft", func(t *testing.T) {
+		status, body, _ = request("GET", base+"?day="+day, nil)
+		if status != 200 {
+			t.Fatal("generic GET", status)
+		}
+		graph := focusedNativeEditor(t, body)
+		graph.Set("title", "Água, força e corrida numa sessão")
+		graph.Set("schedule.start_time", "16:00")
+		main := "activities[a_1].phases[p_2]"
+		graph.Set(main+".instructions", "Manter técnica em cada repetição.")
+		graph.Set(main+".detail_mode", "WATER")
+		graph.Set(main+".water.method", "INTERVALS")
+		draftCommand := func(command string) {
+			t.Helper()
+			graph.Set("command", command)
+			status, body, _ = request("POST", base+"/rascunho", graph)
+			if status != 200 {
+				t.Fatal("native graph command", command, status)
+			}
+			graph = focusedNativeEditor(t, body)
+		}
+		draftCommand("refresh")
+		draftCommand("water_group_add:a_1:p_2:_root")
+		nodes := graph[main+".water.node_order"]
+		if len(nodes) != 1 {
+			t.Fatal("native repeat group missing")
+		}
+		groupKey := nodes[0]
+		gp := main + ".water.nodes[" + groupKey + "]"
+		graph.Set(gp+".name", "Dez repetições com recuperação entre séries")
+		graph.Set(gp+".repeats", "10")
+		graph.Set(gp+".recovery_seconds", "120")
+		draftCommand("water_effort_add:a_1:p_2:" + groupKey)
+		nodes = graph[main+".water.node_order"]
+		if len(nodes) != 2 {
+			t.Fatal("native effort missing")
+		}
+		np := main + ".water.nodes[" + nodes[1] + "]"
+		graph.Set(np+".name", "Quatro minutos de remada")
+		graph.Set(np+".duration_seconds", "240")
+		graph.Set(np+".duration_certainty", "EXACT")
+		graph.Set(np+".intensity_code", "R2")
+		graph.Set(main+".water.target_distance_metres", "8000")
+		graph.Set(main+".water.target_distance_certainty", "EXACT")
+		draftCommand("activity_add")
+		activities := graph["activity_order"]
+		if len(activities) != 2 {
+			t.Fatal("native gym activity missing")
+		}
+		gymKey := activities[1]
+		ap := "activities[" + gymKey + "]"
+		graph.Set(ap+".modality", "GYM")
+		draftCommand("phase_add:" + gymKey)
+		phaseKey := graph.Get(ap + ".phase_order")
+		pp := ap + ".phases[" + phaseKey + "]"
+		graph.Set(pp+".purpose", "MAIN")
+		graph.Set(pp+".instructions", "Força controlada no ginásio.")
+		graph.Set(pp+".detail_mode", "GYM")
+		graph.Set(pp+".gym.structure", "CIRCUIT")
+		graph.Set(pp+".gym.objective", "CORE")
+		graph.Set(pp+".gym.rounds", "3")
+		draftCommand("refresh")
+		draftCommand("gym_add:" + gymKey + ":" + phaseKey)
+		exerciseKey := graph.Get(pp + ".gym.exercise_order")
+		ep := pp + ".gym.exercises[" + exerciseKey + "]"
+		graph.Set(ep+".name", "Agachamento")
+		graph.Set(ep+".sets", "2")
+		graph.Set(ep+".repetitions", "12")
+		graph.Set(ep+".resistance_kind", "KILOGRAMS")
+		graph.Set(ep+".resistance_value", "40")
+		graph.Set(ep+".execution_intent", "CONTROLLED")
+		draftCommand("activity_add")
+		activities = graph["activity_order"]
+		runKey := activities[2]
+		rp := "activities[" + runKey + "]"
+		graph.Set(rp+".modality", "RUN")
+		draftCommand("phase_add:" + runKey)
+		runPhase := graph.Get(rp + ".phase_order")
+		rpp := rp + ".phases[" + runPhase + "]"
+		graph.Set(rpp+".purpose", "COOL_DOWN")
+		graph.Set(rpp+".instructions", "Corrida lenta para terminar.")
+		graph.Set("command", "preview")
+		status, body, _ = request("POST", base+"/prever", graph)
+		if status != 200 || !strings.Contains(body, "40 min") || !strings.Contains(body, "18 min") || !strings.Contains(body, "8 km") || !strings.Contains(body, "Agachamento") || !strings.Contains(body, "Corrida lenta para terminar.") {
+			t.Fatal("canonical mixed native preview", status)
+		}
+		approval := url.Values{"intent": {"confirm"}, "proposal": {field(body, "proposal")}, "review_token": {field(body, "review_token")}, "gorilla.csrf.Token": {field(body, "gorilla.csrf.Token")}}
+		var graphProposal struct {
+			Proposal struct {
+				SessionID uuid.UUID `json:"session_id"`
+			} `json:"proposal"`
+		}
+		if err = json.Unmarshal([]byte(approval.Get("proposal")), &graphProposal); err != nil {
+			t.Fatal(err)
+		}
+		var sessionsBefore int
+		if err = root.QueryRow(t.Context(), `SELECT count(*) FROM training_sessions WHERE plan_id=$1`, plan).Scan(&sessionsBefore); err != nil {
+			t.Fatal(err)
+		}
+		status, _, headers = request("POST", base+"/confirmar", approval)
+		if status != 303 || !strings.Contains(headers.Get("Location"), graphProposal.Proposal.SessionID.String()) {
+			t.Fatal("native mixed confirm", status)
+		}
+		var segments, blocks, steps, exercises int
+		var noEnd bool
+		if err = root.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM training_session_segments WHERE session_id=s.id),(SELECT count(*) FROM training_segment_blocks b JOIN training_session_segments a ON a.id=b.segment_id WHERE a.session_id=s.id),(SELECT count(*) FROM water_work_steps n JOIN training_segment_blocks b ON b.id=n.block_id JOIN training_session_segments a ON a.id=b.segment_id WHERE a.session_id=s.id),(SELECT count(*) FROM gym_exercises x JOIN training_segment_blocks b ON b.id=x.block_id JOIN training_session_segments a ON a.id=b.segment_id WHERE a.session_id=s.id),ends_at IS NULL FROM training_sessions s WHERE id=$1`, graphProposal.Proposal.SessionID).Scan(&segments, &blocks, &steps, &exercises, &noEnd); err != nil || segments != 3 || blocks != 3 || steps != 2 || exercises != 1 || !noEnd {
+			t.Fatal("native mixed raw graph", segments, blocks, steps, exercises, noEnd, err)
+		}
+		status, _, _ = request("POST", base+"/confirmar", approval)
+		if status != 303 {
+			t.Fatal("native mixed replay", status)
+		}
+		var after int
+		if err = root.QueryRow(t.Context(), `SELECT count(*) FROM training_sessions WHERE plan_id=$1`, plan).Scan(&after); err != nil || after != sessionsBefore+1 {
+			t.Fatal("native mixed duplicate identity", after, err)
+		}
+	})
 	execute(`UPDATE staff_grants SET revoked_at=now(),revoked_by_id=$1 WHERE user_id=$1 AND programme_id=$2`, actor, programme)
 	status, body, _ = request("POST", base+"/confirmar", refreshed)
 	if status != 404 || strings.Contains(body, "Treino histórico de água") || strings.Contains(body, "Remar com atenção") {

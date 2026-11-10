@@ -23,7 +23,7 @@ func TestTrainingRecipientNormalPinsAndExplicitPhases(t *testing.T) {
 		if phase != want || versions == nil {
 			t.Fatalf("reviewed inventory missing %s", want)
 		}
-		expected := map[RecipientSchemaPhase]int{RecipientReviewed77: 77, RecipientReviewed78: 78, RecipientReviewed79: 79, RecipientReviewed80: 80, RecipientFinal: 81}[want]
+		expected := map[RecipientSchemaPhase]int{RecipientReviewed77: 77, RecipientReviewed78: 78, RecipientReviewed79: 79, RecipientReviewed80: 80, RecipientFinal: 82}[want]
 		if len(versions) != expected {
 			t.Fatalf("phase %s count=%d", want, len(versions))
 		}
