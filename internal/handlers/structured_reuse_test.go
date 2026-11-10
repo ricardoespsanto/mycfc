@@ -380,3 +380,33 @@ func TestReuseScheduleRejectsInconsistentDestinationFacts(t *testing.T) {
 		})
 	}
 }
+
+func TestIndependentReuseRequiresStoredOriginsAndTheSameReviewedItem(t *testing.T) {
+	p := reuseExample(t)
+	item := p.Source.Items[0]
+	target := item.Graph.Context
+	if _, err := independentReuseGraph(item, target, item.Graph.Schedule, &reuseDestination{Key: "m_other"}); !errors.Is(err, errFocusedWorkoutInvalid) {
+		t.Fatalf("another reviewed item supplied the destination identities: %v", err)
+	}
+	item.Origins = nil
+	if _, err := independentReuseGraph(item, target, item.Graph.Schedule, nil); !errors.Is(err, errFocusedWorkoutInvalid) {
+		t.Fatalf("water work copied without its original profile pin: %v", err)
+	}
+}
+
+func TestIndependentReuseRetainsExplicitDayBandWithoutAliasing(t *testing.T) {
+	p := reuseExample(t)
+	item := p.Source.Items[0]
+	item.Graph.Kind = "LOGISTICS"
+	band := TrainingBandAfternoon
+	date := item.Graph.Context.WeekStart.Format("2006-01-02")
+	schedule := TrainingSessionSchedule{Date: date, Precision: TrainingScheduleBand, Band: &band}
+	out, err := independentReuseGraph(item, item.Graph.Context, schedule, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	band = TrainingBandMorning
+	if out.Graph.Schedule.Band == nil || *out.Graph.Schedule.Band != TrainingBandAfternoon || out.Graph.Schedule.StartsAt != nil {
+		t.Fatalf("copy altered the selected band or invented an exact time: %+v", out.Graph.Schedule)
+	}
+}

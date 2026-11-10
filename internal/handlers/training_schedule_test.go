@@ -214,3 +214,27 @@ func TestRoutineSchedulePreservesLegacyDurationWithoutInventingDates(t *testing.
 		t.Fatalf("legacy duration fabricated an appointment: %+v, %v", view, err)
 	}
 }
+
+func TestLegacyExactCopyRequiresReviewAcrossLisbonClockChanges(t *testing.T) {
+	location := lisbonLocation()
+	spring := time.Date(2026, 3, 22, 1, 30, 0, 0, location)
+	if _, err := trainingCopiedExactStart(spring, 2026, 3, 29); !errors.Is(err, ErrTrainingScheduleInvalid) {
+		t.Fatalf("copy silently normalized the spring clock gap: %v", err)
+	}
+	summer := time.Date(2026, 10, 18, 11, 30, 0, 0, location)
+	if _, err := trainingCopiedExactStart(summer, 2026, 10, 25); !errors.Is(err, ErrTrainingScheduleWriteUnsupported) {
+		t.Fatalf("copy chose a clock convention across an offset change: %v", err)
+	}
+	valid, err := parseTrainingLocalDateTime("2026-10-18T11:30", nil)
+	if err != nil || !valid.Equal(summer) {
+		t.Fatalf("default clock did not use Lisbon: %v, %v", valid, err)
+	}
+}
+
+func TestStoredScheduleRejectsInfiniteFactsBeforeFormatting(t *testing.T) {
+	date := pgtype.Date{Valid: true, InfinityModifier: pgtype.Infinity}
+	out, err := trainingScheduleFromRecord("DAY", date, pgtype.Timestamptz{}, pgtype.Timestamptz{}, nil)
+	if !errors.Is(err, ErrTrainingScheduleInvalid) || out.Date != "" {
+		t.Fatalf("infinite date acquired a civil schedule: %+v, %v", out, err)
+	}
+}
