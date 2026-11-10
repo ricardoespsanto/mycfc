@@ -5,12 +5,124 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
+
+func holdTrainingFixtureRow(t *testing.T, f *publicationDomainFixture, sql string, id uuid.UUID, action func()) {
+	t.Helper()
+	tx, err := f.root.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	if _, err := tx.Exec(t.Context(), sql, id); err != nil {
+		t.Fatal(err)
+	}
+	action()
+}
+
+func TestModernVariationStoreFencesSubjectAndReferenceChanges(t *testing.T) {
+	w := newRhythmDomainFixture(t)
+	ctx := t.Context()
+	store := PostgresStructuredTrainingStore{Pool: w.web}
+	segment, gymSegment, gymBlock, exercise := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	if err := w.web.QueryRow(ctx, `SELECT segment_id FROM training_segment_blocks WHERE id=$1`, w.block).Scan(&segment); err != nil {
+		t.Fatal(err)
+	}
+	w.exec(t, `INSERT INTO training_session_segments(id,session_id,position,modality,title) VALUES($1,$2,2,'GYM','Synthetic gym prescription')`, gymSegment, w.session)
+	w.exec(t, `INSERT INTO training_segment_blocks(id,segment_id,position,purpose,title,instructions) VALUES($1,$2,1,'MAIN','Gym work','Synthetic instructions')`, gymBlock, gymSegment)
+	w.exec(t, `INSERT INTO gym_block_prescriptions(block_id,structure,objective) VALUES($1,'STRAIGHT_SETS','MOBILITY')`, gymBlock)
+	w.exec(t, `INSERT INTO gym_exercises(id,block_id,position,name,sets,repetitions) VALUES($1,$2,1,'Synthetic lift',2,12)`, exercise, gymBlock)
+	in := dbgen.CreateTrainingVariationParams{PlanID: w.plan, TargetMembershipID: &w.membership, SubjectKind: dbgen.TrainingVariationSubjectKindBLOCK, SubjectID: w.block, Operation: dbgen.TrainingVariationOperationOMIT, ChangeSummary: "Reviewed individual variation", Patch: []byte("{}"), CreatedByID: w.actor}
+	reject := func(t *testing.T, in dbgen.CreateTrainingVariationParams, want error) {
+		t.Helper()
+		got, err := store.CreateTrainingVariation(t.Context(), in)
+		if !errors.Is(err, want) || got.ID != uuid.Nil {
+			t.Fatalf("variation result=%s error=%v, want %v", got.ID, err, want)
+		}
+	}
+	profilePatch := func(id string) []byte { return []byte(`{"intensity_profile_id":"` + id + `"}`) }
+	for _, patch := range [][]byte{
+		[]byte("["),
+		[]byte(`{"intensity_profile_id":42}`),
+		profilePatch(strings.ToUpper(w.kayak.String())),
+		profilePatch(uuid.NewString()),
+	} {
+		bad := in
+		bad.Operation, bad.Patch = dbgen.TrainingVariationOperationOVERRIDE, patch
+		reject(t, bad, errPublicationRhythmReference)
+	}
+	unknown := in
+	unknown.SubjectKind = "UNKNOWN"
+	reject(t, unknown, pgx.ErrNoRows)
+	missingPlan := in
+	missingPlan.PlanID = uuid.New()
+	reject(t, missingPlan, pgx.ErrNoRows)
+	for _, tc := range []struct {
+		name, sql string
+		id        uuid.UUID
+		patch     []byte
+	}{
+		{"placement head", `SELECT revision FROM training_placement_heads WHERE subject_user_id=$1 FOR UPDATE`, w.subject, nil},
+		{"athlete identity", `SELECT id FROM users WHERE id=$1 FOR UPDATE`, w.subject, nil},
+		{"exercise subject", `SELECT id FROM gym_exercises WHERE id=$1 FOR UPDATE`, exercise, nil},
+		{"rhythm profile", `SELECT id FROM water_intensity_profiles WHERE id=$1 FOR UPDATE`, w.kayak, profilePatch(w.kayak.String())},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			blocked := in
+			if tc.id == exercise {
+				blocked.SubjectKind, blocked.SubjectID = dbgen.TrainingVariationSubjectKindGYMEXERCISE, exercise
+			}
+			if tc.patch != nil {
+				blocked.Operation, blocked.Patch = dbgen.TrainingVariationOperationOVERRIDE, tc.patch
+			}
+			holdTrainingFixtureRow(t, w.publicationDomainFixture, tc.sql, tc.id, func() {
+				reject(t, blocked, errStructuredTrainingPublicationConflict)
+			})
+		})
+	}
+	var created dbgen.TrainingVariation
+	for _, subject := range []struct {
+		kind dbgen.TrainingVariationSubjectKind
+		id   uuid.UUID
+	}{
+		{dbgen.TrainingVariationSubjectKindSEGMENT, segment},
+		{dbgen.TrainingVariationSubjectKindWATERSTEP, w.work},
+		{dbgen.TrainingVariationSubjectKindGYMEXERCISE, exercise},
+	} {
+		mutation := in
+		mutation.SubjectKind, mutation.SubjectID = subject.kind, subject.id
+		var err error
+		created, err = store.CreateTrainingVariation(ctx, mutation)
+		if err != nil || created.SubjectID != subject.id || created.SubjectKind != subject.kind {
+			t.Fatalf("persisted variation %+v, %v", created, err)
+		}
+	}
+	actor := context.WithValue(ctx, currentUserKey{}, CurrentUser{ID: w.actor})
+	retire := dbgen.RetireTrainingVariationParams{ID: created.ID, Version: created.Version, RetiredByID: &w.actor}
+	holdTrainingFixtureRow(t, w.publicationDomainFixture, `SELECT id FROM training_variations WHERE id=$1 FOR UPDATE`, created.ID, func() {
+		if count, err := store.RetireTrainingVariation(actor, retire); count != 0 || !errors.Is(err, errStructuredTrainingPublicationConflict) {
+			t.Fatalf("contended retirement count=%d, %v", count, err)
+		}
+	})
+	retire.ID = uuid.New()
+	if count, err := store.RetireTrainingVariation(actor, retire); count != 0 || !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("missing retirement count=%d, %v", count, err)
+	}
+	var total, active int
+	if err := w.web.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE is_active) FROM training_variations WHERE plan_id=$1`, w.plan).Scan(&total, &active); err != nil || total != 3 || active != 3 {
+		t.Fatalf("unsuccessful variation or retirement changed rows: total=%d active=%d error=%v", total, active, err)
+	}
+	setPublicationFixtureEnabled(t, w.publicationDomainFixture, true)
+	addPublicationMixedSchedules(t, w.publicationDomainFixture)
+	setPublicationFixtureEnabled(t, w.publicationDomainFixture, false)
+	reject(t, in, ErrTrainingScheduleWriteUnsupported)
+}
 
 func TestModernVariationStoreAdaptsAndRetiresStartOnlyWithBandPlan(t *testing.T) {
 	w := newRhythmDomainFixture(t)

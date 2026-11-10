@@ -3,6 +3,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -12,6 +13,84 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestTrainingGroupStoreRejectsUnverifiedReturnsAndInvalidWrites(t *testing.T) {
+	f := newPublicationDomainFixture(t)
+	ctx := t.Context()
+	store := PostgresTrainingGroupStore{Pool: f.web}
+	for _, tc := range []struct {
+		actor, week uuid.UUID
+		allowed     bool
+		err         error
+	}{
+		{actor: f.actor, week: f.plan, allowed: true},
+		{actor: f.actor, week: uuid.New()},
+		{actor: f.subject, week: f.plan, err: pgx.ErrNoRows},
+	} {
+		allowed, err := store.AllowsWeek(ctx, tc.actor, f.group, tc.week)
+		if allowed != tc.allowed || !errors.Is(err, tc.err) {
+			t.Fatalf("week authorization: %t, %v", allowed, err)
+		}
+	}
+	seasons, err := store.PlacementSeasons(ctx, f.actor, f.group)
+	if err != nil || len(seasons) != 1 || seasons[0].ID != f.season {
+		t.Fatalf("scoped seasons: %+v, %v", seasons, err)
+	}
+	f.exec(t, `INSERT INTO seasons(code,name,starts_on,ends_on)
+		SELECT 'Synthetic' || n,'Disposable season ' || n,CURRENT_DATE+n,CURRENT_DATE+n+1 FROM generate_series(1,100) n`)
+	if seasons, err := store.PlacementSeasons(ctx, f.actor, f.group); !errors.Is(err, ErrTrainingGroupEligibility) || len(seasons) != 0 {
+		t.Fatalf("overfull season list was silently truncated: %d, %v", len(seasons), err)
+	}
+	if rows, err := store.SearchAthletes(ctx, f.actor, f.group, "Synthetic", -1); !errors.Is(err, ErrTrainingGroupEligibility) || len(rows) != 0 {
+		t.Fatalf("out-of-range search disclosed athletes: %d, %v", len(rows), err)
+	}
+	original, err := store.GetGroup(ctx, f.actor, f.group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rename := TrainingGroupRenameInput{ActorID: f.actor, GroupID: f.group, ExpectedUpdatedAt: original.UpdatedAt, Name: " untrimmed "}
+	if _, err := store.RenameGroup(ctx, rename); !errors.Is(err, ErrTrainingGroupEligibility) {
+		t.Fatalf("invalid rename accepted: %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	for _, operation := range []struct {
+		name string
+		call func() error
+	}{
+		{"list", func() error { _, err := store.ListGroups(canceled, f.actor, 0); return err }},
+		{"scopes", func() error { _, err := store.ListScopes(canceled, f.actor); return err }},
+		{"rename", func() error {
+			rename.Name = "Valid replacement"
+			_, err := store.RenameGroup(canceled, rename)
+			return err
+		}},
+	} {
+		if err := operation.call(); !errors.Is(err, context.Canceled) {
+			t.Fatalf("%s ignored cancellation: %v", operation.name, err)
+		}
+	}
+	var day time.Time
+	if err := f.web.QueryRow(ctx, `SELECT week_start FROM training_plans WHERE id=$1`, f.plan).Scan(&day); err != nil {
+		t.Fatal(err)
+	}
+	candidate, membership := uuid.New(), uuid.New()
+	f.exec(t, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Synthetic unplaced athlete',$2,'hash','1990-01-01')`, candidate, candidate.String()+"@example.test")
+	f.exec(t, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on) VALUES($1,$2,$3,$4,CURRENT_DATE)`, membership, candidate, f.season, f.programme)
+	in := trainingGroupFixtureReview(t, store, TrainingGroupRosterInput{ActorID: f.actor, GroupID: f.group, SeasonID: f.season, EffectiveOn: day, ExpectedUpdatedAt: original.UpdatedAt, MembershipIDs: []uuid.UUID{membership}})
+	tampered := in
+	tampered.GroupID = uuid.New()
+	if _, err := store.AddAthletes(ctx, tampered); !errors.Is(err, ErrTrainingGroupEligibility) {
+		t.Fatalf("changed placement target accepted the original proof: %v", err)
+	}
+	if _, err := (PostgresTrainingGroupStore{Pool: f.root}).AddAthletes(ctx, in); !errors.Is(err, errTrainingPlacementUnavailable) {
+		t.Fatalf("placement used a connection outside the admitted pool: %v", err)
+	}
+	after, err := store.GetGroup(ctx, f.actor, f.group)
+	if err != nil || after.Name != original.Name || !after.UpdatedAt.Equal(original.UpdatedAt) || after.MemberCount != original.MemberCount {
+		t.Fatalf("failed requests changed group state: before=%+v, after=%+v, %v", original, after, err)
+	}
+}
 
 func TestTrainingGroupTasksScopeRosterAndConcurrency(t *testing.T) {
 	f := newPublicationDomainFixture(t)
