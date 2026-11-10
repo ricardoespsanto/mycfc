@@ -24,6 +24,7 @@ type publicationHTTPStoreFake struct {
 	authorizeErr, readErr, confirmErr       error
 	authorizeCalls, readCalls, confirmCalls int
 	confirmedSummary                        string
+	confirmResult                           *publicationSaveResult
 }
 
 func (s *publicationHTTPStoreFake) AuthorizePublication(context.Context, uuid.UUID, uuid.UUID) (publicationPlanHeader, error) {
@@ -48,6 +49,9 @@ func (s *publicationHTTPStoreFake) ConfirmPublication(_ context.Context, input p
 		return publicationSaveResult{}, err
 	}
 	s.confirmedSummary = input.Review.metadata.ChangeSummary
+	if s.confirmResult != nil {
+		return *s.confirmResult, nil
+	}
 	return publicationSaveResult{PublicationID: uuid.New(), Revision: 1, PrescriptionCount: len(material.Prescriptions)}, nil
 }
 func publicationHTTPFixture(t *testing.T) (*publicationHTTPStoreFake, http.Handler, string) {
@@ -239,5 +243,46 @@ func TestPublicationHTTPReviewRefusalsDoNotReturnPrivateAudience(t *testing.T) {
 				t.Fatalf("review refusal exposed a private source or allowed confirmation: status %d", response.Code)
 			}
 		})
+	}
+}
+
+func TestPublicationHTTPExplainsRecoverableReviewRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		status  int
+		message string
+	}{
+		{"peer conflict", errStructuredTrainingPublicationVariationConflict, 422, "Existem variações em conflito"},
+		{"invalid rhythm reference", errPublicationRhythmReference, 422, errPublicationRhythmReference.Error()},
+		{"review exceeds bounds", errTrainingPublicationReviewLimit, 422, "limites do pedido"},
+		{"schedule writer unavailable", ErrTrainingScheduleWriteUnsupported, 409, trainingScheduleUnsupportedMessage},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, handler, path := publicationHTTPFixture(t)
+			store.readErr = tc.err
+			response := publicationPost(t, handler, path, url.Values{"change_summary": {"Resumo conservado"}})
+			body := response.Body.String()
+			if response.Code != tc.status || !strings.Contains(body, tc.message) || !strings.Contains(body, "Resumo conservado") || strings.Contains(body, "Ana") || store.confirmCalls != 0 {
+				t.Fatalf("wrong recovery at status %d", response.Code)
+			}
+		})
+	}
+}
+
+func TestPublicationHTTPCompletesReviewedNoOpAtScopedDestination(t *testing.T) {
+	store, handler, path := publicationHTTPFixture(t)
+	session := *store.source.Overview[0].SessionID
+	returnTo := structuredPlannerURL(store.source.Header.GroupID.String(), store.source.Header.PlanID.String(), session.String(), "")
+	preview := publicationPost(t, handler, path, url.Values{"change_summary": {"Revisão sem alterações"}, "return_to": {returnTo}})
+	if preview.Code != 200 {
+		t.Fatalf("preview status %d", preview.Code)
+	}
+	values := publicationConfirmForm(t, preview.Body.String())
+	store.confirmResult = &publicationSaveResult{Revision: 1, NoOp: true, CleanupFailed: true}
+	response := publicationPost(t, handler, path, values)
+	location, err := url.Parse(response.Header().Get("Location"))
+	if response.Code != 303 || err != nil || location.Query().Get("session_id") != session.String() || store.confirmCalls != 1 {
+		t.Fatalf("reviewed no-op lost its authorized destination: %d, %v", response.Code, err)
 	}
 }
