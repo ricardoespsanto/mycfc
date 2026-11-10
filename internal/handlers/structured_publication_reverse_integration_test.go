@@ -5,7 +5,6 @@ package handlers
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -18,7 +17,7 @@ import (
 )
 
 type publicationRaceFixture struct {
-	pool                                                                *pgxpool.Pool
+	pool, web                                                           *pgxpool.Pool
 	actor, athlete, season, group, plan, session, membership, programme uuid.UUID
 	today                                                               time.Time
 	source                                                              time.Time
@@ -26,40 +25,18 @@ type publicationRaceFixture struct {
 
 func newPublicationRaceFixture(t *testing.T, ctx context.Context) publicationRaceFixture {
 	t.Helper()
-	p, e := pgxpool.New(ctx, os.Getenv("TEST_DATABASE_URL"))
-	if e != nil {
+	_, p, current := currentTrainingFixture(t)
+	f := publicationRaceFixture{pool: p, web: current.web, actor: current.actor, athlete: current.subject, season: current.season, group: current.group, plan: current.plan, session: current.session, membership: current.membership, programme: current.programme}
+	if e := p.QueryRow(ctx, `SELECT (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date`).Scan(&f.today); e != nil {
 		t.Fatal(e)
 	}
-	t.Cleanup(p.Close)
-	f := publicationRaceFixture{pool: p, actor: uuid.New(), athlete: uuid.New(), season: uuid.New(), group: uuid.New(), plan: uuid.New(), session: uuid.New(), membership: uuid.New()}
-	if e = p.QueryRow(ctx, `SELECT (now() AT TIME ZONE 'Europe/Lisbon')::date,(SELECT id FROM programmes WHERE code='Leisure')`).Scan(&f.today, &f.programme); e != nil {
+	if _, e := p.Exec(ctx, `UPDATE training_plans SET week_start=date_trunc('week',$1::date)::date WHERE id=$2`, f.today, f.plan); e != nil {
 		t.Fatal(e)
 	}
-	for _, id := range []uuid.UUID{f.actor, f.athlete} {
-		if _, e = p.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Publication concurrency',$2,'hash','1990-01-01')`, id, uuid.NewString()+"@example.test"); e != nil {
-			t.Fatal(e)
-		}
+	if _, e := p.Exec(ctx, `UPDATE training_sessions SET starts_at=($1::date+time '00:30') AT TIME ZONE 'Europe/Lisbon',ends_at=($1::date+time '01:30') AT TIME ZONE 'Europe/Lisbon' WHERE id=$2`, f.today.AddDate(0, 0, 1), f.session); e != nil {
+		t.Fatal(e)
 	}
-	start, end := f.today.AddDate(0, 0, -14), f.today.AddDate(0, 0, 30)
-	for _, s := range []struct {
-		q string
-		a []any
-	}{
-		{`INSERT INTO seasons(id,code,name,starts_on,ends_on) VALUES($1,$2,'Publication concurrency',$3,$4)`, []any{f.season, "RC_" + uuid.NewString()[:8], start, end}},
-		{`INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) VALUES($1,$2,$3,$4,$5,$6)`, []any{f.membership, f.athlete, f.season, f.programme, start, end}},
-		{`INSERT INTO training_groups(id,name,programme_id,created_by_id) VALUES($1,'Publication concurrency',$2,$3)`, []any{f.group, f.programme, f.actor}},
-		{`INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, []any{f.group, f.membership, f.actor}},
-		{`INSERT INTO training_plans(id,title,programme_id,training_group_id,season_id,week_start,created_by_id) VALUES($1,'Publication concurrency',$2,$3,$4,$5,$6)`, []any{f.plan, f.programme, f.group, f.season, f.today.AddDate(0, 0, -(int(f.today.Weekday())+6)%7), f.actor}},
-		{`INSERT INTO training_sessions(id,plan_id,title,starts_at,ends_at,created_by_id) VALUES($1,$2,'Future',($3::date+time '00:30') AT TIME ZONE 'Europe/Lisbon',($3::date+time '01:30') AT TIME ZONE 'Europe/Lisbon',$4)`, []any{f.session, f.plan, f.today.AddDate(0, 0, 1), f.actor}},
-	} {
-		if _, e = p.Exec(ctx, s.q, s.a...); e != nil {
-			t.Fatal(e)
-		}
-	}
-	if _, err := p.Exec(ctx, `INSERT INTO staff_grants(user_id,capability,programme_id,granted_by_id) VALUES($1,'COACH',$2,$1)`, f.actor, f.programme); err != nil {
-		t.Fatal(err)
-	}
-	if e = p.QueryRow(ctx, `SELECT updated_at FROM training_plans WHERE id=$1`, f.plan).Scan(&f.source); e != nil {
+	if e := p.QueryRow(ctx, `SELECT updated_at FROM training_plans WHERE id=$1`, f.plan).Scan(&f.source); e != nil {
 		t.Fatal(e)
 	}
 	return f
@@ -82,7 +59,7 @@ func TestPublicationAfterCommittedShorteningCannotPublish(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: f.pool}, f.input())
+		_, err := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: f.web}, f.input())
 		done <- err
 	}()
 	waitForRaceQuery(t, ctx, f.pool, `LockPublicationPlan`, "transactionid")
@@ -102,7 +79,7 @@ func TestFullTransitionRacesPublication(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	f := newPublicationRaceFixture(t, ctx)
-	if _, e := f.pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN'`, f.actor); e != nil {
+	if _, e := f.pool.Exec(ctx, `INSERT INTO user_platform_roles(user_id,role_id) SELECT $1,id FROM platform_roles WHERE code='ADMIN' ON CONFLICT DO NOTHING`, f.actor); e != nil {
 		t.Fatal(e)
 	}
 	var initiation uuid.UUID
@@ -113,18 +90,28 @@ func TestFullTransitionRacesPublication(t *testing.T) {
 	defer resume()
 	publishDone := make(chan error, 1)
 	go func() {
-		_, err := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: f.pool}, f.input())
+		_, err := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: f.web}, f.input())
 		publishDone <- err
 	}()
 	awaitPublicationTestGate(t, ctx, reached, publishDone)
 	transitionDone := make(chan error, 1)
 	go func() {
-		_, err := (dated.DatedParticipationService{Pool: f.pool}).TransitionNextDay(ctx, f.membership, dated.OrdinaryDatedAssignment{ActorID: f.actor, MemberID: f.athlete, SeasonID: f.season, ProgrammeID: initiation, StartsOn: f.today.AddDate(0, 0, 1)})
+		_, err := (dated.DatedParticipationService{Pool: f.web}).TransitionNextDay(ctx, f.membership, dated.OrdinaryDatedAssignment{ActorID: f.actor, MemberID: f.athlete, SeasonID: f.season, ProgrammeID: initiation, StartsOn: f.today.AddDate(0, 0, 1)})
 		transitionDone <- err
 	}()
-	waitForRaceQuery(t, ctx, f.pool, `FROM users member`, "transactionid")
+	// The current admitted protocol uses NOWAIT on the subject. The competing
+	// transition must be refused while publication holds its locked proof.
+	var transitionErr error
+	select {
+	case transitionErr = <-transitionDone:
+		if !errors.Is(transitionErr, dated.ErrClassificationStale) {
+			t.Fatalf("concurrent transition was not stale: %v", transitionErr)
+		}
+	case <-ctx.Done():
+		t.Fatal("NOWAIT transition did not finish", ctx.Err())
+	}
 	resume()
-	pubErr, transitionErr := <-publishDone, <-transitionDone
+	pubErr := <-publishDone
 	t.Logf("publisher=%v; full transition=%v", pubErr, transitionErr)
 	if pubErr == nil && transitionErr == nil {
 		t.Fatal("published future recipient and completed full transition")
@@ -145,7 +132,7 @@ func TestFullTransitionRacesPublication(t *testing.T) {
 	}
 }
 
-func TestGroupMemberInsertAfterConcurrentShortening(t *testing.T) {
+func TestGroupMemberInsertAfterConcurrentShorteningCannotCreateFutureEligibility(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	f := newPublicationRaceFixture(t, ctx)
@@ -157,7 +144,7 @@ func TestGroupMemberInsertAfterConcurrentShortening(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer tx.Rollback(ctx)
-	if _, e = tx.Exec(ctx, `UPDATE user_memberships SET ends_on=$1,updated_at=now() WHERE id=$2`, f.today.AddDate(0, 0, -1), f.membership); e != nil {
+	if _, e = tx.Exec(ctx, `UPDATE user_memberships SET ends_on=$1,updated_at=now() WHERE id=$2`, f.today, f.membership); e != nil {
 		t.Fatal(e)
 	}
 	type outcome struct {
@@ -174,11 +161,18 @@ func TestGroupMemberInsertAfterConcurrentShortening(t *testing.T) {
 		t.Fatal(e)
 	}
 	got := <-done
-	if got.err != nil || got.rows != 0 {
-		t.Fatalf("ended membership associated: %+v", got)
+	if got.err != nil || got.rows != 1 {
+		t.Fatalf("current-day compatibility association: %+v", got)
 	}
 	var n int
-	if e := f.pool.QueryRow(ctx, `SELECT count(*) FROM training_group_members WHERE group_id=$1 AND membership_id=$2`, f.group, f.membership).Scan(&n); e != nil || n != 0 {
-		t.Fatalf("ended association persisted %d %v", n, e)
+	if e := f.pool.QueryRow(ctx, `SELECT count(*) FROM training_group_members WHERE group_id=$1 AND membership_id=$2`, f.group, f.membership).Scan(&n); e != nil || n != 1 {
+		t.Fatalf("compatibility association count %d %v", n, e)
 	}
+	// Undated compatibility rows are not publication authority. The current-day
+	// association must not restore tomorrow's eligibility after shortening.
+	rows, err := dbgen.New(f.web).PublicationEligibleRecipients(ctx, dbgen.PublicationEligibleRecipientsParams{ActorID: f.actor, PlanID: f.plan})
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("shortened membership regained future eligibility: %v %v", rows, err)
+	}
+
 }

@@ -8,9 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -128,20 +126,14 @@ func TestPrecisionCompatibilityAdaptersRejectWholeSourcesAtomicallyAndKeepExactT
 	if !copiedStart.Equal(proposedStart) || copiedEnd.Sub(copiedStart) != originalEnd.Sub(originalStart) {
 		t.Fatal("ordinary exact copy changed known duration/start")
 	}
-	fixture, e := os.ReadFile(filepath.Join("..", "db", "testdata", "training_schedule_p_contract.sql"))
-	if e != nil {
-		t.Fatal(e)
-	}
-	if _, e = migration.PgConn().Exec(ctx, string(fixture)).ReadAll(); e != nil {
-		t.Fatal(e)
-	}
 	// Explicit test-only floor/activation is confined to this disposable database.
+	var e error
 	var incarnation uuid.UUID
 	var epoch int64
 	if e = migration.QueryRow(ctx, `SELECT database_incarnation,state_epoch FROM training_schedule_control.state`).Scan(&incarnation, &epoch); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = migration.Exec(ctx, `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,2)`, incarnation, epoch, uuid.New(), strings.Repeat("a", 64)); e != nil {
+	if _, e = migration.Exec(ctx, `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,5)`, incarnation, epoch, uuid.New(), strings.Repeat("a", 64)); e != nil {
 		t.Fatal(e)
 	}
 	if e = migration.QueryRow(ctx, `SELECT state_epoch FROM training_schedule_control.state`).Scan(&epoch); e != nil {
@@ -177,8 +169,8 @@ func TestPrecisionCompatibilityAdaptersRejectWholeSourcesAtomicallyAndKeepExactT
 	if _, e = store.CopyStructuredTrainingWeek(userCtx, StructuredWeekCopyInput{SourcePlanID: plan, WeekStart: start.AddDate(0, 0, 7), Title: "Attempt", ActorID: coach}); !errors.Is(e, ErrTrainingScheduleWriteUnsupported) {
 		t.Fatalf("whole copy error %v", e)
 	}
-	if _, e = confirmPublicationTestReview(userCtx, store, publicationTestReview{PlanID: plan, PublishedByID: coach, SourceUpdatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}, ChangeSummary: "Unsupported mixed plan"}); !errors.Is(e, ErrTrainingScheduleWriteUnsupported) {
-		t.Fatalf("whole publication error %v", e)
+	if _, e = confirmPublicationTestReview(userCtx, store, publicationTestReview{PlanID: plan, PublishedByID: coach, SourceUpdatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}, ChangeSummary: "Unsupported mixed plan"}); !errors.Is(e, errPublicationFirstEmpty) {
+		t.Fatalf("native mixed publication without recipients error %v", e)
 	}
 	aa, bb, cc, dd := before()
 	if a != aa || b != bb || c != cc || d != dd {
@@ -194,6 +186,8 @@ func TestPrecisionCompatibilityAdaptersRejectWholeSourcesAtomicallyAndKeepExactT
 		t.Fatal(e)
 	}
 	execute(`INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, group, membership, actor)
+	placementFixture := &publicationDomainFixture{root: root, low: migration, web: web, actor: actor, programme: programme, season: season}
+	placement := currentTrainingPlacement(t, placementFixture, actor, athlete, programme, season, group, time.Now().UTC())
 	execute(`INSERT INTO training_sessions(id,plan_id,title,entry_kind,schedule_precision,scheduled_on,starts_at,ends_at,created_by_id) SELECT $1,id,'Known start only','TRAINING','START_ONLY',week_start,(week_start::timestamp AT TIME ZONE 'Europe/Lisbon')+interval '10 hours',NULL,$3 FROM training_plans WHERE id=$2`, knownStart, plan, actor)
 	execute(`INSERT INTO training_plan_publications(id,plan_id,revision,source_updated_at,change_summary,published_by_id) SELECT $1,id,1,updated_at,'Test-only P fixture',$3 FROM training_plans WHERE id=$2`, publication, plan, actor)
 	var snapshot []byte
@@ -201,7 +195,7 @@ func TestPrecisionCompatibilityAdaptersRejectWholeSourcesAtomicallyAndKeepExactT
 		t.Fatal(e)
 	}
 	hash := sha256.Sum256(snapshot)
-	execute(`INSERT INTO training_prescriptions(id,publication_id,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256) VALUES($1,$2,$3,$4,$5,$6,$7)`, prescription, publication, knownStart, membership, athlete, snapshot, hex.EncodeToString(hash[:]))
+	execute(`INSERT INTO training_prescriptions(id,publication_id,session_id,membership_id,athlete_user_id,snapshot,snapshot_sha256,placement_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, prescription, publication, knownStart, membership, athlete, snapshot, hex.EncodeToString(hash[:]), placement)
 	actualStore := PostgresTrainingScheduleStore{Querier: dbgen.New(web), Pool: web}
 	duration := int32(42)
 	n, e := actualStore.SaveTrainingSessionOutcome(ctx, dbgen.SaveTrainingSessionOutcomeParams{SessionID: knownStart, UserID: athlete, Status: dbgen.TrainingOutcomeStatusCOMPLETED, ActualDurationMinutes: &duration})

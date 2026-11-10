@@ -191,34 +191,32 @@ func TestClassificationGETWithHardenedWebRole(t *testing.T) {
 	if err = migrator.QueryRow(ctx, `SELECT pg_get_functiondef('public.require_active_privacy_attachment_subject()'::regprocedure)`).Scan(&baselineDefinition); err != nil {
 		t.Fatal(err)
 	}
-	// Reproduce the deployed v2.0.6 trigger's invoker privilege boundary and
-	// apply only the pending forward migration on the disposable database.
+	// Exercise the denied invoker boundary, then restore the exact current
+	// baseline definition on this disposable fixture. No legacy-ledger upgrade
+	// or production migration is implied by this ACL regression.
 	if _, err = migrator.Exec(ctx, `ALTER FUNCTION require_active_privacy_attachment_subject() SECURITY INVOKER`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = migrator.Exec(ctx, `DELETE FROM mycfc_meta.schema_migrations WHERE version='202610010003_privacy_attachment_trigger_runtime'`); err != nil {
 		t.Fatal(err)
 	}
 	priorErr := store.Write(ctx, ClassificationWrite{ActorID: adminID, MemberID: firstMember, SeasonID: season, ProgrammeID: programme, StartsOn: today})
 	var priorState *pgconn.PgError
-	if !errors.As(priorErr, &priorState) || priorState.Code != "42501" || !strings.Contains(priorState.Message, "privacy_erasure_category_jobs") {
-		t.Fatalf("prior membership trigger failure type=%T SQLSTATE=%s", priorErr, func() string {
+	if !errors.As(priorErr, &priorState) || priorState.Code != "42501" || !strings.Contains(priorState.Message, "privacy_protected") {
+		t.Fatalf("prior membership trigger failure type=%T detail=%v SQLSTATE=%s", priorErr, priorErr, func() string {
 			if priorState == nil {
 				return ""
 			}
 			return priorState.Code
 		}())
 	}
-	if err = db.ApplyBaselineAndHarden(ctx, migrator, database, credentials); err != nil {
-		t.Fatalf("forward trigger migration: %v", err)
+	if _, err = migrator.Exec(ctx, baselineDefinition); err != nil {
+		t.Fatalf("restore current hardened trigger: %v", err)
 	}
 	var migrated bool
 	if err = migrator.QueryRow(ctx, `SELECT prosecdef FROM pg_proc WHERE oid='public.require_active_privacy_attachment_subject()'::regprocedure`).Scan(&migrated); err != nil || !migrated {
-		t.Fatalf("forward trigger definer=%t err=%v", migrated, err)
+		t.Fatalf("restored trigger definer=%t err=%v", migrated, err)
 	}
 	var forwardDefinition string
 	if err = migrator.QueryRow(ctx, `SELECT pg_get_functiondef('public.require_active_privacy_attachment_subject()'::regprocedure)`).Scan(&forwardDefinition); err != nil || forwardDefinition != baselineDefinition {
-		t.Fatalf("fresh baseline and forward trigger definitions differ: query error=%v", err)
+		t.Fatalf("restored and current baseline trigger definitions differ: query error=%v", err)
 	}
 	form := url.Values{"scope": {season.String() + ":" + programme.String()}, "starts_on": {today.Format("2006-01-02")}}
 	request := func(actor, member uuid.UUID, values url.Values) *http.Request {

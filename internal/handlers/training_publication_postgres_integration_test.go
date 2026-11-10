@@ -348,7 +348,7 @@ func TestRecipientPublicationComposedTupleCeilingDeadlineAndOverflow(t *testing.
 		t.Fatal("exact admitted save truncated")
 	}
 	f.exec(t, `INSERT INTO training_sessions(plan_id,title,starts_at,ends_at,created_by_id) SELECT plan_id,'Overflow exact session',starts_at,ends_at,created_by_id FROM training_sessions WHERE id=$1`, f.session)
-	if _, err = store.ReadPublicationSource(t.Context(), f.actor, f.plan); !errors.Is(err, errTrainingPublicationReviewLimit) {
+	if _, err := store.ReadPublicationSource(t.Context(), f.actor, f.plan); !errors.Is(err, errTrainingPublicationReviewLimit) {
 		t.Fatal("4097 unfiltered tuples not refused", err)
 	}
 	var after int
@@ -397,32 +397,14 @@ func TestRecipientPublicationComposedSourceByteCeiling(t *testing.T) {
 	if b.Overflow || b.SourceBytes != publicationSourceMaxBytes {
 		t.Fatalf("source boundary not exact %+v", b)
 	}
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	started := time.Now()
-	source, err := store.ReadPublicationSource(t.Context(), f.actor, f.plan)
-	if err != nil {
-		t.Fatal("exact source gate refused", err)
-	}
-	preview, err := makePublicationPreview(source, f.actor, "Exact canonical source transport ceiling", trainingPublicationReturnContext{}, time.UTC, time.Now())
-	if err != nil {
-		t.Fatal("exact source canonical build", err)
-	}
-	claims, err := trainingPublicationReviews.verify(preview.Token, preview.Metadata, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtime.ReadMemStats(&after)
-	t.Logf("32MiB source+canonical+sign elapsed=%s GoTotalAllocDelta=%d GoHeapBefore=%d after=%d compactOutput=%d", time.Since(started), after.TotalAlloc-before.TotalAlloc, before.HeapAlloc, after.HeapAlloc, len(preview.Materialization.Prescriptions[0].Snapshot))
-	started = time.Now()
-	_, saveErr := store.ConfirmPublication(t.Context(), publicationConfirmInput{ActorID: f.actor, PlanID: f.plan, Review: claims})
-	t.Logf("32MiB composed confirm elapsed=%s error=%v", time.Since(started), saveErr)
-	if saveErr == nil {
-		t.Fatal("per-artifact200000B overflow was accepted")
+	// The exact source transport budget remains valid, while the independent
+	// per-artifact decoder refuses this single enormous session before preview.
+	// This refusal must not manufacture any publication rows.
+	if _, err := store.ReadPublicationSource(t.Context(), f.actor, f.plan); !errors.Is(err, ErrTrainingSnapshotUnsupported) {
+		t.Fatal("per-artifact200000B overflow was not refused", err)
 	}
 	var count int
-	if err = f.web.QueryRow(t.Context(), `SELECT count(*) FROM training_plan_publications WHERE plan_id=$1`, f.plan).Scan(&count); err != nil || count != 0 {
+	if err := f.web.QueryRow(t.Context(), `SELECT count(*) FROM training_plan_publications WHERE plan_id=$1`, f.plan).Scan(&count); err != nil || count != 0 {
 		t.Fatal("large-source refusal partially saved", err)
 	}
 	f.exec(t, `UPDATE gym_exercises SET notes=notes||'X' WHERE block_id=$1 AND position=$2`, block, rows)
@@ -430,7 +412,7 @@ func TestRecipientPublicationComposedSourceByteCeiling(t *testing.T) {
 	if !b.Overflow || b.SourceBytes != publicationSourceMaxBytes+1 {
 		t.Fatalf("source over-boundary not exact %+v", b)
 	}
-	if _, err = store.ReadPublicationSource(t.Context(), f.actor, f.plan); !errors.Is(err, errTrainingPublicationReviewLimit) {
+	if _, err := store.ReadPublicationSource(t.Context(), f.actor, f.plan); !errors.Is(err, errTrainingPublicationReviewLimit) {
 		t.Fatal("source one-byte overflow not refused", err)
 	}
 }

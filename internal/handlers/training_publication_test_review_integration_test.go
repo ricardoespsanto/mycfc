@@ -78,6 +78,11 @@ func confirmPublicationTestReview(ctx context.Context, store PostgresStructuredT
 				}
 			}
 			if !found {
+				// Keep a deliberately substituted tuple structurally signable so the
+				// admitted canonical-set comparison, rather than malformed input, rejects it.
+				if requested.PlacementID == uuid.Nil {
+					requested.PlacementID = uuid.New()
+				}
 				if len(material.Prescriptions) > 0 {
 					requested.Snapshot = material.Prescriptions[0].Snapshot
 				} else {
@@ -89,7 +94,7 @@ func confirmPublicationTestReview(ctx context.Context, store PostgresStructuredT
 			}
 		}
 	}
-	metadata := trainingPublicationReviewMetadata{ActorID: input.PublishedByID, PlanID: input.PlanID, SourceUpdatedAt: input.SourceUpdatedAt.Time, ChangeSummary: input.ChangeSummary, LatestRevision: source.Header.LatestRevision}
+	metadata := trainingPublicationReviewMetadata{referenceSHA256: material.referenceSHA256, ActorID: input.PublishedByID, PlanID: input.PlanID, SourceUpdatedAt: input.SourceUpdatedAt.Time, ChangeSummary: input.ChangeSummary, LatestRevision: source.Header.LatestRevision}
 	if source.Header.LatestPublicationID != nil {
 		metadata.LatestPublicationID = *source.Header.LatestPublicationID
 	}

@@ -34,8 +34,7 @@ func seasonTestPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 func TestSeasonManagementExplicitSelectionConcurrencyAndHistory(t *testing.T) {
-	ctx := t.Context()
-	pool := seasonTestPool(t)
+	ctx, pool, fixture := currentTrainingFixture(t)
 	exec := func(sql string, args ...any) {
 		t.Helper()
 		if _, e := pool.Exec(ctx, sql, args...); e != nil {
@@ -135,12 +134,16 @@ func TestSeasonManagementExplicitSelectionConcurrencyAndHistory(t *testing.T) {
 	category, membership := uuid.New(), uuid.New()
 	exec(`INSERT INTO competition_categories(id,season_id,programme_id,code,name_pt,approved_by_user_id,approved_at) VALUES($1,$2,$3,'History','Historical category',$4,now())`, category, a.ID, programme, admin)
 	exec(`INSERT INTO user_memberships(id,user_id,season_id,programme_id,competition_category_id,starts_on) VALUES($1,$2,$3,$4,$5,$6)`, membership, athlete, a.ID, programme, category, a.StartsOn)
-	groups := PostgresStructuredTrainingStore{Pool: pool}
-	group, e := groups.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{Name: "Season history group", ProgrammeID: &programme, CreatedByID: admin}, MembershipIDs: []uuid.UUID{membership}})
+	groups := PostgresStructuredTrainingStore{Pool: fixture.web}
+	group, e := groups.CreateGroup(ctx, StructuredTrainingGroupInput{Params: dbgen.CreateStructuredTrainingGroupParams{Name: "Season history group", ProgrammeID: &programme, CreatedByID: admin}})
 	if e != nil {
 		t.Fatal(e)
 	}
-	monday := today.AddDate(0, 0, -(int(today.Weekday())+6)%7)
+	currentTrainingPlacement(t, fixture, admin, athlete, programme, a.ID, group.ID, today)
+	// The legacy week-inference query still reads its compatibility roster.
+	// This row supplies season preference only; signed placement grants delivery.
+	exec(`INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, group.ID, membership, admin)
+	monday := today.AddDate(0, 0, -(int(today.Weekday())+6)%7+7)
 	week, e := q.CreateStructuredTrainingWeek(ctx, dbgen.CreateStructuredTrainingWeekParams{GroupID: group.ID, Title: "Historical draft", WeekStart: pgtype.Date{Time: monday, Valid: true}, CreatedByID: admin})
 	if e != nil {
 		t.Fatal(e)

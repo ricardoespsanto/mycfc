@@ -13,7 +13,7 @@ import (
 )
 
 func TestPostgresTemporaryCrewsRequireDatedScopedComposition(t *testing.T) {
-	ctx, pool := integrationPool(t)
+	ctx, pool, fixture := currentTrainingFixture(t)
 	actor, outsider := uuid.New(), uuid.New()
 	for _, id := range []uuid.UUID{actor, outsider} {
 		if _, err := pool.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Crew actor',$2,'hash','1980-01-01')`, id, uuid.NewString()+"@example.test"); err != nil {
@@ -29,7 +29,7 @@ func TestPostgresTemporaryCrewsRequireDatedScopedComposition(t *testing.T) {
 	}
 	season, group := uuid.New(), uuid.New()
 	now := time.Now().UTC()
-	from, until := now.AddDate(0, 0, -10), now.AddDate(0, 0, 10)
+	from, until := now, now.AddDate(0, 0, 10)
 	if _, err := pool.Exec(ctx, `INSERT INTO seasons(id,code,name,starts_on,ends_on) VALUES($1,$2,'Crews',$3,$4)`, season, "CG_"+uuid.NewString()[:8], from, until); err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +50,9 @@ func TestPostgresTemporaryCrewsRequireDatedScopedComposition(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, person := range users {
+		currentTrainingPlacement(t, fixture, actor, person, programme, season, group, from)
+	}
 	t.Cleanup(func() {
 		c := context.Background()
 		_, _ = pool.Exec(c, `DELETE FROM training_groups WHERE id=$1`, group)
@@ -58,7 +61,7 @@ func TestPostgresTemporaryCrewsRequireDatedScopedComposition(t *testing.T) {
 		_, _ = pool.Exec(c, `DELETE FROM staff_grants WHERE user_id=$1`, actor)
 		_, _ = pool.Exec(c, `DELETE FROM users WHERE id=ANY($1)`, append(users, actor, outsider))
 	})
-	store := PostgresStructuredTrainingStore{Pool: pool}
+	store := PostgresStructuredTrainingStore{Pool: fixture.web}
 	create := func(code, name string, actorID uuid.UUID, ids []uuid.UUID, start time.Time) error {
 		_, err := store.CreateTrainingVariationGroup(ctx, StructuredVariationGroupInput{Params: dbgen.CreateTrainingVariationGroupParams{TrainingGroupID: group, Name: name, Kind: dbgen.TrainingVariationGroupKindCREW, CraftCode: &code, EffectiveFrom: pgtype.Date{Time: start, Valid: true}, EffectiveUntil: pgtype.Date{Time: until, Valid: true}, CreatedByID: actorID}, MembershipIDs: ids})
 		return err

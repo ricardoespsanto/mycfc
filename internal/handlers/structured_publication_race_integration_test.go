@@ -5,11 +5,9 @@ package handlers
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,46 +25,9 @@ func TestPublicationRacesMembershipShortening(t *testing.T) {
 func testPublicationRacesMembershipShortening(t *testing.T, iso pgx.TxIsoLevel) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, os.Getenv("TEST_DATABASE_URL"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	actor, athlete, season, group, plan, session, membership := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
-	var today time.Time
-	var programme uuid.UUID
-	if err := pool.QueryRow(ctx, `SELECT (now() AT TIME ZONE 'Europe/Lisbon')::date,(SELECT id FROM programmes WHERE code='Leisure')`).Scan(&today, &programme); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []uuid.UUID{actor, athlete} {
-		if _, err := pool.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Race fixture',$2,'hash','1990-01-01')`, id, uuid.NewString()+"@example.test"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	start, end := today.AddDate(0, 0, -14), today.AddDate(0, 0, 30)
-	statements := []struct {
-		sql  string
-		args []any
-	}{
-		{`INSERT INTO seasons(id,code,name,starts_on,ends_on) VALUES($1,$2,'Race',$3,$4)`, []any{season, "RA_" + uuid.NewString()[:8], start, end}},
-		{`INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) VALUES($1,$2,$3,$4,$5,$6)`, []any{membership, athlete, season, programme, start, end}},
-		{`INSERT INTO training_groups(id,name,programme_id,created_by_id) VALUES($1,'Race',$2,$3)`, []any{group, programme, actor}},
-		{`INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, []any{group, membership, actor}},
-		{`INSERT INTO training_plans(id,title,programme_id,training_group_id,season_id,week_start,created_by_id) VALUES($1,'Race',$2,$3,$4,$5,$6)`, []any{plan, programme, group, season, today.AddDate(0, 0, -(int(today.Weekday())+6)%7), actor}},
-		{`INSERT INTO training_sessions(id,plan_id,title,starts_at,ends_at,created_by_id) VALUES($1,$2,'Future',($3::date+time '00:30') AT TIME ZONE 'Europe/Lisbon',($3::date+time '01:30') AT TIME ZONE 'Europe/Lisbon',$4)`, []any{session, plan, today.AddDate(0, 0, 1), actor}},
-	}
-	for _, s := range statements {
-		if _, err := pool.Exec(ctx, s.sql, s.args...); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO staff_grants(user_id,capability,programme_id,granted_by_id) VALUES($1,'COACH',$2,$1)`, actor, programme); err != nil {
-		t.Fatal(err)
-	}
-	var source time.Time
-	if err := pool.QueryRow(ctx, `SELECT updated_at FROM training_plans WHERE id=$1`, plan).Scan(&source); err != nil {
-		t.Fatal(err)
-	}
+	f := newPublicationRaceFixture(t, ctx)
+	pool := f.pool
+	actor, athlete, plan, session, membership, today, source := f.actor, f.athlete, f.plan, f.session, f.membership, f.today, f.source
 	input := publicationTestReview{PlanID: plan, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, PublishedByID: actor, ChangeSummary: "Race", Prescriptions: []StructuredPrescriptionInput{{SessionID: session, MembershipID: membership, AthleteUserID: athlete, Snapshot: []byte(`{"schema_version":1}`), SnapshotSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}
 	// Pause the real admitted transaction in Go; changing publication triggers
 	// would correctly violate the runtime catalog and test a different failure.
@@ -74,7 +35,7 @@ func testPublicationRacesMembershipShortening(t *testing.T, iso pgx.TxIsoLevel) 
 	defer resume()
 	publishDone := make(chan error, 1)
 	go func() {
-		_, e := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: pool}, input)
+		_, e := confirmPublicationTestReview(ctx, PostgresStructuredTrainingStore{Pool: f.web}, input)
 		publishDone <- e
 	}()
 	awaitPublicationTestGate(t, ctx, reached, publishDone)

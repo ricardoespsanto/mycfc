@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -18,19 +17,15 @@ import (
 )
 
 func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, os.Getenv("TEST_DATABASE_URL"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-	store := PostgresStructuredTrainingStore{Pool: pool}
+	ctx, pool, fixture := currentTrainingFixture(t)
+	store := PostgresStructuredTrainingStore{Pool: fixture.web}
 	actor, current, future, expired := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	for _, id := range []uuid.UUID{actor, current, future, expired} {
 		if _, err := pool.Exec(ctx, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Publication test',$2,'hash','1990-01-01')`, id, uuid.NewString()+"@example.test"); err != nil {
 			t.Fatal(err)
 		}
 	}
+	currentTrainingActor(t, pool, actor)
 	var today time.Time
 	if err := pool.QueryRow(ctx, `SELECT (clock_timestamp() AT TIME ZONE 'Europe/Lisbon')::date`).Scan(&today); err != nil {
 		t.Fatal(err)
@@ -46,7 +41,7 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	memberships := map[uuid.UUID]uuid.UUID{}
-	for user, dates := range map[uuid.UUID][2]time.Time{current: {start, end}, future: {today.AddDate(0, 0, 1), end}, expired: {start, today}} {
+	for user, dates := range map[uuid.UUID][2]time.Time{current: {start, end}, future: {today.AddDate(0, 0, 2), end}, expired: {start, today}} {
 		id := uuid.New()
 		memberships[user] = id
 		if _, err := pool.Exec(ctx, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) VALUES($1,$2,$3,$4,$5,$6)`, id, user, season, programme, dates[0], dates[1]); err != nil {
@@ -61,6 +56,9 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	currentPlacement := currentTrainingPlacement(t, fixture, actor, current, programme, season, group, today)
+	currentTrainingPlacement(t, fixture, actor, future, programme, season, group, today.AddDate(0, 0, 2))
+	currentTrainingPlacement(t, fixture, actor, expired, programme, season, group, today)
 	monday := today.AddDate(0, 0, -(int(today.Weekday())+6)%7)
 	if _, err := pool.Exec(ctx, `INSERT INTO training_plans(id,title,programme_id,training_group_id,season_id,week_start,created_by_id) VALUES($1,'Publication plan',$2,$3,$4,$5,$6)`, plan, programme, group, season, monday, actor); err != nil {
 		t.Fatal(err)
@@ -134,7 +132,7 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 	if _, err := confirmPublicationTestReview(ctx, store, publicationTestReview{PlanID: plan, SourceUpdatedAt: pgtype.Timestamptz{Time: source, Valid: true}, PublishedByID: uuid.New()}); err == nil {
 		t.Fatal("missing publisher accepted")
 	}
-	closed, err := pgxpool.New(ctx, os.Getenv("TEST_DATABASE_URL"))
+	closed, err := pgxpool.New(ctx, fixture.web.Config().ConnString())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +141,7 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 		t.Fatal("closed database accepted publication")
 	}
 	// A row lock held by another writer must fail without a partial header.
-	limitedConfig, err := pgxpool.ParseConfig(os.Getenv("TEST_DATABASE_URL"))
+	limitedConfig, err := pgxpool.ParseConfig(fixture.web.Config().ConnString())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,11 +187,10 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT prescription.id FROM training_prescriptions prescription JOIN training_plan_publications publication ON publication.id=prescription.publication_id WHERE publication.plan_id=$1`, plan).Scan(&originalID); err != nil {
 		t.Fatal(err)
 	}
-	// Change group membership between preview and final insert. Failed second insert
-	// must roll back even a first valid insertion and the publication header.
-	if _, err := pool.Exec(ctx, `DELETE FROM training_group_members WHERE group_id=$1 AND membership_id=$2`, group, memberships[current]); err != nil {
-		t.Fatal(err)
-	}
+	// End the current dated placement between preview and final insert.
+	scoped := *fixture
+	scoped.actor, scoped.programme, scoped.season = actor, programme, season
+	scoped.changePlacement(t, trainingPlacementCommand{Kind: placementLeave, SubjectID: current, ContextGroupID: group, SourcePlacementID: currentPlacement, EffectiveOn: today.Format("2006-01-02")})
 	// A fresh valid recipient is inserted first; the stale preview recipient
 	// fails second and must roll back the entire new publication.
 	added := uuid.New()
@@ -207,6 +204,7 @@ func TestPublicationEligibilityAtBothDatesAndAtomicRecheck(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, group, memberships[added], actor); err != nil {
 		t.Fatal(err)
 	}
+	currentTrainingPlacement(t, fixture, actor, added, programme, season, group, today)
 	if err := pool.QueryRow(ctx, `SELECT updated_at FROM training_plans WHERE id=$1`, plan).Scan(&source); err != nil {
 		t.Fatal(err)
 	}
