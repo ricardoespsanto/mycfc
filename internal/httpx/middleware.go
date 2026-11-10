@@ -176,7 +176,7 @@ func SecurityHeadersMiddleware(production bool, imageOrigins ...string) Middlewa
 					w.Header().Set("Cache-Control", "no-store")
 					w.Header().Set("Referrer-Policy", "no-referrer")
 				}
-				if strings.HasPrefix(r.URL.Path, "/admin/treinos/estruturados/grupos") ||
+				if r.URL.Path == "/admin/treinos/estruturados" || strings.HasPrefix(r.URL.Path, "/admin/treinos/estruturados/") ||
 					r.URL.Path == "/admin/epocas" || strings.HasPrefix(r.URL.Path, "/admin/epocas/") {
 					w.Header().Set("Cache-Control", "no-store")
 					w.Header().Set("Referrer-Policy", "no-referrer")

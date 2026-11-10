@@ -8,7 +8,7 @@ import (
 
 // Authorization, CSRF and routing can reject requests before a season handler
 // runs. Their responses must retain the task's privacy protections too.
-func TestSeasonEarlyRejectionsRemainPrivate(t *testing.T) {
+func TestPlanningSetupEarlyRejectionsRemainPrivate(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, path string
 		status             int
@@ -16,6 +16,9 @@ func TestSeasonEarlyRejectionsRemainPrivate(t *testing.T) {
 		{"authorization", http.MethodGet, "/admin/epocas?return_q=private", http.StatusForbidden},
 		{"csrf", http.MethodPost, "/admin/epocas/criar", http.StatusForbidden},
 		{"unmatched", http.MethodGet, "/admin/epocas/missing", http.StatusNotFound},
+		{"week authorization", http.MethodGet, "/admin/treinos/estruturados?group_id=private", http.StatusForbidden},
+		{"week csrf", http.MethodPost, "/admin/treinos/estruturados/sessoes", http.StatusForbidden},
+		{"week unmatched", http.MethodGet, "/admin/treinos/estruturados/missing", http.StatusNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := SecurityHeadersMiddleware(false)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
