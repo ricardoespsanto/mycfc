@@ -114,8 +114,8 @@ async function previewMove(page, person, source, { kind = 'TEMPORARY', date = fu
     await expect(page.getByRole('heading', { name: 'Regresso ao grupo anterior', exact: true })).toBeVisible();
     const review = page.locator('section[aria-labelledby="placement-reviewed-title"]');
     await expect(review).toContainText(sourceName); await expect(review).toContainText(plus(end, 1));
-    await expect(page.locator('#placement-after')).toContainText(plus(date, -1));
-    await expect(page.locator('#placement-after')).toContainText(targetName); await expect(page.locator('#placement-after')).toContainText(end);
+    await expect(page.getByRole('region', { name: 'Depois', exact: true })).toContainText(plus(date, -1));
+    await expect(page.getByRole('region', { name: 'Depois', exact: true })).toContainText(targetName); await expect(page.getByRole('region', { name: 'Depois', exact: true })).toContainText(end);
   }
   await layout(page, `${label}-review320`, js);
   if (back) {

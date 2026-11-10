@@ -80,7 +80,7 @@ func TestPublicationMixedScheduleFreshPostgresRecipientsHistoryAndClosedGate(t *
 	policy := enableGuardianAuthorityTestPolicy(t, t.Context(), privileged, f.actor)
 	verifyGuardianAuthorityTestRelationship(t, t.Context(), privileged, guardian, minor, f.actor, policy)
 	f.exec(t, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) SELECT $1,$2,season_id,programme_id,CURRENT_DATE,CURRENT_DATE+300 FROM training_plans WHERE id=$3`, member, minor, f.plan)
-	f.exec(t, `INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, f.group, member, f.actor)
+	f.place(t, minor, f.group, f.season, f.day(t, 0))
 	input := f.review(t, "Mixed4 native schedules reviewed")
 	result, err := store.ConfirmPublication(t.Context(), input)
 	if err != nil || result.Revision != 2 || result.PrescriptionCount != 8 {

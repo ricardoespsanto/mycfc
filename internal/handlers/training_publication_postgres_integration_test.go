@@ -25,6 +25,7 @@ type publicationDomainFixture struct {
 	root, low                                        *pgx.Conn
 	web                                              *pgxpool.Pool
 	actor, subject, membership, group, plan, session uuid.UUID
+	programme, season, placement                     uuid.UUID
 	roles                                            db.RoleCredentials
 	raw                                              string
 }
@@ -80,7 +81,7 @@ func newPublicationDomainFixture(t *testing.T) *publicationDomainFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = f.low.Exec(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,3)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New(), strings.Repeat("a", 64)); err != nil {
+	if _, err = f.low.Exec(t.Context(), `SELECT training_schedule_control.commit_floor($1,$2,$3,$4,4)`, state.DatabaseIncarnation, state.StateEpoch, uuid.New(), strings.Repeat("a", 64)); err != nil {
 		t.Fatal(err)
 	}
 	u, _ := url.Parse(raw)
@@ -92,6 +93,7 @@ func newPublicationDomainFixture(t *testing.T) *publicationDomainFixture {
 	t.Cleanup(f.web.Close)
 	f.actor, f.subject, f.membership, f.group, f.plan, f.session = uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	season := uuid.New()
+	f.season = season
 	for _, id := range []uuid.UUID{f.actor, f.subject} {
 		f.exec(t, `INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Recipient composed subject',$2,'hash','1980-01-01')`, id, id.String()+"@example.test")
 	}
@@ -101,9 +103,10 @@ func newPublicationDomainFixture(t *testing.T) *publicationDomainFixture {
 	if err = f.web.QueryRow(t.Context(), `SELECT id FROM programmes WHERE code='Leisure'`).Scan(&programme); err != nil {
 		t.Fatal(err)
 	}
+	f.programme = programme
 	f.exec(t, `INSERT INTO user_memberships(id,user_id,season_id,programme_id,starts_on,ends_on) VALUES($1,$2,$3,$4,CURRENT_DATE,CURRENT_DATE+300)`, f.membership, f.subject, season, programme)
 	f.exec(t, `INSERT INTO training_groups(id,name,programme_id,created_by_id) VALUES($1,'Composed group',$2,$3)`, f.group, programme, f.actor)
-	f.exec(t, `INSERT INTO training_group_members(group_id,membership_id,added_by_id) VALUES($1,$2,$3)`, f.group, f.membership, f.actor)
+	f.placement = f.place(t, f.subject, f.group, season, f.day(t, 0))
 	f.exec(t, `INSERT INTO training_plans(id,title,programme_id,training_group_id,season_id,week_start,created_by_id) VALUES($1,'Composed week',$2,$3,$4,date_trunc('week',CURRENT_DATE)::date+7,$5)`, f.plan, programme, f.group, season, f.actor)
 	f.exec(t, `INSERT INTO training_sessions(id,plan_id,title,starts_at,ends_at,created_by_id) SELECT $1,id,'Composed exact session',(week_start::timestamp AT TIME ZONE 'Europe/Lisbon')+interval '10 hours',(week_start::timestamp AT TIME ZONE 'Europe/Lisbon')+interval '11 hours',$3 FROM training_plans WHERE id=$2`, f.session, f.plan, f.actor)
 	return f
@@ -177,7 +180,7 @@ func TestRecipientPublicationComposedReviewSaveNoopAndStale(t *testing.T) {
 	if err != nil || !material.NoChanges {
 		t.Fatal("canonical currentness failed", err)
 	}
-	f.exec(t, `DELETE FROM training_group_members WHERE group_id=$1 AND membership_id=$2`, f.group, f.membership)
+	f.changePlacement(t, trainingPlacementCommand{Kind: placementLeave, SubjectID: f.subject, ContextGroupID: f.group, SourcePlacementID: f.placement, EffectiveOn: f.day(t, 0)})
 	if _, err = store.ConfirmPublication(t.Context(), reverted); err == nil {
 		t.Fatal("changed audience silently recomputed")
 	}
