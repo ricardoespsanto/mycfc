@@ -153,3 +153,27 @@ func TestFocusedReviewJSONRejectsAmbiguousOrUnboundedInput(t *testing.T) {
 		}
 	}
 }
+
+func TestFocusedWaterPhaseLimitCountsDraftsHeldForUndo(t *testing.T) {
+	_, draft := focusedWorkoutFixture()
+	draft, err := applyFocusedWorkoutCommand(draft, "phase_remove:a_1:p_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for len(draft.Keys)+len(draft.Removed) < focusedWorkoutMaxPhases {
+		draft, err = applyFocusedWorkoutCommand(draft, "phase_add:a_1")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := focusedDraftWithRemovalFields(draft).Encode()
+	out, err := applyFocusedWorkoutCommand(draft, "phase_add:a_1")
+	if !errors.Is(err, errFocusedWorkoutLimit) || focusedDraftWithRemovalFields(out).Encode() != before {
+		t.Fatalf("phase limit discarded a draft or returned %v", err)
+	}
+	values := focusedDraftWithRemovalFields(draft)
+	values["removed_order"] = []string{"r_1", "r_2"}
+	if _, err = parseFocusedWorkoutDraft(values); !errors.Is(err, errFocusedWorkoutLimit) {
+		t.Fatalf("over-limit removal submission returned %v", err)
+	}
+}
