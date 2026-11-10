@@ -240,3 +240,36 @@ func TestPublicationStructuralCandidatesPreserveDistinctMissingEpisodes(t *testi
 		t.Fatal("duplicate structural placement accepted")
 	}
 }
+
+func TestPublicationSourceRefusesDetachedOrDuplicateFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*publicationSourceEnvelope)
+	}{
+		{"another group's overview", func(s *publicationSourceEnvelope) { s.Overview[0].GroupID = uuid.New() }},
+		{"missing overview", func(s *publicationSourceEnvelope) { s.Overview = nil }},
+		{"candidate references unknown session", func(s *publicationSourceEnvelope) { s.Candidates[0].SessionID = uuid.New() }},
+		{"event lacks scheduled start", func(s *publicationSourceEnvelope) {
+			s.ReferencedEvents = []publicationEvent{{EventID: uuid.New()}}
+		}},
+		{"same event appears twice", func(s *publicationSourceEnvelope) {
+			event := publicationEvent{EventID: uuid.New(), StartsAt: s.Header.SourceUpdatedAt}
+			s.ReferencedEvents = []publicationEvent{event, event}
+		}},
+		{"latest snapshot has invalid hash", func(s *publicationSourceEnvelope) {
+			s.Header.LatestRevision = 1
+			s.Header.LatestPublicationID = testUUIDPtr(uuid.New())
+			r := s.EligibleRecipients[0]
+			s.LatestPrescriptions = []publicationHashTuple{{SessionID: r.SessionID, MembershipID: r.MembershipID, SnapshotSHA256: "bad"}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := publicationSourceFixture()
+			tc.change(&source)
+			material, err := materializePublicationSource(source, time.UTC)
+			if !errors.Is(err, errPublicationSourceUnavailable) || len(material.Prescriptions) != 0 {
+				t.Fatalf("invalid source produced a publishable result: %v", err)
+			}
+		})
+	}
+}

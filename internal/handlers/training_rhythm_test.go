@@ -245,3 +245,31 @@ func TestRhythmStepOverrideUsesChosenProfileAndPreservesLiteralSymbols(t *testin
 		}
 	}
 }
+
+func TestPublicationRhythmReferencesRequireCanonicalBlockOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*publicationSourceEnvelope)
+		want   error
+	}{
+		{"empty profile", func(s *publicationSourceEnvelope) { s.Overview[0].WaterIntensityProfileID = testUUIDPtr(uuid.Nil) }, errPublicationRhythmReference},
+		{"invalid variation JSON", func(s *publicationSourceEnvelope) { s.VariationDefinitions[0].Patch = json.RawMessage(`[1]`) }, errPublicationSourceUnavailable},
+		{"profile on a segment", func(s *publicationSourceEnvelope) {
+			s.VariationDefinitions[0].SubjectKind = dbgen.TrainingVariationSubjectKindSEGMENT
+		}, errPublicationRhythmReference},
+		{"numeric profile", func(s *publicationSourceEnvelope) {
+			s.VariationDefinitions[0].Patch = json.RawMessage(`{"intensity_profile_id":123}`)
+		}, errPublicationRhythmReference},
+		{"noncanonical profile", func(s *publicationSourceEnvelope) {
+			s.VariationDefinitions[0].Patch = json.RawMessage(`{"intensity_profile_id":"40200000000000000000000000000001"}`)
+		}, errPublicationRhythmReference},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := rhythmFixture()
+			tc.change(&source)
+			if ids, err := publicationRhythmProfileIDs(source); !errors.Is(err, tc.want) || ids != nil {
+				t.Fatalf("invalid rhythm reference entered the review: %v, %v", ids, err)
+			}
+		})
+	}
+}

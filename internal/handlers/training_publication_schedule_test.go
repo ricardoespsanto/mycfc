@@ -167,3 +167,31 @@ func TestPublicationEnabledAdmissionReplacesOnlyPublicationV1Guard(t *testing.T)
 		}
 	}
 }
+
+func TestPublicationSourceSchedulesDistinguishEmptyWeekFromIncompleteSession(t *testing.T) {
+	source := publicationSourceFixture()
+	empty := source.Overview[0]
+	empty.SessionID = nil
+	schedules, err := publicationSourceSchedules([]dbgen.ListStructuredTrainingOverviewForManagerRow{empty})
+	if err != nil || len(schedules) != 0 {
+		t.Fatalf("empty overview acquired a session: %v", err)
+	}
+
+	incomplete := source.Overview[0]
+	incomplete.SchedulePrecision = nil
+	schedules, err = publicationSourceSchedules([]dbgen.ListStructuredTrainingOverviewForManagerRow{incomplete})
+	if !errors.Is(err, errPublicationSourceUnavailable) || schedules != nil {
+		t.Fatalf("incomplete stored schedule entered publication: %v", err)
+	}
+}
+
+func TestPublicationArtifactsRespectTransportBudgetBeforeDatabaseCheck(t *testing.T) {
+	for _, inputs := range [][]StructuredPrescriptionInput{
+		make([]StructuredPrescriptionInput, trainingPublicationReviewMaxTuples+1),
+		{{Snapshot: make([]byte, trainingPublicationReviewMaxSnapshotBytes+1)}},
+	} {
+		if err := checkPublicationArtifactSizes(t.Context(), nil, inputs); !errors.Is(err, errTrainingPublicationReviewLimit) {
+			t.Fatalf("oversized inputs reached database inspection: %v", err)
+		}
+	}
+}
