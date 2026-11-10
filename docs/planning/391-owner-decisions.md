@@ -104,8 +104,10 @@ locally verified, including proper-role PostgreSQL and native browser journeys;
 see `../dated-training-placements-verification.md`. This does not establish full
 #391 acceptance or release. Its fresh-schema definitions, generated queries and
 affected read/publication integration are feature requirements, not conversion
-of existing records. Craft guidance and full real-plan/manual/coach/natural-clock
-acceptance remain outstanding.
+of existing records. Craft guidance and both automated real-plan replays are now
+verified in `../coach-planning-acceptance.md`; coach-observed usability, actual
+screen-reader use and natural midnight return remain untested. The pending owner
+question asks whether to complete or explicitly exclude those checks.
 Temporary placements return to the previous group; exact season dates remain
 unknown and configurable. No destructive database operation is needed or
 authorized for this local increment. GitHub and release actions remain separate.
