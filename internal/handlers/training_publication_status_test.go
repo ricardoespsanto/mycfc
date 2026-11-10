@@ -6,6 +6,7 @@ import (
 	"time"
 
 	dbgen "github.com/cfcoimbra/mycfc/internal/db/generated"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -28,5 +29,23 @@ func TestPublicationStatusRejectsRevokedOrChangedWeek(t *testing.T) {
 				t.Fatalf("stale or revoked status was exposed: %+v, %v", state, err)
 			}
 		})
+	}
+}
+
+func TestPublicationStatusReportsPeerVariationConflictWithoutPreview(t *testing.T) {
+	source := instructionReviewFixture()
+	peer := source.VariationMatches[0]
+	peer.VariationID = uuid.New()
+	definition := source.VariationDefinitions[0]
+	definition.VariationID = peer.VariationID
+	source.VariationDefinitions = append(source.VariationDefinitions, definition)
+	source.VariationMatches = append(source.VariationMatches, peer)
+	store := &publicationHTTPStoreFake{source: source}
+	row := dbgen.ListManagedTrainingPublicationStatesRow{
+		ID: source.Header.PlanID, PublishedAt: source.Header.SourceUpdatedAt,
+	}
+	state, err := (StructuredTraining{Location: time.UTC}).publicationCanonicalStatus(t.Context(), store, row)
+	if err != nil || state.Status != "Variações em conflito" || state.Current || state.ConflictCount != 1 || state.PublishedAt == "" {
+		t.Fatalf("conflicting sources appeared publishable: %+v, %v", state, err)
 	}
 }

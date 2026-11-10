@@ -127,3 +127,36 @@ func TestPublicationHTTPInstructionInspectionRetainsOriginalProofAndRejectsStale
 		t.Fatal("stale inspection discarded original own summary/proof")
 	}
 }
+
+func TestPublicationInstructionReviewRefusesAmbiguousPrivateRecords(t *testing.T) {
+	for _, tc := range []string{"missing recipient identity", "conflicting recipient names", "conflicting session titles", "duplicate instructions", "broken saved instructions"} {
+		t.Run(tc, func(t *testing.T) {
+			source := instructionReviewFixture()
+			material, err := materializePublicationSource(source, time.UTC)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch tc {
+			case "missing recipient identity":
+				source.EligibleRecipients[0].AthleteUserID = nil
+			case "conflicting recipient names":
+				row := source.EligibleRecipients[0]
+				row.AthleteName = "Different person"
+				source.EligibleRecipients = append(source.EligibleRecipients, row)
+			case "conflicting session titles":
+				row := source.Overview[0]
+				title := "Other session"
+				row.SessionTitle = &title
+				source.Overview = append(source.Overview, row)
+			case "duplicate instructions":
+				material.Prescriptions = append(material.Prescriptions, material.Prescriptions[0])
+			case "broken saved instructions":
+				material.Prescriptions[0].Snapshot = []byte(`{"schema_version":999}`)
+			}
+			view, err := publicationInstructionReview(source, material, "", time.UTC)
+			if err == nil || view != nil {
+				t.Fatal("inconsistent private instructions entered the rendered review")
+			}
+		})
+	}
+}

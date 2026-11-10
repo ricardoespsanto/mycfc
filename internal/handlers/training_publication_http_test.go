@@ -186,3 +186,58 @@ func TestPublicationHTTPRevocationPrecedesRetainedFieldsAndLargeBody(t *testing.
 		t.Fatal("over-limit form reached domain work")
 	}
 }
+
+func TestPublicationHTTPRefusesInvalidReviewRequestsBeforeReadingRecipients(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values url.Values
+	}{
+		{"duplicate operation", url.Values{"publication_intent": {"preview", "confirm"}, "change_summary": {"Resumo privado"}}},
+		{"missing summary", url.Values{"publication_intent": {"preview"}}},
+		{"short summary", url.Values{"publication_intent": {"preview"}, "change_summary": {"x"}}},
+		{"inspection without instruction key", url.Values{"publication_intent": {"inspect"}}},
+		{"inspection with malformed review", url.Values{"publication_intent": {"inspect"}, "instruction_key": {"unknown"}}},
+		{"confirmation without consent", url.Values{"publication_intent": {"confirm"}}},
+		{"confirmation without proof", url.Values{"publication_intent": {"confirm"}, "confirm": {"yes"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, handler, path := publicationHTTPFixture(t)
+			response := publicationPost(t, handler, path, tc.values)
+			if response.Code != 422 || store.readCalls != 0 || store.confirmCalls != 0 || strings.Contains(response.Body.String(), "Ana") {
+				t.Fatalf("invalid form reached a private review: status %d, reads %d, writes %d", response.Code, store.readCalls, store.confirmCalls)
+			}
+		})
+	}
+}
+
+func TestPublicationHTTPReviewRefusalsDoNotReturnPrivateAudience(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		storeError error
+		change     func(*publicationSourceEnvelope, url.Values)
+		status     int
+	}{
+		{"scope revoked after header", pgx.ErrNoRows, nil, 404},
+		{"source read unavailable", errors.New("private database error"), nil, 503},
+		{"no first recipients", nil, func(s *publicationSourceEnvelope, _ url.Values) {
+			s.EligibleRecipients = s.EligibleRecipients[:0]
+		}, 422},
+		{"foreign return group", nil, func(_ *publicationSourceEnvelope, v url.Values) {
+			v.Set("return_group", uuid.NewString())
+			v.Set("return_week", uuid.NewString())
+		}, 422},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, handler, path := publicationHTTPFixture(t)
+			values := url.Values{"publication_intent": {"preview"}, "change_summary": {"Resumo privado"}}
+			store.readErr = tc.storeError
+			if tc.change != nil {
+				tc.change(&store.source, values)
+			}
+			response := publicationPost(t, handler, path, values)
+			if response.Code != tc.status || store.readCalls != 1 || store.confirmCalls != 0 || strings.Contains(response.Body.String(), "Ana") || strings.Contains(response.Body.String(), "private database error") {
+				t.Fatalf("review refusal exposed a private source or allowed confirmation: status %d", response.Code)
+			}
+		})
+	}
+}
