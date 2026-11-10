@@ -323,14 +323,7 @@ func (s PostgresDefinitionStore) List(ctx context.Context, actor uuid.UUID) ([]D
 var definitionTemplate = template.Must(template.New("definitions").Parse(`<!doctype html>
 <html lang="pt-PT">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Escalões da época | MyCFCoimbra</title>
-<style>
-*{box-sizing:border-box}body{font:1rem/1.5 system-ui;max-width:48rem;margin:auto;padding:1rem;overflow-wrap:anywhere}
-label,input,select{display:block;max-width:100%}input,select{width:100%;min-height:2.75rem;margin:.3rem 0 1rem;font:inherit}
-button{min-height:2.75rem;font:inherit;padding:.4rem 1rem}a,button,input,select{touch-action:manipulation}
-:focus-visible,[tabindex="-1"]:focus{outline:3px solid #205493;outline-offset:3px}
-.error{border:2px solid currentColor;padding:1rem;margin:1rem 0}[aria-invalid="true"]{border:2px solid #a52820}
-@media(forced-colors:active){.error,[aria-invalid="true"]{border-color:CanvasText}:focus-visible,[tabindex="-1"]:focus{outline-color:Highlight}}
-</style></head><body><main><h1 id="heading" tabindex="-1" {{if not .Message}}autofocus{{end}}>Escalões da época</h1>
+<link rel="stylesheet" href="/equipa/escaloes.css"></head><body><main><h1 id="heading" tabindex="-1" {{if not .Message}}autofocus{{end}}>Escalões da época</h1>
 {{if .GroupReturnURL}}<p><a href="{{.GroupReturnURL}}">Voltar ao grupo e à semana</a></p>{{end}}<p><a href="/today">Voltar a Hoje</a></p>
 <p>Crie uma definição para a época atual antes de classificar participantes. As datas de nascimento são inclusivas e avaliadas no início da época; não há mudança automática no aniversário. Competição exige escalão; Iniciação pode ter um. Uma definição utilizada não pode ser alterada aqui.</p>
 {{if .Message}}<div role="alert" class="error" id="errors" tabindex="-1" autofocus><strong>Não foi possível guardar</strong><p><a href="#{{.ErrorTarget}}">{{.Message}}</a></p></div>{{end}}

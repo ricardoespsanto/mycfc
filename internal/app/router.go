@@ -94,6 +94,7 @@ func newRouter(pool handlers.DBPinger, sessions *scs.SessionManager, landing han
 	mux.Handle("GET /equipa/classificacao", auth.RequireAuthenticated(http.HandlerFunc(members.Classification.Search)))
 	mux.Handle("GET /equipa/classificacao/{id}", auth.RequireAuthenticated(http.HandlerFunc(members.Classification.Get)))
 	mux.Handle("GET /equipa/classificacao.css", http.HandlerFunc(handlers.ClassificationStylesheet))
+	mux.Handle("GET /equipa/escaloes.css", http.HandlerFunc(handlers.DefinitionsStylesheet))
 	mux.Handle("GET /equipa/escaloes", auth.RequireAuthenticated(http.HandlerFunc(members.Definitions.Get)))
 	mux.Handle("POST /equipa/escaloes", auth.RequireAuthenticated(http.HandlerFunc(members.Definitions.Post)))
 	mux.Handle("POST /equipa/classificacao/{id}", auth.RequireAuthenticated(http.HandlerFunc(members.Classification.Post)))
