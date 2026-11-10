@@ -81,3 +81,18 @@ func TestDefinitionsRejectForgedScopeAndActor(t *testing.T) {
 		t.Fatalf("creation count=%d actor=%s", f.created, f.actor)
 	}
 }
+
+func TestDefinitionsInitialPageHasNoValidationErrorTarget(t *testing.T) {
+	actor, season, programme := uuid.New(), uuid.New(), uuid.New()
+	h := Definitions{Store: &definitionFake{scopes: []DefinitionScope{{SeasonID: season, ProgrammeID: programme, Season: "Configured season", Programme: "Competição"}}}}
+	r := httptest.NewRequest("GET", "/equipa/escaloes", nil)
+	r = r.WithContext(context.WithValue(r.Context(), currentUserKey{}, CurrentUser{ID: actor}))
+	w := httptest.NewRecorder()
+	h.Get(w, r)
+	if w.Code != 200 || strings.Contains(w.Body.String(), `aria-invalid="true"`) || strings.Contains(w.Body.String(), `id="errors"`) {
+		t.Fatalf("initial page presents validation failure: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if definitionErrorTarget(422, "Escolha a época e o programa.") != "scope" || definitionErrorTarget(409, "Já existe um escalão.") != "code" {
+		t.Fatal("real errors lost their field target")
+	}
+}

@@ -233,6 +233,9 @@ func (h Definitions) Post(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/equipa/escaloes", http.StatusSeeOther)
 }
 func definitionErrorTarget(status int, message string) string {
+	if message == "" {
+		return ""
+	}
 	switch {
 	case status == http.StatusConflict:
 		return "code"
