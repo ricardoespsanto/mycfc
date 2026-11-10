@@ -55,7 +55,7 @@ async function layout(page, name, js) {
   fs.writeFileSync(`${evidence}/${name}.html`, await page.content());
   await page.screenshot({ path: `${evidence}/${name}.png`, fullPage: true });
 }
-async function search(page, person, date = today()) {
+async function search(page, person, date = today(), initialJoin = false) {
   await page.goto(`${groups}/${id(200)}/atletas`);
   await expect(page.getByLabel('Época', { exact: false })).toHaveValue('');
   await expect(page.getByLabel('Data da colocação', { exact: false })).toHaveValue('');
@@ -65,11 +65,14 @@ async function search(page, person, date = today()) {
   await page.getByLabel('Nome do atleta', { exact: false }).fill(person === 7000 ? 'Colocação nativa' : 'Colocação imediata');
   await page.getByRole('button', { name: 'Pesquisar', exact: true }).click();
   const proof = page.locator('form[method="post"] input[name="selection_proof"]');
-  await expect(proof).not.toHaveValue(''); expect(new URL(page.url()).searchParams.has('selection_proof')).toBe(false);
+  const candidate = page.locator(`input[name="membership_id"][value="${id(person + 100)}"]`);
+  if (initialJoin) { await expect(candidate).toBeEnabled(); await expect(proof).not.toHaveValue(''); }
+  else { await expect(candidate).toBeDisabled(); await expect(proof).toHaveValue(''); }
+  expect(new URL(page.url()).searchParams.has('selection_proof')).toBe(false);
   for (const name of ['Colocação inativa sintética', 'Colocação outra participação secreta', 'placement-native@example.test', '1990-01-01']) await expect(page.locator('main')).not.toContainText(name);
 }
 async function join(page, person, js) {
-  await search(page, person); await layout(page, `placement-${person}-search320`, js);
+  await search(page, person, today(), true); await layout(page, `placement-${person}-search320`, js);
   const body = page.locator('form[method="post"]').filter({ has: page.locator('input[name="selection_proof"]') });
   await body.locator(`[name="membership_id"][value="${id(person + 100)}"]`).check();
   const before = await facts(`placement-${person}-before-join`);
