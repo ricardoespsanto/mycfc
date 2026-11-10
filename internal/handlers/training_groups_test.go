@@ -17,29 +17,36 @@ import (
 )
 
 type taskGroupsFake struct {
-	group                             TrainingGroupRecord
-	scopes                            []TrainingGroupScope
-	rows                              []TrainingGroupAthlete
-	groupErr, writeErr                error
-	create                            TrainingGroupCreateInput
-	rename                            TrainingGroupRenameInput
-	roster                            TrainingGroupRosterInput
-	created, renamed, added, searched int
-	addedCount                        int
-	gets                              int
-	revokeAfterWrite                  bool
-	allowedWeeks                      map[uuid.UUID]bool
+	group                                                           TrainingGroupRecord
+	groups                                                          []TrainingGroupRecord
+	listErr, scopesErr, rosterErr, searchErr, reviewErr, seasonsErr error
+	listOffset, rosterOffset, searchOffset                          int32
+	scopes                                                          []TrainingGroupScope
+	rows                                                            []TrainingGroupAthlete
+	groupErr, writeErr                                              error
+	create                                                          TrainingGroupCreateInput
+	rename                                                          TrainingGroupRenameInput
+	roster                                                          TrainingGroupRosterInput
+	created, renamed, added, searched                               int
+	addedCount                                                      int
+	gets                                                            int
+	revokeAfterWrite                                                bool
+	allowedWeeks                                                    map[uuid.UUID]bool
 }
 
 func (s *taskGroupsFake) AllowsWeek(_ context.Context, _, _, week uuid.UUID) (bool, error) {
 	return s.allowedWeeks[week], nil
 }
 
-func (s *taskGroupsFake) ListGroups(context.Context, uuid.UUID, int32) ([]TrainingGroupRecord, error) {
-	return []TrainingGroupRecord{s.group}, nil
+func (s *taskGroupsFake) ListGroups(_ context.Context, _ uuid.UUID, offset int32) ([]TrainingGroupRecord, error) {
+	s.listOffset = offset
+	if s.groups != nil {
+		return s.groups, s.listErr
+	}
+	return []TrainingGroupRecord{s.group}, s.listErr
 }
 func (s *taskGroupsFake) ListScopes(context.Context, uuid.UUID) ([]TrainingGroupScope, error) {
-	return s.scopes, nil
+	return s.scopes, s.scopesErr
 }
 func (s *taskGroupsFake) GetGroup(context.Context, uuid.UUID, uuid.UUID) (TrainingGroupRecord, error) {
 	s.gets++
@@ -48,24 +55,26 @@ func (s *taskGroupsFake) GetGroup(context.Context, uuid.UUID, uuid.UUID) (Traini
 	}
 	return s.group, s.groupErr
 }
-func (s *taskGroupsFake) ListRoster(context.Context, uuid.UUID, uuid.UUID, int32) ([]TrainingGroupAthlete, error) {
-	return s.rows, nil
+func (s *taskGroupsFake) ListRoster(_ context.Context, _, _ uuid.UUID, offset int32) ([]TrainingGroupAthlete, error) {
+	s.rosterOffset = offset
+	return s.rows, s.rosterErr
 }
 func (s *taskGroupsFake) SearchAthletes(context.Context, uuid.UUID, uuid.UUID, string, int32) ([]TrainingGroupAthlete, error) {
 	s.searched++
-	return s.rows, nil
+	return s.rows, s.searchErr
 }
 
 var taskGroupSeason = uuid.MustParse("39100000-0000-0000-0000-000000000091")
 
 func (s *taskGroupsFake) PlacementSeasons(context.Context, uuid.UUID, uuid.UUID) ([]dbgen.ListReuseTargetSeasonsRow, error) {
-	return []dbgen.ListReuseTargetSeasonsRow{{ID: taskGroupSeason, Name: "Configured fixture season", StartsOn: pgtype.Date{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}, EndsOn: pgtype.Date{Time: time.Date(2027, 12, 31, 0, 0, 0, 0, time.UTC), Valid: true}}}, nil
+	return []dbgen.ListReuseTargetSeasonsRow{{ID: taskGroupSeason, Name: "Configured fixture season", StartsOn: pgtype.Date{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Valid: true}, EndsOn: pgtype.Date{Time: time.Date(2027, 12, 31, 0, 0, 0, 0, time.UTC), Valid: true}}}, s.seasonsErr
 }
 func (s *taskGroupsFake) SearchAthletesForDate(ctx context.Context, a, g, season uuid.UUID, on time.Time, q string, offset int32) ([]TrainingGroupAthlete, error) {
+	s.searchOffset = offset
 	return s.SearchAthletes(ctx, a, g, q, offset)
 }
 func (s *taskGroupsFake) ReviewAthleteSelection(context.Context, TrainingGroupRosterInput, []TrainingGroupAthlete) (string, error) {
-	return "opaque-fixture-selection-proof", nil
+	return "opaque-fixture-selection-proof", s.reviewErr
 }
 func (s *taskGroupsFake) CreateGroup(_ context.Context, in TrainingGroupCreateInput) (TrainingGroupRecord, error) {
 	s.created++

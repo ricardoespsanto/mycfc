@@ -32,6 +32,7 @@ type placementHTTPStoreFake struct {
 	cancellation                                                                       trainingPlacementCancellationRead
 	contextCalls, viewCalls, readCalls, confirmCalls, cancelReads, cancelCalls, writes int
 	confirmErr, cancelErr, contextErrAfterConfirm                                      error
+	contextErr, viewErr, cancelReadErr, cancelReadErrAfterConfirm                      error
 	received                                                                           trainingPlacementReviewed
 	cancelReceived                                                                     trainingPlacementCancelReviewed
 	receiptFingerprint                                                                 string
@@ -40,13 +41,19 @@ type placementHTTPStoreFake struct {
 
 func (s *placementHTTPStoreFake) PlacementContext(context.Context, uuid.UUID, uuid.UUID) (trainingPlacementPageContext, error) {
 	s.contextCalls++
-	if s.confirmCalls > 0 && s.contextErrAfterConfirm != nil {
+	if s.contextErr != nil {
+		return trainingPlacementPageContext{}, s.contextErr
+	}
+	if s.confirmCalls+s.cancelCalls > 0 && s.contextErrAfterConfirm != nil {
 		return trainingPlacementPageContext{}, s.contextErrAfterConfirm
 	}
 	return s.context, nil
 }
 func (s *placementHTTPStoreFake) PlacementView(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, string) (trainingPlacementView, error) {
 	s.viewCalls++
+	if s.viewErr != nil {
+		return trainingPlacementView{}, s.viewErr
+	}
 	return trainingPlacementView{PersonID: s.command.SubjectID, PersonName: "Pessoa privada sintética", Revision: s.q.subject.Revision, Timeline: s.q.timeline, Groups: s.q.groups}, nil
 }
 func (s *placementHTTPStoreFake) ReadPlacement(ctx context.Context, actor uuid.UUID, c trainingPlacementCommand, refresh bool) (trainingPlacementRead, error) {
@@ -85,6 +92,12 @@ func (s *placementHTTPStoreFake) ConfirmPlacement(ctx context.Context, r trainin
 }
 func (s *placementHTTPStoreFake) ReadPlacementCancellation(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) (trainingPlacementCancellationRead, error) {
 	s.cancelReads++
+	if s.cancelReadErr != nil {
+		return trainingPlacementCancellationRead{}, s.cancelReadErr
+	}
+	if s.cancelCalls > 0 && s.cancelReadErrAfterConfirm != nil {
+		return trainingPlacementCancellationRead{}, s.cancelReadErrAfterConfirm
+	}
 	return s.cancellation, nil
 }
 func (s *placementHTTPStoreFake) ConfirmPlacementCancellation(_ context.Context, r trainingPlacementCancelReviewed) (trainingPlacementSaveResult, error) {

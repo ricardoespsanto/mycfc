@@ -15,6 +15,8 @@ type placementBatchFake struct {
 	*placementTxFake
 	prepared, touched, groupReads int
 	replayMode                    string
+	groupErr                      error
+	afterTouchClock               time.Time
 }
 
 func (q *placementBatchFake) PreparePlacementBatch(_ context.Context, _ TrainingGroupRosterInput, reviews []trainingPlacementReviewed) error {
@@ -30,15 +32,21 @@ func (q *placementBatchFake) PlacementBatchGroup(_ context.Context, _, group uui
 	q.groupReads++
 	if touch {
 		q.touched++
+		if !q.afterTouchClock.IsZero() {
+			q.clock = q.afterTouchClock
+		}
 	}
-	return TrainingGroupRecord{ID: group}, nil
+	return TrainingGroupRecord{ID: group}, q.groupErr
 }
 func (q *placementBatchFake) TrainingPlacementApplyReplay(_ context.Context, p dbgen.TrainingPlacementApplyReplayParams) (dbgen.TrainingPlacementApplyReplayRow, error) {
 	q.replayCalls++
+	if q.replayMode == "invalid receipt" {
+		return dbgen.TrainingPlacementApplyReplayRow{ChangeID: p.CommandID}, nil
+	}
 	if q.replayMode == "all" || q.replayMode == "mixed" && q.replayCalls == 1 {
 		return dbgen.TrainingPlacementApplyReplayRow{ChangeID: p.CommandID, HeadRevision: p.ExpectedRevision + 1, DestinationPlacementID: uuid.New(), Replayed: true}, nil
 	}
-	return dbgen.TrainingPlacementApplyReplayRow{}, pgx.ErrNoRows
+	return dbgen.TrainingPlacementApplyReplayRow{}, q.replayErr
 }
 func placementBatchFixture(t *testing.T) (*placementBatchFake, TrainingGroupRosterInput, []trainingPlacementReviewed) {
 	t.Helper()
@@ -110,5 +118,57 @@ func TestTrainingPlacementBatchInitialJoinsAreAtomicCallback(t *testing.T) {
 	out, e := saveTrainingPlacementBatch(t.Context(), q, in, reviews)
 	if e != nil || out.Added != 1 || q.prepared != 1 || q.applyCalls != 1 || q.touched != 1 {
 		t.Fatalf("out=%+v err=%v prepare=%d writes=%d touch=%d", out, e, q.prepared, q.applyCalls, q.touched)
+	}
+}
+
+func TestPlacementBatchStopsBeforeWritesWhenAdmissionOrReceiptChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*placementBatchFake, *TrainingGroupRosterInput, []trainingPlacementReviewed)
+		want   error
+	}{
+		{"selection mismatch", func(_ *placementBatchFake, in *TrainingGroupRosterInput, _ []trainingPlacementReviewed) {
+			in.MembershipIDs = nil
+		}, errTrainingPlacementInvalid},
+		{"runtime unavailable", func(q *placementBatchFake, _ *TrainingGroupRosterInput, _ []trainingPlacementReviewed) {
+			q.errorRuntime = errTrainingPlacementUnavailable
+		}, errTrainingPlacementUnavailable},
+		{"unverified review", func(_ *placementBatchFake, _ *TrainingGroupRosterInput, r []trainingPlacementReviewed) {
+			r[0].verified = false
+		}, errTrainingPlacementInvalid},
+		{"changed runtime", func(q *placementBatchFake, _ *TrainingGroupRosterInput, _ []trainingPlacementReviewed) {
+			q.state.StateEpoch++
+		}, errTrainingPlacementChanged},
+		{"expired offer", func(q *placementBatchFake, _ *TrainingGroupRosterInput, r []trainingPlacementReviewed) {
+			q.clock = r[0].expiresAt
+		}, errTrainingPlacementInvalid},
+		{"invalid retained receipt", func(q *placementBatchFake, _ *TrainingGroupRosterInput, _ []trainingPlacementReviewed) {
+			q.replayMode = "invalid receipt"
+		}, errTrainingPlacementInvalid},
+		{"revoked receipt lookup", func(q *placementBatchFake, _ *TrainingGroupRosterInput, _ []trainingPlacementReviewed) {
+			q.replayErr = errTrainingPlacementUnavailable
+		}, errTrainingPlacementUnavailable},
+		{"revoked receipt group", func(q *placementBatchFake, _ *TrainingGroupRosterInput, _ []trainingPlacementReviewed) {
+			q.replayMode = "all"
+			q.groupErr = pgx.ErrNoRows
+		}, pgx.ErrNoRows},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q, in, reviews := placementBatchFixture(t)
+			tc.change(q, &in, reviews)
+			out, err := saveTrainingPlacementBatch(t.Context(), q, in, reviews)
+			if !errors.Is(err, tc.want) || q.applyCalls != 0 || q.touched != 0 || out.Added != 0 {
+				t.Fatalf("out=%+v err=%v writes=%d touches=%d", out, err, q.applyCalls, q.touched)
+			}
+		})
+	}
+}
+
+func TestPlacementBatchRejectsExpiryAfterGroupTouch(t *testing.T) {
+	q, in, reviews := placementBatchFixture(t)
+	q.afterTouchClock = reviews[0].expiresAt
+	out, err := saveTrainingPlacementBatch(t.Context(), q, in, reviews)
+	if !errors.Is(err, errTrainingPlacementInvalid) || q.applyCalls != 1 || q.touched != 1 || out.Added != 0 {
+		t.Fatalf("expired callback returned success %+v err=%v applies=%d touches=%d", out, err, q.applyCalls, q.touched)
 	}
 }

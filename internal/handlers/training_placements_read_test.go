@@ -21,6 +21,7 @@ type placementReadFake struct {
 	returns                   []dbgen.TrainingPlacementReturnForReviewRow
 	subjectReads, sourceReads int
 	driftSubject, driftSource bool
+	readErrors                map[string]error
 }
 
 func (f *placementReadFake) TrainingPlacementSubjectForReview(context.Context, dbgen.TrainingPlacementSubjectForReviewParams) (dbgen.TrainingPlacementSubjectForReviewRow, error) {
@@ -29,7 +30,7 @@ func (f *placementReadFake) TrainingPlacementSubjectForReview(context.Context, d
 	if f.driftSubject && f.subjectReads > 1 {
 		s.Revision++
 	}
-	return s, nil
+	return s, f.readErrors["subject"]
 }
 func (f *placementReadFake) TrainingPlacementSourceForReview(context.Context, dbgen.TrainingPlacementSourceForReviewParams) (dbgen.TrainingPlacementSourceForReviewRow, error) {
 	f.sourceReads++
@@ -37,19 +38,19 @@ func (f *placementReadFake) TrainingPlacementSourceForReview(context.Context, db
 	if f.driftSource && f.sourceReads > 1 {
 		s.Version++
 	}
-	return s, nil
+	return s, f.readErrors["source"]
 }
 func (f *placementReadFake) TrainingPlacementGroupChoices(context.Context, dbgen.TrainingPlacementGroupChoicesParams) ([]dbgen.TrainingPlacementGroupChoicesRow, error) {
-	return f.groups, nil
+	return f.groups, f.readErrors["groups"]
 }
 func (f *placementReadFake) TrainingPlacementTimeline(context.Context, dbgen.TrainingPlacementTimelineParams) ([]dbgen.TrainingPlacementTimelineRow, error) {
-	return f.timeline, nil
+	return f.timeline, f.readErrors["timeline"]
 }
 func (f *placementReadFake) TrainingPlacementInstructionReview(context.Context, dbgen.TrainingPlacementInstructionReviewParams) ([]dbgen.TrainingPlacementInstructionReviewRow, error) {
-	return f.instructions, nil
+	return f.instructions, f.readErrors["instructions"]
 }
 func (f *placementReadFake) TrainingPlacementReturnForReview(context.Context, dbgen.TrainingPlacementReturnForReviewParams) ([]dbgen.TrainingPlacementReturnForReviewRow, error) {
-	return f.returns, nil
+	return f.returns, f.readErrors["returns"]
 }
 func placementReadFixture() (*placementReadFake, trainingPlacementContext, trainingPlacementCommand, db.TrainingScheduleState) {
 	x, c := placementTestCommand()

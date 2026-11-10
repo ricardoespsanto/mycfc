@@ -165,7 +165,8 @@ type placementCancelTxFake struct {
 	change                                dbgen.TrainingPlacementChangeForReviewRow
 	state                                 db.TrainingScheduleState
 	clock                                 time.Time
-	replayErr                             error
+	replayErr, changeErr                  error
+	driftChangeAt                         int
 	replay                                dbgen.TrainingPlacementCancelReplayRow
 	result                                dbgen.CancelTrainingPlacementChangeRow
 	replayCalls, cancelCalls, changeReads int
@@ -180,7 +181,11 @@ func (q *placementCancelTxFake) PlacementDecisionAt(context.Context) (time.Time,
 }
 func (q *placementCancelTxFake) TrainingPlacementChangeForReview(context.Context, dbgen.TrainingPlacementChangeForReviewParams) (dbgen.TrainingPlacementChangeForReviewRow, error) {
 	q.changeReads++
-	return q.change, nil
+	row := q.change
+	if q.changeReads == q.driftChangeAt {
+		row.Revision++
+	}
+	return row, q.changeErr
 }
 func (q *placementCancelTxFake) TrainingPlacementCancelReplay(_ context.Context, p dbgen.TrainingPlacementCancelReplayParams) (dbgen.TrainingPlacementCancelReplayRow, error) {
 	q.replayCalls++
