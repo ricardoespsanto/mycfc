@@ -41,3 +41,39 @@ Final current-candidate run: `/tmp/announcement-339-current-runtime-20261111-2` 
 Final cleanup: attributed volume `f1ec02e4a36511ccf7d8beb717d89c525b7522b2c9ea6de8ff29c7a845702fc0` was removed and verified absent; no owned containers remain and loopback ports36317/44321 are closed. `cleanup.success=true`; external evidence is0700 and retained synthetic guardian cookies are0600. Focused ESLint on the exact external helper/spec copies, Node syntax, Python compilation and diff-whitespace checks passed. An initial ESLint invocation from the checkout could not resolve the externally installed dependencies; rerunning with the unchanged repository config beside those dependencies passed without changing checkout dependencies.
 
 Current compatibility development attempt `/tmp/announcement-339-current-runtime-20261111-1` is a failed run (no passing summary): two audience cases passed, the correction case hit only the multiple-status strict-locator ambiguity, and revocation was not run. Its cleanup succeeded, including exact attributed volume `3886dcb42d0839690c93dbaa7bb3d3dd530856e4bca4d1863d50fc4e5df07167` removal and ports48089/54157 closed. No production behavior defect was observed. Full repository verification, independent current-candidate QA, manual assistive technology/real zoom and release actions remain outside this bounded harness fix.
+
+
+Release verification on current main (11 November 2026): source checkpoint
+`2e9f3609d2cb9f5746ead7f277030654d4a95e89` is based on production `c84ebc6`;
+the original `24913e5` is superseded and must not be deployed. The proper-role
+runner/helper update was independently reviewed at `dcc30e1`; integration changes
+only test tooling/documentation, with unchanged four case specs and production code.
+The final scoped current-runtime evidence is
+`/tmp/announcement-339-current-runtime-20261111-2`: four passes, zero failures,
+skips or retries, exact source/test/binary hashes and attributed cleanup verified
+by independent QA.
+
+Separate full-release evidence is `/tmp/mycfc-339-release-2e9f360-qa/REPORT.md`.
+Stamped normal production-Dockerfile declarations, generation parity and all
+pre-browser `make verify` stages passed. Literal `make verify` exited 2 at missing
+isolated `.env`; its pinned-container browser replacement passed 28 default cases,
+with 145 configured opt-in skips and zero failures/retries. The clean full tagged
+serial integration passed 3,398 events, zero failures and four named skips: one
+separate root-container stamped-admission opt-in and three archived unsupported
+conversion/reset success paths. The outbox runtime-role proof ran and passed on
+its dedicated empty fixture. No assertion was weakened. The initial incomplete-role,
+reused-data integration attempt and old privileged browser fixture failed and remain
+failed development evidence. The committed #339 PostgreSQL test must run on a fresh
+test database; it is not repeatable on populated data. Cleanup verified exact
+principal resources and all 325 attributed helper containers/volumes. Earlier
+unattributable local synthetic-volume limits remain as already documented.
+
+Current source and installed normal-release compatibility were independently
+reviewed; the bounded production low-role read-only ledger observation and retained
+generation-1 reconciliation evidence support the same-schema admission plan.
+The dormant disposable helper finding remains unresolved and is not accepted or
+exercised by the normal release. A new image still requires its real signed
+main/CI/tag/attested digest bindings and the independently reviewed, corrected
+operator procedure; no deployment success follows from these local checks.
+PR #406 is pending canonical CI. Manual screen-reader/real zoom, production
+admission/health/receipt evidence and release publication are not claimed here.
