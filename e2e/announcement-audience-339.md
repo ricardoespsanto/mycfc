@@ -1,0 +1,123 @@
+# Announcement audience #339 isolated browser evidence
+
+Run only against a reviewed backend commit; the runner exports that exact commit to external evidence and builds it there. It never reads `.env`, resets shared services, or invokes the shared E2E/integration runners.
+
+```sh
+python e2e/run-announcement-audience-339.py \
+  /tmp/announcement-339-evidence-UNIQUE \
+  /absolute/path/to/reviewed/backend-checkout \
+  d592d7c74c4e6b17e45b1a7e866ea3616a38f84e
+```
+
+Requires Docker, Go, Node/npm and Python with `tarfile` extraction filters. The external directory must not exist; it is created mode 0700 and contains synthetic session cookies (0600), logs, source/test SHA-256 manifests, binary SHA-256, Playwright JSON/trace/screenshot artifacts, preserved receipt and historical-row comparisons. Dependencies use the repository lockfile in an external prefix; selected tests/config are copied beside those dependencies, with no checkout mount or mutation. Runtime image identities and isolated resource names/ports are recorded. No plaintext runtime configuration file is created or retained: Docker receives environment variable names only in arguments and reads synthetic values from an allowlisted subprocess environment containing only fixture configuration and the Docker client PATH. PostgreSQL readiness uses the same memory-only credential transfer; recorded container inspection omits its environment. Bootstrap command credentials remain in subprocess memory. No ambient host credentials or Docker configuration are forwarded. Synthetic session-cookie evidence remains private within the 0700 evidence directory (cookie files are 0600). Outside this opt-in fixture the specs are skipped; the selected isolated run must have no skips. Chromium runs in the repository-pinned `mcr.microsoft.com/playwright:v1.63.0-noble` container with one worker and zero retries; the runner requires exactly four passed selected cases and rejects skips/retries.
+
+The uniquely named disposable PostgreSQL container exposes only random loopback ports and uses the exact exported candidate’s real `bootstrap-db`, migration-role `migrate` and `prepare-local-recipient-floor`, then bootstrap-role `harden-db` commands on the new `mycfc` database. The runner never installs baseline SQL or synthesizes a migration ledger. The actual final TCP database must answer a query before initialization. Synthetic guardian activation follows the existing crew fixture's isolated test policy pattern; it is not real policy approval or live verification. The fixture is deliberately an unstamped local/test build (`APP_VERSION=dev`, zero `GIT_SHA`), with source identity recorded separately; it uses the existing allowed local preparation flow and does not establish stamped production-image acceptance. Prepared reader floor must equal compiled capability, schema contract must be `schedule-p1`, partial authoring must be enabled by the real preparation command, and ledger inventory must exactly match the candidate migrations plus `reset-baseline-v1`. Both host and serving-container `precision-status` use `announcement_web` and must match the prepared database incarnation and floor commit; the runtime role must lack superuser and bypass-RLS attributes. Bootstrap credentials are used only for synthetic seed/control SQL. The statically built app runs as that low-privilege role in a separate disposable Alpine container sharing the database network namespace; both PostgreSQL and app published ports bind to 127.0.0.1. The `finally` block removes only its named app, browser and database containers, and captures the exact PostgreSQL anonymous-volume identity before deletion, removes the containers with `docker rm -fv`, and writes `cleanup.json` with container/volume/port checks. A successful exit and passing `summary.json` require every cleanup check to pass; the summary is written only after cleanup. Evidence remains for independent review; delete that exact directory manually when no longer needed.
+
+Coverage exercises actual authenticated classification sport/craft forms, all six legacy craft target UUIDs resolved by code plus SUP, the current-participation prerequisite, stale legacy membership selections, meaningful programme/SUP OR with deduplication, deterministic eight-notice pagination with exactly six first-page and two second-page links, working next/previous controls, and six-item panel versus full unread count, detail-only read marking, byte-for-byte historical delivery/read timestamp preservation through hide/re-add, Canoagem craft cascade and non-resurrection. Guardian tests distinguish verified child's K2 from guardian's own SUP and an inactive child's SUP; revoked authority is applied between phases while the original authenticated synthetic cookies are retained. Subsequent requests must lose child-only list/panel/detail/count eligibility while own sporting/OR eligibility remains. Panel checks navigate anew because the existing cache lasts for the page lifetime.
+
+Keyboard Enter/Escape, close-button focus/return, visible trigger outline, 320px overflow and serious/critical axe checks cover the list and open panel. These automated checks do not establish manual screen-reader, real browser zoom, push invalidation, full repository verification, backend exhaustive matrix, independent QA approval, or production readiness.
+
+Execution results and any failed setup/development attempts are recorded by the delivery worker alongside the final evidence path; a missing summary is a failed or incomplete run, never a pass. This post-cleanup guarantee applies to the revised runner below; earlier summaries did not establish volume cleanup.
+
+Verified 11 November 2026 against backend checkpoint `b5ed711638cc978d334b971b11887d4899fb4108`: external evidence `/tmp/announcement-339-browser-evidence-final-optin` records **4 passed, 0 failed, 0 skipped, 0 retries**, one worker, repository-pinned Playwright 1.63.0 Chromium container; serious/critical axe checks passed on the 320px list and open bell. `summary.json` confirms historical rows equal and receipt preserved; `cleanup.json` confirms app stopped, no named containers remain, and ports 44451/49393 closed. Focused ESLint, Node syntax checks, Python AST parsing and staged diff whitespace checks also passed.
+
+Earlier development evidence remains external and is not counted as final acceptance: attempts `-1` through `-3` failed on fixture deactivation ordering, PostgreSQL temporary-startup readiness and the nested read-only mount respectively; attempt `-4` had one failed correction status assertion and two passed browser cases. Those harness/assertion issues were corrected; attempt `-5` and `-final` each passed all four cases before the final historical-receipt and opt-in versions were settled. At that earlier checkpoint independent QA and manual accessibility evidence remained outstanding; the final QA result is recorded below.
+
+
+Independent QA follow-up: the original runner omitted `-v` when removing PostgreSQL and could write its passing summary before discovering cleanup failures. The earlier browser results remain valid test results, but the old cleanup evidence did **not** prove anonymous-volume deletion or gate the summary on cleanup. The revised runner records `postgres-container.json` and `volumes-before.json`, verifies that the owned volume is gone and ports are closed, rejects any failed cleanup flag, and writes the passing summary only afterward. Pagination now checks page boundaries and next/previous controls explicitly, so returning all eight on page one fails.
+
+Prior-volume attribution evidence is `/tmp/announcement-339-volume-attribution`: recorded container IDs joined to Docker volume mount/unmount events prove ownership for attempts `-4`, `-5`, `-final` and `-final-optin`. Their four exact volumes were inspected, checked for attachments, removed individually without force, and verified gone; the old final-optin volume was `6451a8b2bb31af6f87358440ef7e7f60df8ccc8d11e4ee037a6d6f4c16bdec8d`. Attempts `-1` through `-3` remain unresolved possible volume leaks because their removed containers were never inspected and the relevant events have aged out of Docker's retained event history. No guessed volume, unrelated resource or broad prune was used.
+
+QA-fix verification, 11 November 2026: `/tmp/announcement-339-browser-evidence-qa-fixes` ran the revised runner and helper against the same exact production checkpoint `b5ed711638cc978d334b971b11887d4899fb4108` (the separate backend test-only checkpoint `16cec6d` does not change this runtime). All **4 selected cases passed, 0 failed, 0 skipped, 0 retries**, with one pinned Playwright worker; explicit six/two pagination controls, mobile axe checks, historical-row equality and preserved receipt passed. The source/test/image manifests identify the exact inputs, and binary SHA-256 is `a2c88695dd844b0efa77034656dc26794656f9576c8b9e280fd65ea5a10a9797`. The attributed volume `fd0b99ee28561acc247d23c0ab217ae26461b6087d904b29025ba076bb901859` was removed and verified gone, no owned containers remain, ports 58243/54935 are closed, and `cleanup.success` is true in the post-cleanup summary. Runnable test/fixture/runner hashes match the evidence manifest, summary time follows cleanup time, and focused ESLint, Node syntax, Python AST and diff-whitespace checks passed. Independent final QA subsequently verified the exact production export, executable test hashes, binary hash, four zero-retry/zero-skip passes, six/two assertions and successful attributed-volume/container/port cleanup. It closed all browser findings and found no material blocker for this bounded slice, combining this evidence with the reviewed backend regression at `16cec6d`. The three unattributed possible leaks above remain unresolved. This does not approve release or establish the manual/full-repository checks excluded above.
+
+Current-candidate compatibility verification (11 November 2026): the earlier `b5ed711` execution and QA records above remain historical and do not attest the current candidate. The compatibility change is limited to proper-role fixture initialization/readiness and a reported, lead-approved helper locator adjustment: current member detail contains multiple `role=status` paragraphs, so the correction success assertion now filters by the same required success text and additionally requires exactly one match. The four case specs and every sporting/authority/parity/history/pagination/accessibility assertion remain unchanged. No schema, application, configuration, dependency or production-admission change is included.
+
+Final current-candidate run: `/tmp/announcement-339-current-runtime-20261111-2` verifies exact exported runtime source `2e9f3609d2cb9f5746ead7f277030654d4a95e89`, with all **4 passed, 0 failed, 0 skipped, 0 retries**, one pinned Playwright 1.63.0 worker (audience phase 26.119s, revocation phase 2.325s). Both 320px serious/critical axe scans and focus/overflow assertions passed, along with actual sporting corrections, six/two pagination, subject/participation/revocation parity, retained guardian cookies, historical-row equality and byte-for-byte preserved receipt. `summary.json` was written only after successful cleanup. Binary SHA-256: `6a6f6a6dede093d0fd643d000b915541e259d583441fadacb2afc97e8f8f4bf1`.
+
+`prepared-state.json` records reader floor5, epoch3, enabled partial authoring, full exact migration inventory and database incarnation `d4d1bfdf-3ed9-440c-b4d7-276d08f0b94b`. `runtime-precision-status.json` and `container-runtime-precision-status.json` are equal and match that incarnation and floor commit `279e6a04-c16c-4e7c-b002-a8fb43c939ce`; `runtime-role.json` confirms `announcement_web` has neither superuser nor bypass-RLS. This is the documented fresh local fixture contract, not a production image or release approval.
+
+`source-hashes.json` identifies every exported runtime file; `test-hashes.json` identifies the exact runnable inputs, package lock and Playwright configuration. Executable hashes were checked against the final checkout after the run: runner `ccfaad42e43b979cd7ad377d249987b90672bbb756cea481d3d7be0308c3199d`, seed `fe3a9af8d314c9c6f2a0af0ba18f13cf6f71bd9b51892c730a3120ce3f7cd5cc`, helper `3bde9d1ae6efbc75a869bbba8c9d839215a9d3a30bcb65db2e0cd3462dd39272`. The unchanged audience/revocation specs are `06665ea3a1ac865dc46f5315d4ce1e11394d1210984c46a8cb8fa92014557695` and `79cf4968cd172835f008b1157bc462c054023c8f00a3577aef78ee98aefcabfc`. This evidence document was updated after execution, so its pre-run manifest hash is historical. `runtime-images.json` records Docker image IDs: PostgreSQL `sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54`, Alpine `sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6`, Playwright `sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27`.
+
+Final cleanup: attributed volume `f1ec02e4a36511ccf7d8beb717d89c525b7522b2c9ea6de8ff29c7a845702fc0` was removed and verified absent; no owned containers remain and loopback ports36317/44321 are closed. `cleanup.success=true`; external evidence is0700 and retained synthetic guardian cookies are0600. Focused ESLint on the exact external helper/spec copies, Node syntax, Python compilation and diff-whitespace checks passed. An initial ESLint invocation from the checkout could not resolve the externally installed dependencies; rerunning with the unchanged repository config beside those dependencies passed without changing checkout dependencies.
+
+Current compatibility development attempt `/tmp/announcement-339-current-runtime-20261111-1` is a failed run (no passing summary): two audience cases passed, the correction case hit only the multiple-status strict-locator ambiguity, and revocation was not run. Its cleanup succeeded, including exact attributed volume `3886dcb42d0839690c93dbaa7bb3d3dd530856e4bca4d1863d50fc4e5df07167` removal and ports48089/54157 closed. No production behavior defect was observed. Full repository verification, independent current-candidate QA, manual assistive technology/real zoom and release actions remain outside this bounded harness fix.
+
+
+Release verification on current main (11 November 2026): source checkpoint
+`2e9f3609d2cb9f5746ead7f277030654d4a95e89` is based on production `c84ebc6`;
+the original `24913e5` is superseded and must not be deployed. The proper-role
+runner/helper update was independently reviewed at `dcc30e1`; integration changes
+only test tooling/documentation, with unchanged four case specs and production code.
+The final scoped current-runtime evidence is
+`/tmp/announcement-339-current-runtime-20261111-2`: four passes, zero failures,
+skips or retries, exact source/test/binary hashes and attributed cleanup verified
+by independent QA.
+
+Separate full-release evidence is `/tmp/mycfc-339-release-2e9f360-qa/REPORT.md`.
+Stamped normal production-Dockerfile declarations, generation parity and all
+pre-browser `make verify` stages passed. Literal `make verify` exited 2 at missing
+isolated `.env`; its pinned-container browser replacement passed 28 default cases,
+with 145 configured opt-in skips and zero failures/retries. The clean full tagged
+serial integration passed 3,398 events, zero failures and four named skips: one
+separate root-container stamped-admission opt-in and three archived unsupported
+conversion/reset success paths. The outbox runtime-role proof ran and passed on
+its dedicated empty fixture. No assertion was weakened. The initial incomplete-role,
+reused-data integration attempt and old privileged browser fixture failed and remain
+failed development evidence. The committed #339 PostgreSQL test must run on a fresh
+test database; it is not repeatable on populated data. Cleanup verified exact
+principal resources and all 325 attributed helper containers/volumes. Earlier
+unattributable local synthetic-volume limits remain as already documented.
+
+Current source and installed normal-release compatibility were independently
+reviewed; the bounded production low-role read-only ledger observation and retained
+generation-1 reconciliation evidence support the same-schema admission plan.
+The dormant disposable helper finding remains unresolved and is not accepted or
+exercised by the normal release. A new image still requires its real signed
+main/CI/tag/attested digest bindings and the independently reviewed, corrected
+operator procedure; no deployment success follows from these local checks.
+PR #406 is pending canonical CI. Manual screen-reader/real zoom, production
+admission/health/receipt evidence and release publication are not claimed here.
+
+
+CodeQL gate remediation (11 November 2026): PR #406 check `130794703878`
+reported HIGH clear-text sensitive storage in the fixture's generated runtime
+configuration. The runner now creates no plaintext runtime configuration file;
+Docker `--env` arguments contain names only, with synthetic values supplied via
+`run(..., env=...)`. Its application configuration is explicitly allowlisted from
+the exact exported `.env.example` plus synthetic fixture overrides, and Docker
+subprocesses receive only that configuration when needed and the client PATH.
+No ambient host credential/configuration environment is inherited by Docker or
+bootstrap application commands. PostgreSQL startup/readiness credentials also
+stay out of argv, and the saved ownership inspection omits `Config.Env` so it
+cannot retain the PostgreSQL password. Bootstrap credentials remain memory-only.
+Private synthetic session-cookie evidence remains 0600 under the 0700 evidence
+root. No suppression, dismissal, exclusion or assertion change is involved.
+
+The revised runner passed all **4 cases, 0 failed, 0 skipped, 0 retries**, against
+exact exported runtime `d592d7c74c4e6b17e45b1a7e866ea3616a38f84e` in
+`/tmp/announcement-339-codeql-d592d7c-20261111-1`. Actual serving identity remains
+`announcement_web` without superuser/bypass-RLS; host/container precision status
+match the real prepared database incarnation and floor commit. The existing
+reader-floor, exact ledger, sporting/guardian/participation, six/two pagination,
+retained-cookie revocation, receipt/history, focus, 320px and axe assertions all
+passed unchanged. Binary SHA-256 is
+`d29e207282122e6510ba3b185230a74b94534a65fb23e68c9d6094f6c56cadbe`;
+runner SHA-256 is
+`51822e7e44bad84fbcf6130f3da42235157eb22216ca9a89abe778a678da3cf5`.
+`source-hashes.json` and `test-hashes.json` identify and match the exported source
+and runnable inputs; this document's manifest hash precedes this results update.
+
+Post-cleanup `summary.json` records `cleanup.success=true`: no named containers
+remain, exact owned volume
+`95820158f9672f7e0d1739cf109050a89d2f4eaa68358e65f71543cc3cac118f`
+is gone and loopback ports 60615/46561 are closed. No runtime configuration file
+exists and a value-only check found none of the generated fixture database
+password/DSN values in top-level log/JSON evidence. Python compilation, Node
+syntax, focused ESLint against unchanged external spec/helper copies, manifest
+and binary verification, and diff whitespace checks passed. The first lint
+invocation omitted the external config copy and failed configuration discovery;
+copying the unchanged repository config to the external dependency prefix fixed
+the invocation, with no repository dependency changes. Required CodeQL must be
+rerun and pass after the lead integrates this local harness fix; this local
+verification does not claim that remote gate has passed. No GitHub, live-system,
+push, merge, deployment or production-source change was made.
