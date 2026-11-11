@@ -6,10 +6,10 @@ Run only against a reviewed backend commit; the runner exports that exact commit
 python e2e/run-announcement-audience-339.py \
   /tmp/announcement-339-evidence-UNIQUE \
   /absolute/path/to/reviewed/backend-checkout \
-  2e9f3609d2cb9f5746ead7f277030654d4a95e89
+  d592d7c74c4e6b17e45b1a7e866ea3616a38f84e
 ```
 
-Requires Docker, Go, Node/npm and Python with `tarfile` extraction filters. The external directory must not exist; it is created mode 0700 and contains synthetic session cookies (0600), logs, source/test SHA-256 manifests, binary SHA-256, Playwright JSON/trace/screenshot artifacts, preserved receipt and historical-row comparisons. Dependencies use the repository lockfile in an external prefix; selected tests/config are copied beside those dependencies, with no checkout mount or mutation. Runtime image identities and isolated resource names/ports are recorded. Outside this opt-in fixture the specs are skipped; the selected isolated run must have no skips. Chromium runs in the repository-pinned `mcr.microsoft.com/playwright:v1.63.0-noble` container with one worker and zero retries; the runner requires exactly four passed selected cases and rejects skips/retries.
+Requires Docker, Go, Node/npm and Python with `tarfile` extraction filters. The external directory must not exist; it is created mode 0700 and contains synthetic session cookies (0600), logs, source/test SHA-256 manifests, binary SHA-256, Playwright JSON/trace/screenshot artifacts, preserved receipt and historical-row comparisons. Dependencies use the repository lockfile in an external prefix; selected tests/config are copied beside those dependencies, with no checkout mount or mutation. Runtime image identities and isolated resource names/ports are recorded. No plaintext runtime configuration file is created or retained: Docker receives environment variable names only in arguments and reads synthetic values from an allowlisted subprocess environment containing only fixture configuration and the Docker client PATH. PostgreSQL readiness uses the same memory-only credential transfer; recorded container inspection omits its environment. Bootstrap command credentials remain in subprocess memory. No ambient host credentials or Docker configuration are forwarded. Synthetic session-cookie evidence remains private within the 0700 evidence directory (cookie files are 0600). Outside this opt-in fixture the specs are skipped; the selected isolated run must have no skips. Chromium runs in the repository-pinned `mcr.microsoft.com/playwright:v1.63.0-noble` container with one worker and zero retries; the runner requires exactly four passed selected cases and rejects skips/retries.
 
 The uniquely named disposable PostgreSQL container exposes only random loopback ports and uses the exact exported candidate’s real `bootstrap-db`, migration-role `migrate` and `prepare-local-recipient-floor`, then bootstrap-role `harden-db` commands on the new `mycfc` database. The runner never installs baseline SQL or synthesizes a migration ledger. The actual final TCP database must answer a query before initialization. Synthetic guardian activation follows the existing crew fixture's isolated test policy pattern; it is not real policy approval or live verification. The fixture is deliberately an unstamped local/test build (`APP_VERSION=dev`, zero `GIT_SHA`), with source identity recorded separately; it uses the existing allowed local preparation flow and does not establish stamped production-image acceptance. Prepared reader floor must equal compiled capability, schema contract must be `schedule-p1`, partial authoring must be enabled by the real preparation command, and ledger inventory must exactly match the candidate migrations plus `reset-baseline-v1`. Both host and serving-container `precision-status` use `announcement_web` and must match the prepared database incarnation and floor commit; the runtime role must lack superuser and bypass-RLS attributes. Bootstrap credentials are used only for synthetic seed/control SQL. The statically built app runs as that low-privilege role in a separate disposable Alpine container sharing the database network namespace; both PostgreSQL and app published ports bind to 127.0.0.1. The `finally` block removes only its named app, browser and database containers, and captures the exact PostgreSQL anonymous-volume identity before deletion, removes the containers with `docker rm -fv`, and writes `cleanup.json` with container/volume/port checks. A successful exit and passing `summary.json` require every cleanup check to pass; the summary is written only after cleanup. Evidence remains for independent review; delete that exact directory manually when no longer needed.
 
@@ -77,3 +77,47 @@ main/CI/tag/attested digest bindings and the independently reviewed, corrected
 operator procedure; no deployment success follows from these local checks.
 PR #406 is pending canonical CI. Manual screen-reader/real zoom, production
 admission/health/receipt evidence and release publication are not claimed here.
+
+
+CodeQL gate remediation (11 November 2026): PR #406 check `130794703878`
+reported HIGH clear-text sensitive storage in the fixture's generated runtime
+configuration. The runner now creates no plaintext runtime configuration file;
+Docker `--env` arguments contain names only, with synthetic values supplied via
+`run(..., env=...)`. Its application configuration is explicitly allowlisted from
+the exact exported `.env.example` plus synthetic fixture overrides, and Docker
+subprocesses receive only that configuration when needed and the client PATH.
+No ambient host credential/configuration environment is inherited by Docker or
+bootstrap application commands. PostgreSQL startup/readiness credentials also
+stay out of argv, and the saved ownership inspection omits `Config.Env` so it
+cannot retain the PostgreSQL password. Bootstrap credentials remain memory-only.
+Private synthetic session-cookie evidence remains 0600 under the 0700 evidence
+root. No suppression, dismissal, exclusion or assertion change is involved.
+
+The revised runner passed all **4 cases, 0 failed, 0 skipped, 0 retries**, against
+exact exported runtime `d592d7c74c4e6b17e45b1a7e866ea3616a38f84e` in
+`/tmp/announcement-339-codeql-d592d7c-20261111-1`. Actual serving identity remains
+`announcement_web` without superuser/bypass-RLS; host/container precision status
+match the real prepared database incarnation and floor commit. The existing
+reader-floor, exact ledger, sporting/guardian/participation, six/two pagination,
+retained-cookie revocation, receipt/history, focus, 320px and axe assertions all
+passed unchanged. Binary SHA-256 is
+`d29e207282122e6510ba3b185230a74b94534a65fb23e68c9d6094f6c56cadbe`;
+runner SHA-256 is
+`51822e7e44bad84fbcf6130f3da42235157eb22216ca9a89abe778a678da3cf5`.
+`source-hashes.json` and `test-hashes.json` identify and match the exported source
+and runnable inputs; this document's manifest hash precedes this results update.
+
+Post-cleanup `summary.json` records `cleanup.success=true`: no named containers
+remain, exact owned volume
+`95820158f9672f7e0d1739cf109050a89d2f4eaa68358e65f71543cc3cac118f`
+is gone and loopback ports 60615/46561 are closed. No runtime configuration file
+exists and a value-only check found none of the generated fixture database
+password/DSN values in top-level log/JSON evidence. Python compilation, Node
+syntax, focused ESLint against unchanged external spec/helper copies, manifest
+and binary verification, and diff whitespace checks passed. The first lint
+invocation omitted the external config copy and failed configuration discovery;
+copying the unchanged repository config to the external dependency prefix fixed
+the invocation, with no repository dependency changes. Required CodeQL must be
+rerun and pass after the lead integrates this local harness fix; this local
+verification does not claim that remote gate has passed. No GitHub, live-system,
+push, merge, deployment or production-source change was made.

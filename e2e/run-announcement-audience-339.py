@@ -19,15 +19,19 @@ ports = []
 postgres_started = False
 owned_volumes = []
 summary = None
+# Docker receives only its executable search path and explicitly supplied synthetic
+# fixture values. Never forward ambient host credentials or Docker configuration.
+docker_env = {'PATH': os.environ.get('PATH', os.defpath)}
 def free_port():
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
         return s.getsockname()[1]
 def run(args, log, **kwargs):
+    if args[0] == 'docker': kwargs.setdefault('env', docker_env)
     with (out / log).open('w') as f:
         subprocess.run(args, cwd=source, stdout=f, stderr=subprocess.STDOUT, check=True, **kwargs)
 def sql(text):
-    return subprocess.check_output(['docker','exec','-i',name,'psql','-U','acceptance','-d','mycfc','-v','ON_ERROR_STOP=1','-At'],input=text,text=True)
+    return subprocess.check_output(['docker','exec','-i',name,'psql','-U','acceptance','-d','mycfc','-v','ON_ERROR_STOP=1','-At'],input=text,text=True,env=docker_env)
 def browser(spec, phase):
     run(['docker','run','--rm','--name',name+'-browser','--network','host','--user',f'{os.getuid()}:{os.getgid()}',
          '-e','E2E_BASE_URL='+base,'-e','E2E_ANNOUNCEMENT_339_EVIDENCE=/evidence','-e','E2E_JSON_OUTPUT=/evidence/'+phase+'.json',
@@ -39,14 +43,17 @@ def hashes(directory):
     return {str(p.relative_to(directory)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(directory.rglob('*')) if p.is_file()}
 def capture_postgres_volume():
     # Inspect only the uniquely named container created by this run, before deletion.
-    container = json.loads(subprocess.check_output(['docker','inspect',name],text=True))[0]
+    container = json.loads(subprocess.check_output(['docker','inspect',name],text=True,env=docker_env))[0]
     recorded_id = (out/'container.log').read_text().strip()
     if container['Id'] != recorded_id or container['Name'] != '/'+name:
         raise RuntimeError('PostgreSQL container ownership mismatch')
     volumes = [m['Name'] for m in container['Mounts'] if m['Type']=='volume' and m['Destination']=='/var/lib/postgresql/data']
     if len(volumes) != 1: raise RuntimeError('Expected exactly one attributable PostgreSQL data volume')
+    # Inspect includes the container's environment, including its synthetic password.
+    # Retain ownership/mount evidence without persisting credential configuration.
+    container['Config'].pop('Env', None)
     (out/'postgres-container.json').write_text(json.dumps(container,indent=2))
-    (out/'volumes-before.json').write_text(subprocess.check_output(['docker','volume','inspect',*volumes],text=True))
+    (out/'volumes-before.json').write_text(subprocess.check_output(['docker','volume','inspect',*volumes],text=True,env=docker_env))
     return volumes
 try:
     ports = [free_port(), free_port()]
@@ -55,7 +62,7 @@ try:
     (out/'checkpoint.txt').write_text(checkpoint+'\n')
     (out/'source-hashes.json').write_text(json.dumps(hashes(source),indent=2))
     (out/'test-hashes.json').write_text(json.dumps({str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted([*(root/'e2e').glob('*announcement-audience-339*'),*[root/f for f in ['package.json','package-lock.json','playwright.config.mjs']]]) if p.is_file()},indent=2))
-    (out/'runtime-images.json').write_text(subprocess.check_output(['docker','image','inspect','postgres:16','alpine:3.24.2','mcr.microsoft.com/playwright:v1.63.0-noble'],text=True))
+    (out/'runtime-images.json').write_text(subprocess.check_output(['docker','image','inspect','postgres:16','alpine:3.24.2','mcr.microsoft.com/playwright:v1.63.0-noble'],text=True,env=docker_env))
     (out/'resources.json').write_text(json.dumps({'name':name,'postgres_port':pgport,'app_port':appport,'published_address':'127.0.0.1'},indent=2))
     deps=out/'deps';deps.mkdir()
     (deps/'e2e').mkdir()
@@ -63,19 +70,34 @@ try:
     shutil.copy2(root/'playwright.config.mjs',deps/'playwright.config.mjs')
     for filename in ['package.json','package-lock.json']: shutil.copy2(root/filename,deps/filename)
     run(['npm','ci','--prefix',str(deps),'--ignore-scripts','--no-audit','--no-fund'],'dependencies.log')
-    run(['docker','run','-d','--name',name,'-e','POSTGRES_USER=acceptance','-e','POSTGRES_PASSWORD=disposable-only','-e','POSTGRES_DB=mycfc','-p',f'127.0.0.1:{pgport}:5432','-p',f'127.0.0.1:{appport}:8080','postgres:16','-c','timezone=Europe/Lisbon'],'container.log')
+    run(['docker','run','-d','--name',name,'--env','POSTGRES_USER','--env','POSTGRES_PASSWORD','--env','POSTGRES_DB','-p',f'127.0.0.1:{pgport}:5432','-p',f'127.0.0.1:{appport}:8080','postgres:16','-c','timezone=Europe/Lisbon'],'container.log',
+        env=dict(docker_env,POSTGRES_USER='acceptance',POSTGRES_PASSWORD='disposable-only',POSTGRES_DB='mycfc'))
     postgres_started = True
     owned_volumes = capture_postgres_volume()
     for _ in range(60):
-        if subprocess.run(['docker','exec','-e','PGPASSWORD=disposable-only',name,'psql','-w','-h','127.0.0.1','-U','acceptance','-d','mycfc','-Atqc','SELECT 1'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0: break
+        if subprocess.run(['docker','exec','--env','PGPASSWORD',name,'psql','-w','-h','127.0.0.1','-U','acceptance','-d','mycfc','-Atqc','SELECT 1'],env=dict(docker_env,PGPASSWORD='disposable-only'),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0: break
         time.sleep(1)
     else: raise RuntimeError('PG not ready')
     with (out/'build.log').open('w') as log: subprocess.run(['go','build','-o',str(out/'server'),'./cmd/server'],cwd=source,env={**os.environ,'CGO_ENABLED':'0'},stdout=log,stderr=subprocess.STDOUT,check=True)
     (out/'binary.sha256').write_text(hashlib.sha256((out/'server').read_bytes()).hexdigest()+'\n')
+    app_env_keys = set('''APP_ENV APP_VERSION APP_RELEASED_AT RELEASE_REPOSITORY LOG_LEVEL
+        GIT_SHA PORT BASE_URL DATABASE_URL CSRF_AUTH_KEY_B64 EMAIL_VERIFICATION_HMAC_KEY_B64
+        TURNSTILE_SITE_KEY TURNSTILE_SECRET_KEY TURNSTILE_SITE_KEY_PARAMETER_NAME
+        TURNSTILE_SECRET_KEY_PARAMETER_NAME SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD
+        SMTP_FROM_ADDRESS SMTP_FROM_NAME SMTP_TLS_MODE SMTP_TIMEOUT POSTGRES_DB POSTGRES_PORT
+        POSTGRES_USER POSTGRES_PASSWORD APP_DB_USER APP_DB_PASSWORD MIGRATION_DB_USER
+        MIGRATION_DB_PASSWORD TRAINING_SCHEDULE_ADMISSION_FILE AWS_REGION AWS_ACCESS_KEY_ID
+        AWS_SECRET_ACCESS_KEY MINIO_KMS_SECRET_KEY S3_BUCKET_NAME S3_ENDPOINT S3_FORCE_PATH_STYLE
+        MEDIA_UPLOAD_PUBLIC_KEY_B64 MEDIA_UPLOAD_ENCRYPTION_KEY_ID MEDIA_UPLOAD_DIGEST_KEY_ID
+        MEDIA_UPLOAD_DIGEST_KEY_B64 GALLERY_URL CONSENT_TERMS_VERSION CONSENT_TERMS_SHA256
+        CONSENT_TERMS_URL CONSENT_IMAGE_VERSION CONSENT_IMAGE_SHA256 CONSENT_IMAGE_URL
+        CONSENT_MINOR_VERSION CONSENT_MINOR_SHA256 CONSENT_MINOR_URL PRIVACY_NOTICE_URL
+        COOKIE_NOTICE_URL DATA_RIGHTS_CONTACT'''.split())
     env={}
     for line in (source/'.env.example').read_text().splitlines():
         if line and not line.startswith('#') and '=' in line:
-            k,v=line.split('=',1);env[k]=v.strip('"')
+            k,v=line.split('=',1)
+            if k in app_env_keys: env[k]=v.strip('"')
     base=f'http://127.0.0.1:{appport}'
     env.update(APP_ENV='test',APP_VERSION='dev',GIT_SHA='0'*40,PORT='8080',BASE_URL=base,
                POSTGRES_USER='acceptance',POSTGRES_PASSWORD='disposable-only',
@@ -88,7 +110,7 @@ try:
     for k in ['CONSENT_TERMS_URL','CONSENT_IMAGE_URL','CONSENT_MINOR_URL','PRIVACY_NOTICE_URL','COOKIE_NOTICE_URL','GALLERY_URL']: env[k]=env[k].replace('http://localhost:8080',base)
     # Use the documented unstamped local/test fixture commands on this new owned DB.
     # Each command uses its proper identity; no baseline SQL or forged ledger install.
-    command_env={k:v for k,v in os.environ.items() if k in ['PATH','HOME','TMPDIR','LANG','LC_ALL','TZ']}
+    command_env=dict(docker_env)
     command_env.update(env)
     dsn=lambda user,password,port: f'postgres://{user}:{password}@127.0.0.1:{port}/mycfc?sslmode=disable'
     run([str(out/'server'),'precision-capabilities'],'compiled-capabilities.json',env=command_env)
@@ -115,10 +137,10 @@ try:
     assert len(roles)==1 and not roles[0]['rolsuper'] and not roles[0]['rolbypassrls']
     (out/'runtime-role.json').write_text(json.dumps(roles,indent=2))
     env['DATABASE_URL']=dsn('announcement_web','synthetic-web',5432)
-    env_file=out/'app.env'
-    env_file.write_text('\n'.join(k+'='+v for k,v in env.items())+'\n')
-    env_file.chmod(0o600)
-    run(['docker','run','-d','--name',name+'-app','--network','container:'+name,'--env-file',str(env_file),'-v',str(out/'server')+':/server:ro','alpine:3.24.2','/server'],'app-container.log')
+    # Names only in argv; Docker reads each synthetic value from this subprocess's
+    # allowlisted environment. No plaintext runtime configuration file is created.
+    app_env_args = [arg for key in sorted(env) for arg in ['--env', key]]
+    run(['docker','run','-d','--name',name+'-app','--network','container:'+name,*app_env_args,'-v',str(out/'server')+':/server:ro','alpine:3.24.2','/server'],'app-container.log',env={**docker_env,**env})
     app=True
     for _ in range(60):
         try:
@@ -153,7 +175,7 @@ try:
     summary={'cases':cases,'historical_records_equal':True,'receipt_preserved':True,'checkpoint':checkpoint,'binary_sha256':hashlib.sha256((out/'server').read_bytes()).hexdigest(),'runtime_role':'announcement_web'}
 finally:
     if app:
-        with (out/'app.log').open('w') as log: subprocess.run(['docker','logs',name+'-app'],stdout=log,stderr=subprocess.STDOUT)
+        with (out/'app.log').open('w') as log: subprocess.run(['docker','logs',name+'-app'],stdout=log,stderr=subprocess.STDOUT,env=docker_env)
     # Retry attribution before removal if startup succeeded but its initial inspect failed.
     attribution_error = None
     if postgres_started and not owned_volumes:
@@ -161,9 +183,9 @@ finally:
         except Exception as error: attribution_error = str(error)
     # -v removes this container's anonymous volume, never unrelated or guessed volumes.
     with (out/'cleanup-removal.log').open('w') as log:
-        subprocess.run(['docker','rm','-fv',name+'-app',name+'-browser',name],stdout=log,stderr=subprocess.STDOUT)
-    remaining=subprocess.check_output(['docker','ps','-a','--filter','name='+name,'--format','{{.Names}}'],text=True).strip()
-    existing_volumes=set(subprocess.check_output(['docker','volume','ls','--format','{{.Name}}'],text=True).splitlines())
+        subprocess.run(['docker','rm','-fv',name+'-app',name+'-browser',name],stdout=log,stderr=subprocess.STDOUT,env=docker_env)
+    remaining=subprocess.check_output(['docker','ps','-a','--filter','name='+name,'--format','{{.Names}}'],text=True,env=docker_env).strip()
+    existing_volumes=set(subprocess.check_output(['docker','volume','ls','--format','{{.Name}}'],text=True,env=docker_env).splitlines())
     cleanup={'app_stopped':name+'-app' not in remaining,'containers':remaining,
              'postgres_volume_names':owned_volumes,'volume_attribution_error':attribution_error,
              'volume_identity_recorded':not postgres_started or bool(owned_volumes),
