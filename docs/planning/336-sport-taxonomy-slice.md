@@ -2,7 +2,7 @@
 
 Reviewed against `64d2c2f` on 9 November 2026. This supersedes the older
 slice-only inventory, which predated the integrated staff UI and crew migration.
-This is source analysis and isolated regression evidence, not production acceptance.
+The original inventory is source analysis and isolated regression evidence, not production acceptance. The local #339 announcement follow-up below updates only that consumer.
 
 ## Three independent axes
 
@@ -41,7 +41,7 @@ current product writers.
 | Ordinary training reads | `ListTrainingSessionsForAthlete`, `ListUpcomingTrainingSessionsForDashboard`, `ListTrainingPlansForAuthoring` join `modalities` for a descriptive `modality_name`. Training and dashboard handlers display it; access uses programme/team participation and independent grants. | Keep historical/session labels and UUIDs stable after person corrections. A session label is not a sporting permission. |
 | Structured session creation, copying and routines (#28) | `CreateStructuredTrainingSession` inserts no `modality_id` and returns the complete row, including its nullable legacy FK. Segments use the separate WATER/GYM/RUN/BIKE/ERGOMETER/MOBILITY/GAMES enum; water profiles use KAYAK/CANOE. Routine/copy/snapshot functions serialize structured segments and blocks. | These enums describe workout structure, not old modality UUIDs or person sports. Do not conflate them or rewrite copies/publications during a classification correction. |
 | Announcements catalog/authoring | `ListAnnouncementModalities` returns legacy UUIDs/names. Admin authoring in `Announcements.renderIndex` and `validate` creates polymorphic `announcement_targets` with type `MODALITY`; coach authorization denies modality/category targets. UI copy uses generic “modalidade”. | Retained target identity; new-person sport codes are not accepted as target UUIDs. No automatic target migration. |
-| Current announcement eligibility | `ListVisibleAnnouncements`, `CountUnreadVisibleAnnouncements`, `GetVisibleAnnouncement` join active dated memberships and `membership_modalities` for `MODALITY` matching. List, bell/panel and direct detail use these queries. | **Outstanding #339 cutover gap:** these reads do not consume corrected person sports/crafts. Existing matching is not evidence of the new classification contract. |
+| Current announcement eligibility | `ListVisibleAnnouncements`, `CountUnreadVisibleAnnouncements`, `GetVisibleAnnouncement` map retained `MODALITY` UUIDs through legacy catalog codes to same-subject current person crafts (K1/K2/K4/C1/C2/C4) or SUP selections, plus current dated participation. | **Local #339 announcement cutover implemented:** list, bell/panel/count and detail use corrected selections; current verified guardians and active/non-erased subjects are rechecked. Alternative-target OR, guardian extra restriction, author permissions and historical identities remain. See follow-up evidence below; unreleased. |
 | WhatsApp groups | `ListWhatsAppGroupsForUserProgramme` matches legacy `MODALITY` targets through `membership_modalities`; `Dashboard.groups` calls it. Target rows are curated operational data, not a Go modality-ID writer; see `docs/dashboard-data-provisioning.md`. | **Outstanding #339 cutover gap** for modality-target current eligibility. Keep group/target identities; do not infer new membership or staff authority from a sport selection. |
 | Competition documents, stored context | `CreateCompetitionDocument` persists optional `competition_documents.modality_id`; legacy FK has RESTRICT deletion. `ListCompetitionDocumentsForAthlete` displays the old catalog name. `ListCompetitionDocumentsForEvent` uses event ID; the event authoring handler writes an event-bound document with no modality. `validCompetitionDocumentInput` has no runtime caller. | Preserve stored document/event identity and descriptive context. No retargeting historical records. |
 | Competition document eligibility | `Events.renderIndex`/its form data path calls `ListCompetitionDocumentsForAthlete`. Its modality branch matches current dated membership plus `membership_modalities`, within document programme/team scope. Its event branch uses event audiences. | **Outstanding #339 cutover gap** for modality-target current eligibility; this query is live, not compatibility-only. |
@@ -121,8 +121,46 @@ TEST_DATABASE_URL='<isolated PostgreSQL URL>' go test -tags integration \
 ## Remaining boundaries
 
 This completes the reviewed consumer inventory and adds a current-source targeted
-compatibility regression. It does **not** implement #339's announcement/WhatsApp/
+compatibility regression. The local announcement follow-up below implements only that #339 consumer. It does **not** implement the WhatsApp/
 modality-document audience cutover, approve retention periods or former-scope
 history access, prove manual erasure/restored-copy postconditions, or authorize
 GitHub closure, release, live migration or deployment. Those gaps must remain
 visible rather than be called solved by the inventory or historical equality test.
+
+## Local #339 announcement-only follow-up (11 November 2026)
+
+Production checkpoint `b5ed711638cc978d334b971b11887d4899fb4108` changes only
+`internal/db/queries/announcements.sql` and its pinned sqlc projection. Existing
+handlers already share list/count/detail queries; the authoring catalog and stored
+UUID targets remain unchanged. No migration, historical-row update or permission
+expansion is introduced. Eligibility changes on the next request/navigation;
+already-rendered content and the page-lifetime bell cache do not receive push updates.
+
+`internal/db/announcement_sporting_audience_integration_test.go` at `16cec6d`
+uses real scoped correction service writes and guardian changes, all seven mappings,
+unknown target controls, stale legacy links, same-subject guardian positives/negatives,
+revoked/inactive children, no/future/ended and inclusive today participation,
+multiple dependents, OR targeting, deterministic paging/deduplication, lifecycle
+exclusions and immutable target/receipt/history snapshots. The existing legacy-consumer
+regression separately covers retained training/document/publication identities.
+All-package Go tests/vet, generation parity and 28 focused tagged PostgreSQL/handler
+tests passed at the earlier checkpoint; the test-only strengthening passed its focused
+PostgreSQL rerun without skips and tagged vet. Independent QA cleared the backend;
+independent security review found no material production-diff finding.
+
+The six new announcement browser files and opt-in disposable runner are described in
+`e2e/announcement-audience-339.md`. Final revised evidence at
+`/tmp/announcement-339-browser-evidence-qa-fixes` records four pinned Chromium cases,
+zero failures/skips/retries, actual UI corrections/cascade, exact six-plus-two list
+pages, panel/unread/detail parity, retained-cookie guardian revocation, historical
+receipt equality, keyboard focus and 320px serious/critical axe checks. It builds the
+exact production checkpoint externally and verifies owned container/volume/port
+cleanup before recording success. Independent final QA verified the browser evidence and closed the pagination/cleanup findings with no material blocker for this bounded slice. Logs under `/tmp`
+are local and ephemeral. Four safely attributable earlier leaked volumes were removed;
+possible volumes from attempts -1 through -3 were not safely attributable and were
+left untouched, with no global prune. This is a local housekeeping limitation.
+
+Full repository/browser/Terraform verification, manual screen-reader/real zoom,
+production operational guardian activation and release readiness are not established.
+No GitHub write, main integration, merge, publication, live migration or deployment
+has been performed by this slice.
