@@ -35,11 +35,30 @@ export async function correct(page, subject, kind, codes) {
 export async function surfaces(page, expected, unread = expected.length) {
   const actual = [];
   await page.goto('/announcements');
-  while (true) {
-    actual.push(...await page.locator('main .record-item a[href^="/announcements/"]').evaluateAll(els => els.map(e => e.getAttribute('href').split('/').at(-1))));
-    const next = page.getByRole('link', { name: 'Seguinte', exact: true });
-    if (!await next.count()) break;
+  const links = page.locator('main .record-item a[href^="/announcements/"]');
+  const next = page.getByRole('link', { name: 'Seguinte', exact: true });
+  const previous = page.getByRole('link', { name: 'Anterior', exact: true });
+  // Assert each page boundary, not merely the concatenated results.
+  await expect(links).toHaveCount(Math.min(6, expected.length));
+  await expect(previous).toHaveCount(0);
+  actual.push(...await links.evaluateAll(els => els.map(e => e.getAttribute('href').split('/').at(-1))));
+  if (expected.length > 6) {
+    await expect(next).toBeVisible();
+    await expect(next).toHaveAttribute('href', /[?&]page=2(?:&|$)/);
     await next.click();
+    await expect(page).toHaveURL(/[?&]page=2(?:&|$)/);
+    await expect(links).toHaveCount(expected.length - 6); // Eight-notice fixture: exactly two.
+    await expect(next).toHaveCount(0);
+    await expect(previous).toBeVisible();
+    await expect(previous).toHaveAttribute('href', /[?&]page=1(?:&|$)/);
+    actual.push(...await links.evaluateAll(els => els.map(e => e.getAttribute('href').split('/').at(-1))));
+    await previous.click();
+    await expect(links).toHaveCount(6);
+    await expect(previous).toHaveCount(0);
+    await expect(next).toBeVisible();
+    expect(await links.evaluateAll(els => els.map(e => e.getAttribute('href').split('/').at(-1)))).toEqual(expected.slice(0, 6).map(notice));
+  } else {
+    await expect(next).toHaveCount(0);
   }
   expect(actual).toEqual(expected.map(notice));
   expect(new Set(actual).size).toBe(actual.length);

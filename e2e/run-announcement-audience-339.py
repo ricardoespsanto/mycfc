@@ -16,6 +16,9 @@ with tarfile.open(fileobj=io.BytesIO(archive)) as tar: tar.extractall(source,fil
 name = 'mycfc-announcement-339-' + uuid.uuid4().hex[:12]
 app = None
 ports = []
+postgres_started = False
+owned_volumes = []
+summary = None
 def free_port():
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
@@ -34,6 +37,17 @@ def retained():
     return json.loads(sql("SELECT json_build_object('memberships',(SELECT json_agg(row_to_json(m) ORDER BY id) FROM user_memberships m),'legacy',(SELECT json_agg(row_to_json(m) ORDER BY membership_id,modality_id) FROM membership_modalities m),'announcements',(SELECT json_agg(row_to_json(a) ORDER BY id) FROM announcements a),'targets',(SELECT json_agg(row_to_json(t) ORDER BY announcement_id,target_type,target_id) FROM announcement_targets t));"))
 def hashes(directory):
     return {str(p.relative_to(directory)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(directory.rglob('*')) if p.is_file()}
+def capture_postgres_volume():
+    # Inspect only the uniquely named container created by this run, before deletion.
+    container = json.loads(subprocess.check_output(['docker','inspect',name],text=True))[0]
+    recorded_id = (out/'container.log').read_text().strip()
+    if container['Id'] != recorded_id or container['Name'] != '/'+name:
+        raise RuntimeError('PostgreSQL container ownership mismatch')
+    volumes = [m['Name'] for m in container['Mounts'] if m['Type']=='volume' and m['Destination']=='/var/lib/postgresql/data']
+    if len(volumes) != 1: raise RuntimeError('Expected exactly one attributable PostgreSQL data volume')
+    (out/'postgres-container.json').write_text(json.dumps(container,indent=2))
+    (out/'volumes-before.json').write_text(subprocess.check_output(['docker','volume','inspect',*volumes],text=True))
+    return volumes
 try:
     ports = [free_port(), free_port()]
     pgport, appport = ports
@@ -49,6 +63,8 @@ try:
     for filename in ['package.json','package-lock.json']: shutil.copy2(root/filename,deps/filename)
     run(['npm','ci','--prefix',str(deps),'--ignore-scripts','--no-audit','--no-fund'],'dependencies.log')
     run(['docker','run','-d','--name',name,'-e','POSTGRES_USER=acceptance','-e','POSTGRES_PASSWORD=disposable-only','-e','POSTGRES_DB=mycfc_announcement_339_test','-p',f'127.0.0.1:{pgport}:5432','-p',f'127.0.0.1:{appport}:8080','postgres:16','-c','timezone=Europe/Lisbon'],'container.log')
+    postgres_started = True
+    owned_volumes = capture_postgres_volume()
     for _ in range(60):
         if subprocess.run(['docker','exec',name,'pg_isready','-h','127.0.0.1','-U','acceptance'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0: break
         time.sleep(1)
@@ -99,15 +115,34 @@ try:
         for child in s.get('suites',[]):walk(child)
     for phase in ['audience','revocation']:walk(json.loads((out/(phase+'.json')).read_text()))
     assert len(cases)==4 and all(c['status']=='expected' and c['attempts']==['passed'] for c in cases),cases
-    (out/'summary.json').write_text(json.dumps({'cases':cases,'historical_records_equal':True,'receipt_preserved':True},indent=2))
-    print(json.dumps(cases,indent=2))
+    summary={'cases':cases,'historical_records_equal':True,'receipt_preserved':True}
 finally:
     if app:
         with (out/'app.log').open('w') as log: subprocess.run(['docker','logs',name+'-app'],stdout=log,stderr=subprocess.STDOUT)
-    subprocess.run(['docker','rm','-f',name+'-app',name+'-browser',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    # Retry attribution before removal if startup succeeded but its initial inspect failed.
+    attribution_error = None
+    if postgres_started and not owned_volumes:
+        try: owned_volumes = capture_postgres_volume()
+        except Exception as error: attribution_error = str(error)
+    # -v removes this container's anonymous volume, never unrelated or guessed volumes.
+    with (out/'cleanup-removal.log').open('w') as log:
+        subprocess.run(['docker','rm','-fv',name+'-app',name+'-browser',name],stdout=log,stderr=subprocess.STDOUT)
     remaining=subprocess.check_output(['docker','ps','-a','--filter','name='+name,'--format','{{.Names}}'],text=True).strip()
-    cleanup={'app_stopped':name+'-app' not in remaining,'containers':remaining}
+    existing_volumes=set(subprocess.check_output(['docker','volume','ls','--format','{{.Name}}'],text=True).splitlines())
+    cleanup={'app_stopped':name+'-app' not in remaining,'containers':remaining,
+             'postgres_volume_names':owned_volumes,'volume_attribution_error':attribution_error,
+             'volume_identity_recorded':not postgres_started or bool(owned_volumes),
+             'volumes_gone':all(volume not in existing_volumes for volume in owned_volumes)}
     for port in ports:
         with socket.socket() as s:cleanup[str(port)+'_closed']=s.connect_ex(('127.0.0.1',port))!=0
+    cleanup['success']=(cleanup['app_stopped'] and not remaining and cleanup['volume_identity_recorded']
+                        and cleanup['volumes_gone'] and not attribution_error
+                        and all(cleanup[str(port)+'_closed'] for port in ports))
     (out/'cleanup.json').write_text(json.dumps(cleanup,indent=2))
     print('CLEANUP',json.dumps(cleanup))
+    if not cleanup['success']: raise RuntimeError('Isolated resource cleanup failed; see cleanup.json; no passing summary written')
+# This is deliberately after finally: neither browser nor cleanup failure can publish a pass.
+if summary is None: raise RuntimeError('No completed browser verification; no passing summary written')
+summary['cleanup']=cleanup
+(out/'summary.json').write_text(json.dumps(summary,indent=2))
+print(json.dumps(summary,indent=2))
