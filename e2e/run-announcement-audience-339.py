@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Only new acceptance specs, fresh disposable PG, isolated ports and pinned browser."""
+import hashlib, json, os, pathlib, shutil, socket, subprocess, sys, tarfile, time, urllib.request, uuid
+root = pathlib.Path(__file__).resolve().parents[1]
+out = pathlib.Path(sys.argv[1]).resolve()
+if out.is_relative_to(root): raise ValueError('Evidence must be external to checkout')
+out.mkdir(parents=True, exist_ok=False, mode=0o700)
+os.chmod(out,0o700)
+source_repo = pathlib.Path(sys.argv[2]).resolve()
+checkpoint = sys.argv[3]
+source = out/'source'
+source.mkdir()
+archive = subprocess.check_output(['git','archive',checkpoint],cwd=source_repo)
+import io
+with tarfile.open(fileobj=io.BytesIO(archive)) as tar: tar.extractall(source,filter='data')
+name = 'mycfc-announcement-339-' + uuid.uuid4().hex[:12]
+app = None
+ports = []
+def free_port():
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+def run(args, log, **kwargs):
+    with (out / log).open('w') as f:
+        subprocess.run(args, cwd=root, stdout=f, stderr=subprocess.STDOUT, check=True, **kwargs)
+def sql(text):
+    return subprocess.check_output(['docker','exec','-i',name,'psql','-U','acceptance','-d','mycfc_announcement_339_test','-v','ON_ERROR_STOP=1','-At'],input=text,text=True)
+def browser(spec, phase):
+    run(['docker','run','--rm','--name',name+'-browser','--network','host','--user',f'{os.getuid()}:{os.getgid()}',
+         '-e','E2E_BASE_URL='+base,'-e','E2E_ANNOUNCEMENT_339_EVIDENCE=/evidence','-e','E2E_JSON_OUTPUT=/evidence/'+phase+'.json',
+         '-v',str(out)+':/evidence','-w','/evidence/deps','mcr.microsoft.com/playwright:v1.63.0-noble',
+         'npx','playwright','test',spec,'--workers=1','--retries=0','--output=/evidence/'+phase+'-artifacts'],phase+'.log')
+def retained():
+    return json.loads(sql("SELECT json_build_object('memberships',(SELECT json_agg(row_to_json(m) ORDER BY id) FROM user_memberships m),'legacy',(SELECT json_agg(row_to_json(m) ORDER BY membership_id,modality_id) FROM membership_modalities m),'announcements',(SELECT json_agg(row_to_json(a) ORDER BY id) FROM announcements a),'targets',(SELECT json_agg(row_to_json(t) ORDER BY announcement_id,target_type,target_id) FROM announcement_targets t));"))
+def hashes(directory):
+    return {str(p.relative_to(directory)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(directory.rglob('*')) if p.is_file()}
+try:
+    ports = [free_port(), free_port()]
+    pgport, appport = ports
+    (out/'checkpoint.txt').write_text(checkpoint+'\n')
+    (out/'source-hashes.json').write_text(json.dumps(hashes(source),indent=2))
+    (out/'test-hashes.json').write_text(json.dumps({str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((root/'e2e').glob('*announcement-audience-339*')) if p.is_file()},indent=2))
+    (out/'runtime-images.json').write_text(subprocess.check_output(['docker','image','inspect','postgres:16','alpine:3.24.2','mcr.microsoft.com/playwright:v1.63.0-noble'],text=True))
+    (out/'resources.json').write_text(json.dumps({'name':name,'postgres_port':pgport,'app_port':appport,'published_address':'127.0.0.1'},indent=2))
+    deps=out/'deps';deps.mkdir()
+    (deps/'e2e').mkdir()
+    for p in (root/'e2e').glob('announcement-audience-339*.mjs'): shutil.copy2(p,deps/'e2e'/p.name)
+    shutil.copy2(root/'playwright.config.mjs',deps/'playwright.config.mjs')
+    for filename in ['package.json','package-lock.json']: shutil.copy2(root/filename,deps/filename)
+    run(['npm','ci','--prefix',str(deps),'--ignore-scripts','--no-audit','--no-fund'],'dependencies.log')
+    run(['docker','run','-d','--name',name,'-e','POSTGRES_USER=acceptance','-e','POSTGRES_PASSWORD=disposable-only','-e','POSTGRES_DB=mycfc_announcement_339_test','-p',f'127.0.0.1:{pgport}:5432','-p',f'127.0.0.1:{appport}:8080','postgres:16','-c','timezone=Europe/Lisbon'],'container.log')
+    for _ in range(60):
+        if subprocess.run(['docker','exec',name,'pg_isready','-h','127.0.0.1','-U','acceptance'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0: break
+        time.sleep(1)
+    else: raise RuntimeError('PG not ready')
+    run(['docker','exec','-i',name,'psql','-U','acceptance','-d','mycfc_announcement_339_test','-v','ON_ERROR_STOP=1'],'baseline.log',input=(source/'internal/db/schema.sql').read_text(),text=True)
+    migrations=sorted(p.stem for p in (source/'internal/db/migrations').glob('*.sql'))
+    sql('CREATE SCHEMA IF NOT EXISTS mycfc_meta; CREATE TABLE IF NOT EXISTS mycfc_meta.schema_migrations(version text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT now()); INSERT INTO mycfc_meta.schema_migrations(version) VALUES '+','.join("('"+m+"')" for m in migrations)+' ON CONFLICT DO NOTHING;')
+    (out/'seed.log').write_text(sql((root/'e2e/announcement-audience-339-seed.sql').read_text()))
+    with (out/'build.log').open('w') as log: subprocess.run(['go','build','-o',str(out/'server'),'./cmd/server'],cwd=source,env={**os.environ,'CGO_ENABLED':'0'},stdout=log,stderr=subprocess.STDOUT,check=True)
+    (out/'binary.sha256').write_text(hashlib.sha256((out/'server').read_bytes()).hexdigest()+'\n')
+    env={}
+    for line in (root/'.env.example').read_text().splitlines():
+        if line and not line.startswith('#') and '=' in line:
+            k,v=line.split('=',1);env[k]=v.strip('"')
+    base=f'http://127.0.0.1:{appport}'
+    env.update(APP_ENV='test',PORT='8080',BASE_URL=base,DATABASE_URL=f'postgres://acceptance:disposable-only@127.0.0.1:5432/mycfc_announcement_339_test?sslmode=disable',AWS_EC2_METADATA_DISABLED='true',SMTP_HOST='127.0.0.1',S3_ENDPOINT='http://127.0.0.1:1')
+    for k in ['CONSENT_TERMS_URL','CONSENT_IMAGE_URL','CONSENT_MINOR_URL','PRIVACY_NOTICE_URL','COOKIE_NOTICE_URL','GALLERY_URL']: env[k]=env[k].replace('http://localhost:8080',base)
+    env_file=out/'app.env'
+    env_file.write_text('\n'.join(k+'='+v for k,v in env.items())+'\n')
+    env_file.chmod(0o600)
+    run(['docker','run','-d','--name',name+'-app','--network','container:'+name,'--env-file',str(env_file),'-v',str(out/'server')+':/server:ro','alpine:3.24.2','/server'],'app-container.log')
+    app=True
+    for _ in range(60):
+        try:
+            if urllib.request.urlopen(base+'/health/ready').status==200:break
+        except Exception: time.sleep(1)
+    else: raise RuntimeError('app not ready')
+    receipt_query="SELECT row_to_json(d) FROM announcement_deliveries d WHERE user_id='33933900-0000-0000-0000-000000000010' AND announcement_id='33933900-0000-0000-0000-000000000201';"
+    original_receipt=sql(receipt_query)
+    before=retained()
+    (out/'retained-before.json').write_text(json.dumps(before,indent=2))
+    browser('e2e/announcement-audience-339.spec.mjs','audience')
+    assert retained()==before, 'UI corrections changed historical membership or target identities'
+    receipt=sql("SELECT row_to_json(d) FROM announcement_deliveries d WHERE user_id='33933900-0000-0000-0000-000000000010' AND announcement_id='33933900-0000-0000-0000-000000000201';")
+    assert receipt==original_receipt, 'historical receipt timestamps changed'
+    assert json.loads(receipt)['read_at'], 'detail receipt lost after hide/re-add'
+    (out/'preserved-receipt.json').write_text(receipt)
+    assert int(sql("SELECT count(*) FROM person_canoe_craft_classes WHERE user_id='33933900-0000-0000-0000-000000000010';"))==1
+    sql("UPDATE guardian_authority_relationships SET state='EXPIRED',version=version+1,conflict=false,conflict_actor_ref=NULL,updated_at=now() WHERE guardian_user_id='33933900-0000-0000-0000-000000000012';")
+    browser('e2e/announcement-audience-339-revocation.spec.mjs','revocation')
+    assert retained()==before, 'revocation changed historical identities'
+    assert sql("SELECT row_to_json(d) FROM announcement_deliveries d WHERE user_id='33933900-0000-0000-0000-000000000010' AND announcement_id='33933900-0000-0000-0000-000000000201';")==receipt
+    (out/'retained-after.json').write_text(json.dumps(retained(),indent=2))
+    cases=[]
+    def walk(s):
+        for spec in s.get('specs',[]):
+            for t in spec['tests']: cases.append({'title':spec['title'],'status':t['status'],'attempts':[r['status'] for r in t['results']]})
+        for child in s.get('suites',[]):walk(child)
+    for phase in ['audience','revocation']:walk(json.loads((out/(phase+'.json')).read_text()))
+    assert len(cases)==4 and all(c['status']=='expected' and c['attempts']==['passed'] for c in cases),cases
+    (out/'summary.json').write_text(json.dumps({'cases':cases,'historical_records_equal':True,'receipt_preserved':True},indent=2))
+    print(json.dumps(cases,indent=2))
+finally:
+    if app:
+        with (out/'app.log').open('w') as log: subprocess.run(['docker','logs',name+'-app'],stdout=log,stderr=subprocess.STDOUT)
+    subprocess.run(['docker','rm','-f',name+'-app',name+'-browser',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    remaining=subprocess.check_output(['docker','ps','-a','--filter','name='+name,'--format','{{.Names}}'],text=True).strip()
+    cleanup={'app_stopped':name+'-app' not in remaining,'containers':remaining}
+    for port in ports:
+        with socket.socket() as s:cleanup[str(port)+'_closed']=s.connect_ex(('127.0.0.1',port))!=0
+    (out/'cleanup.json').write_text(json.dumps(cleanup,indent=2))
+    print('CLEANUP',json.dumps(cleanup))
