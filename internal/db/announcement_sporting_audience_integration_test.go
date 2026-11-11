@@ -141,7 +141,7 @@ func TestAnnouncementSportingAudienceCorrections(t *testing.T) {
 			}
 		}
 	}
-	read := map[uuid.UUID]bool{}
+	read := map[[2]uuid.UUID]bool{}
 	assert := func(user uuid.UUID, want ...uuid.UUID) {
 		t.Helper()
 		expected := map[uuid.UUID]bool{}
@@ -159,11 +159,11 @@ func TestAnnouncementSportingAudienceCorrections(t *testing.T) {
 				if found[r.ID] {
 					t.Fatal("duplicate announcement")
 				}
-				if r.ReadAt.Valid != read[r.ID] {
+				if r.ReadAt.Valid != read[[2]uuid.UUID{user, r.ID}] {
 					t.Fatal("list lost current read state")
 				}
 				found[r.ID] = true
-				if !read[r.ID] {
+				if !read[[2]uuid.UUID{user, r.ID}] {
 					unread++
 				}
 			}
@@ -174,7 +174,7 @@ func TestAnnouncementSportingAudienceCorrections(t *testing.T) {
 		for id := range all {
 			detail, err := q.GetVisibleAnnouncement(ctx, dbgen.GetVisibleAnnouncementParams{UserID: user, ID: id})
 			if expected[id] {
-				if err != nil || detail.ID != id || detail.ReadAt.Valid != read[id] {
+				if err != nil || detail.ID != id || detail.ReadAt.Valid != read[[2]uuid.UUID{user, id}] {
 					t.Fatalf("detail %s: %v", id, err)
 				}
 			} else if !errors.Is(err, pgx.ErrNoRows) {
@@ -193,11 +193,31 @@ func TestAnnouncementSportingAudienceCorrections(t *testing.T) {
 			}
 		}
 	}
+	snapshot := func() string {
+		t.Helper()
+		var s string
+		if err := pool.QueryRow(ctx, `SELECT jsonb_build_object('announcements',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM announcements a WHERE id=ANY($1)),'audit',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM announcement_audit_events e WHERE announcement_id=ANY($1)),'targets',(SELECT jsonb_agg(to_jsonb(t) ORDER BY announcement_id,target_type,target_id) FROM announcement_targets t WHERE announcement_id=ANY($1)),'delivery',(SELECT jsonb_agg(to_jsonb(d) ORDER BY announcement_id,user_id) FROM announcement_deliveries d WHERE announcement_id=ANY($1)))::text`, mapKeysAnnouncement(all)).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	// A real existing receipt is preserved throughout the earlier craft/guardian corrections.
+	if err := q.RecordAnnouncementDelivery(ctx, dbgen.RecordAnnouncementDeliveryParams{AnnouncementID: mixed, UserID: athlete}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.MarkAnnouncementRead(ctx, dbgen.MarkAnnouncementReadParams{AnnouncementID: mixed, UserID: athlete}); err != nil {
+		t.Fatal(err)
+	}
+	read[[2]uuid.UUID{athlete, mixed}] = true
+	originalAnnouncements := snapshot()
 	svc := SportAssignmentService{Pool: pool}
 	correct := func(user uuid.UUID, kind SportAssignmentKind, codes ...string) {
 		t.Helper()
 		if err := svc.Replace(ctx, SportAssignmentCorrection{ActorID: coach, MemberID: user, Kind: kind, Codes: codes, Reason: "Audience regression correction"}); err != nil {
 			t.Fatal(err)
+		}
+		if snapshot() != originalAnnouncements {
+			t.Fatal("correction rewrote announcement identity, targets, audit or receipts")
 		}
 	}
 	membershipSnapshot := func() string {
@@ -225,26 +245,40 @@ func TestAnnouncementSportingAudienceCorrections(t *testing.T) {
 	assert(athlete, want...)
 	// The guardian's own K1 cannot satisfy the guarded target on a different child.
 	correct(athlete, CanoeCraftAssignment)
-	exec(`INSERT INTO person_sporting_modalities(user_id,modality_code) VALUES($1,'CANOEING')`, guardian)
-	exec(`INSERT INTO person_canoe_craft_classes(user_id,craft_code) VALUES($1,'K1')`, guardian)
-	assert(guardian, mixed, guardedMixed, guardianOnly)
+	exec(`INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on) VALUES($1,$2,$3,CURRENT_DATE)`, guardian, season, programme)
+	correct(guardian, SportingModalityAssignment, "CANOEING")
+	correct(guardian, CanoeCraftAssignment, "K1")
+	// Own K1 is visible; GUARDIAN+K1 still requires a matching verified child.
+	assert(guardian, mixed, guardedMixed, guardianOnly, targets["K1"])
 	correct(child, SportingModalityAssignment, "CANOEING")
 	correct(child, CanoeCraftAssignment, "K1")
 	assert(guardian, mixed, guardedMixed, guardianOnly, guarded, targets["K1"])
 	// A revoked sporting child cannot borrow authority from the other verified child.
 	exec(`UPDATE guardian_authority_relationships SET state='SUSPENDED',version=version+1 WHERE subject_user_id=$1`, child)
-	assert(guardian, guardianOnly)
+	assert(guardian, mixed, targets["K1"], guardianOnly)
 	exec(`UPDATE guardian_authority_relationships SET state='VERIFIED',version=version+1 WHERE subject_user_id=$1`, child)
 	exec(`UPDATE users SET is_active=false WHERE id=$1`, child)
-	assert(guardian, guardianOnly)
+	assert(guardian, mixed, targets["K1"], guardianOnly)
 	exec(`UPDATE users SET is_active=true WHERE id=$1`, child)
-	// Independent persisted no/future/ended participation fixtures; do not bypass dated guards.
-	for _, state := range []string{"none", "future", "ended"} {
+	// Two matching verified children still yield exactly one row/receipt opportunity per announcement.
+	exec(`INSERT INTO user_memberships(user_id,season_id,programme_id,team_id,starts_on) VALUES($1,$2,$3,$4,CURRENT_DATE)`, otherChild, season, programme, team)
+	correct(otherChild, SportingModalityAssignment, "CANOEING")
+	correct(otherChild, CanoeCraftAssignment, "K1")
+	assert(guardian, mixed, guardedMixed, guardianOnly, guarded, targets["K1"])
+	exec(`UPDATE guardian_authority_relationships SET state='SUSPENDED',version=version+1 WHERE subject_user_id=$1`, child)
+	assert(guardian, mixed, guardedMixed, guardianOnly, guarded, targets["K1"])
+	exec(`UPDATE guardian_authority_relationships SET state='VERIFIED',version=version+1 WHERE subject_user_id=$1`, child)
+	// Independent persisted participation fixtures exercise both inclusive current-day boundaries.
+	for _, state := range []string{"none", "future", "ended", "starts_today", "ends_today"} {
 		user := uuid.New()
 		exec(`INSERT INTO users(id,name,email,password_hash,date_of_birth) VALUES($1,'Participation fixture',$2,'hash','1990-01-01')`, user, user.String()+"@example.test")
 		switch state {
 		case "future":
 			exec(`INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on) VALUES($1,$2,$3,CURRENT_DATE+1)`, user, season, programme)
+		case "starts_today":
+			exec(`INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on) VALUES($1,$2,$3,CURRENT_DATE)`, user, season, programme)
+		case "ends_today":
+			exec(`INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on,ends_on) VALUES($1,$2,$3,CURRENT_DATE-2,CURRENT_DATE)`, user, season, programme)
 		case "ended":
 			exec(`INSERT INTO user_memberships(user_id,season_id,programme_id,starts_on,ends_on) VALUES($1,$2,$3,CURRENT_DATE-2,CURRENT_DATE-1)`, user, season, programme)
 		}
@@ -258,7 +292,18 @@ func TestAnnouncementSportingAudienceCorrections(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		assert(user)
+		if state == "starts_today" || state == "ends_today" {
+			expected := []uuid.UUID{mixed, targets["SUP"]}
+			for _, c := range crafts {
+				expected = append(expected, targets[c])
+			}
+			assert(user, expected...)
+		} else {
+			assert(user)
+		}
+		if snapshot() != originalAnnouncements {
+			t.Fatal("participation boundary corrections rewrote announcement history")
+		}
 	}
 	assert(athlete, mixed, targets["SUP"])
 	exec(`UPDATE users SET is_active=false WHERE id=$1`, athlete)
@@ -271,17 +316,16 @@ func TestAnnouncementSportingAudienceCorrections(t *testing.T) {
 	if err := q.MarkAnnouncementRead(ctx, dbgen.MarkAnnouncementReadParams{AnnouncementID: targets["SUP"], UserID: athlete}); err != nil {
 		t.Fatal(err)
 	}
-	read[targets["SUP"]] = true
-	var before string
-	snapshot := func() string {
-		t.Helper()
-		var s string
-		if err := pool.QueryRow(ctx, `SELECT jsonb_build_object('announcements',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM announcements a WHERE id=ANY($1)),'audit',(SELECT jsonb_agg(to_jsonb(e) ORDER BY id) FROM announcement_audit_events e WHERE announcement_id=ANY($1)),'targets',(SELECT jsonb_agg(to_jsonb(t) ORDER BY target_type,target_id) FROM announcement_targets t WHERE announcement_id=ANY($1)),'delivery',(SELECT to_jsonb(d) FROM announcement_deliveries d WHERE announcement_id=$2 AND user_id=$3))::text`, mapKeysAnnouncement(all), targets["SUP"], athlete).Scan(&s); err != nil {
-			t.Fatal(err)
-		}
-		return s
+	read[[2]uuid.UUID{athlete, targets["SUP"]}] = true
+	originalAnnouncements = snapshot()
+	correct(athlete, CanoeCraftAssignment, "K1", "K2")
+	assert(athlete, mixed, targets["K1"], targets["K2"], targets["SUP"])
+	correct(athlete, SportingModalityAssignment, "SUP", "KAYAK_POLO")
+	assert(athlete, mixed, targets["SUP"])
+	var remainingCrafts int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM person_canoe_craft_classes WHERE user_id=$1`, athlete).Scan(&remainingCrafts); err != nil || remainingCrafts != 0 {
+		t.Fatalf("Canoagem removal did not cascade populated crafts: count=%d err=%v", remainingCrafts, err)
 	}
-	before = snapshot()
 	correct(athlete, SportingModalityAssignment, "KAYAK_POLO")
 	assert(athlete, mixed)
 	correct(athlete, SportingModalityAssignment, "SUP")
@@ -289,7 +333,7 @@ func TestAnnouncementSportingAudienceCorrections(t *testing.T) {
 	if membershipSnapshot() != originalMembership {
 		t.Fatal("sport correction rewrote participation or legacy modality links")
 	}
-	if snapshot() != before {
+	if snapshot() != originalAnnouncements {
 		t.Fatal("correction rewrote announcement identity, targets or receipt")
 	}
 	if _, err := q.ExpireAnnouncement(ctx, dbgen.ExpireAnnouncementParams{ID: targets["SUP"], ActorUserID: &admin}); err != nil {
