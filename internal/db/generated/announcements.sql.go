@@ -38,16 +38,27 @@ WHERE a.status = 'PUBLISHED' AND (a.expires_at IS NULL OR a.expires_at > now())
     NOT EXISTS (SELECT 1 FROM announcement_targets t WHERE t.announcement_id = a.id)
     OR EXISTS (
       SELECT 1 FROM announcement_targets t
-      JOIN users subject ON subject.is_active AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
+      JOIN users subject ON subject.is_active AND subject.erased_at IS NULL AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
       LEFT JOIN user_memberships m ON m.user_id = subject.id AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
-      LEFT JOIN membership_modalities mm ON mm.membership_id = m.id
       WHERE t.announcement_id = a.id
         AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR guardian_authority_current($1,subject.id))
         AND (NOT EXISTS (SELECT 1 FROM announcement_targets n WHERE n.announcement_id = a.id AND n.target_type <> 'GUARDIAN') OR (
         (t.target_type = 'PROGRAMME' AND m.programme_id = t.target_id)
         OR (t.target_type = 'TEAM' AND m.team_id = t.target_id)
         OR (t.target_type = 'CATEGORY' AND m.competition_category_id = t.target_id)
-        OR (t.target_type = 'MODALITY' AND mm.modality_id = t.target_id)
+        OR (t.target_type = 'MODALITY' AND m.id IS NOT NULL AND EXISTS (
+          -- Retain legacy target UUIDs; current person selections decide eligibility.
+          SELECT 1 FROM modalities legacy WHERE legacy.id = t.target_id AND (
+            (legacy.code IN ('K1','K2','K4','C1','C2','C4') AND EXISTS (
+              SELECT 1 FROM person_canoe_craft_classes craft
+              WHERE craft.user_id = subject.id AND craft.craft_code = legacy.code
+            ))
+            OR (legacy.code = 'SUP' AND EXISTS (
+              SELECT 1 FROM person_sporting_modalities sport
+              WHERE sport.user_id = subject.id AND sport.modality_code = 'SUP'
+            ))
+          )
+        ))
         OR (t.target_type = 'EVENT' AND EXISTS (
           SELECT 1 FROM events e WHERE e.id = t.target_id AND (
             (NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
@@ -185,16 +196,27 @@ WHERE a.id = $2
     NOT EXISTS (SELECT 1 FROM announcement_targets t WHERE t.announcement_id = a.id)
     OR EXISTS (
       SELECT 1 FROM announcement_targets t
-      JOIN users subject ON subject.is_active AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
+      JOIN users subject ON subject.is_active AND subject.erased_at IS NULL AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
       LEFT JOIN user_memberships m ON m.user_id = subject.id AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
-      LEFT JOIN membership_modalities mm ON mm.membership_id = m.id
       WHERE t.announcement_id = a.id
         AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR guardian_authority_current($1,subject.id))
         AND (NOT EXISTS (SELECT 1 FROM announcement_targets n WHERE n.announcement_id = a.id AND n.target_type <> 'GUARDIAN') OR (
         (t.target_type = 'PROGRAMME' AND m.programme_id = t.target_id)
         OR (t.target_type = 'TEAM' AND m.team_id = t.target_id)
         OR (t.target_type = 'CATEGORY' AND m.competition_category_id = t.target_id)
-        OR (t.target_type = 'MODALITY' AND mm.modality_id = t.target_id)
+        OR (t.target_type = 'MODALITY' AND m.id IS NOT NULL AND EXISTS (
+          -- Retain legacy target UUIDs; current person selections decide eligibility.
+          SELECT 1 FROM modalities legacy WHERE legacy.id = t.target_id AND (
+            (legacy.code IN ('K1','K2','K4','C1','C2','C4') AND EXISTS (
+              SELECT 1 FROM person_canoe_craft_classes craft
+              WHERE craft.user_id = subject.id AND craft.craft_code = legacy.code
+            ))
+            OR (legacy.code = 'SUP' AND EXISTS (
+              SELECT 1 FROM person_sporting_modalities sport
+              WHERE sport.user_id = subject.id AND sport.modality_code = 'SUP'
+            ))
+          )
+        ))
         OR (t.target_type = 'EVENT' AND EXISTS (
           SELECT 1 FROM events e WHERE e.id = t.target_id AND (
             (NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
@@ -441,16 +463,27 @@ WHERE a.status = 'PUBLISHED' AND (a.expires_at IS NULL OR a.expires_at > now())
     NOT EXISTS (SELECT 1 FROM announcement_targets t WHERE t.announcement_id = a.id)
     OR EXISTS (
       SELECT 1 FROM announcement_targets t
-      JOIN users subject ON subject.is_active AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
+      JOIN users subject ON subject.is_active AND subject.erased_at IS NULL AND (subject.id = $1 OR guardian_authority_current($1,subject.id))
       LEFT JOIN user_memberships m ON m.user_id = subject.id AND m.starts_on <= CURRENT_DATE AND (m.ends_on IS NULL OR m.ends_on >= CURRENT_DATE)
-      LEFT JOIN membership_modalities mm ON mm.membership_id = m.id
       WHERE t.announcement_id = a.id
         AND (NOT EXISTS (SELECT 1 FROM announcement_targets g WHERE g.announcement_id = a.id AND g.target_type = 'GUARDIAN') OR guardian_authority_current($1,subject.id))
         AND (NOT EXISTS (SELECT 1 FROM announcement_targets n WHERE n.announcement_id = a.id AND n.target_type <> 'GUARDIAN') OR (
         (t.target_type = 'PROGRAMME' AND m.programme_id = t.target_id)
         OR (t.target_type = 'TEAM' AND m.team_id = t.target_id)
         OR (t.target_type = 'CATEGORY' AND m.competition_category_id = t.target_id)
-        OR (t.target_type = 'MODALITY' AND mm.modality_id = t.target_id)
+        OR (t.target_type = 'MODALITY' AND m.id IS NOT NULL AND EXISTS (
+          -- Retain legacy target UUIDs; current person selections decide eligibility.
+          SELECT 1 FROM modalities legacy WHERE legacy.id = t.target_id AND (
+            (legacy.code IN ('K1','K2','K4','C1','C2','C4') AND EXISTS (
+              SELECT 1 FROM person_canoe_craft_classes craft
+              WHERE craft.user_id = subject.id AND craft.craft_code = legacy.code
+            ))
+            OR (legacy.code = 'SUP' AND EXISTS (
+              SELECT 1 FROM person_sporting_modalities sport
+              WHERE sport.user_id = subject.id AND sport.modality_code = 'SUP'
+            ))
+          )
+        ))
         OR (t.target_type = 'EVENT' AND EXISTS (
           SELECT 1 FROM events e WHERE e.id = t.target_id AND (
             (NOT EXISTS (SELECT 1 FROM event_audiences ea WHERE ea.event_id = e.id)
