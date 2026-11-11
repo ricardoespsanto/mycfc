@@ -29,7 +29,9 @@ export async function correct(page, subject, kind, codes) {
   expect(response.status()).toBe(200);
   await page.waitForLoadState('networkidle');
   await expect(page.locator('#error-summary')).toHaveCount(0);
-  await expect(page.getByRole('status')).toContainText('Seleções desportivas atualizadas');
+  const correctionStatus = page.getByRole('status').filter({ hasText: 'Seleções desportivas atualizadas' });
+  await expect(correctionStatus).toHaveCount(1);
+  await expect(correctionStatus).toContainText('Seleções desportivas atualizadas');
 }
 // Every call navigates: the panel intentionally caches only for the current page lifetime.
 export async function surfaces(page, expected, unread = expected.length) {

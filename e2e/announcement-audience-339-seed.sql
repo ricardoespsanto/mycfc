@@ -1,6 +1,6 @@
 \set ON_ERROR_STOP on
 -- Synthetic isolated fixture only.
-DO $$ BEGIN IF current_database() <> 'mycfc_announcement_339_test' THEN RAISE EXCEPTION 'wrong database'; END IF; END $$;
+DO $$ BEGIN IF current_database() <> 'mycfc' OR current_user <> 'acceptance' THEN RAISE EXCEPTION 'wrong database'; END IF; END $$;
 INSERT INTO users(id,name,email,password_hash,date_of_birth,email_verified_at)
 SELECT ('33933900-0000-0000-0000-'||lpad(n::text,12,'0'))::uuid,name,'announcement-'||actor||'@example.test',
 '$2a$12$IQnXrEKbby1M4yt9/NQofOdWrlC7X9ogAGG0yJYfRknRdVdsugeRK','1990-01-01',now()
